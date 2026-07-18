@@ -28,6 +28,48 @@ researched, flagged as the next real question once work resumes.
 Still paused until `ke-next` (the separate OpenKE/GuppyScreen repo) finishes its own real-device
 testing.
 
+## The end-user story (why this project exists, in plain terms)
+
+Today, this printer is stuck on Creality's own frozen, unmaintained Klipper fork - any fix or
+feature that lands in the real Klipper project doesn't reach this printer unless someone manually
+re-ports it. SimpleAF is a real, working way off that dead end onto an actively-maintained,
+mainline-adjacent Klipper build - but today, choosing it means giving up the built-in load-cell
+auto-Z-tune entirely: either do a fully manual Z-offset check before every print, or buy and
+physically install a separate aftermarket probe (Klicky, Cartographer, etc.).
+
+**What this project delivers to an end user**: everything SimpleAF already gives you (a maintained
+Klipper base instead of an abandoned vendor fork) *plus* the exact same day-to-day experience the
+stock firmware already provides - the printer auto-probes and fine-tunes its own Z-offset before
+each print, using the load cell already built into the machine, no new hardware, no lost
+convenience. Today those two things (real Klipper vs. keep your auto-probe) are mutually exclusive
+on this printer; closing that gap is the entire point.
+
+## GuppyScreen/OpenKE also needs adapting - new, real scope item, not yet started
+
+**Confirmed 2026-07-18: an end user on "SimpleAF + this probe module" would also need an adapted
+GuppyScreen, not stock OpenKE as-is.** OpenKE's GuppyScreen (`~/Documents/guppyscreen`, `ke-next`)
+talks to the Moonraker/Klipper API the same way regardless of which Klipper fork is underneath, but
+it's currently built, tested, and released assuming Creality's stock software environment (their
+init system, their file layout, their specific `printer.cfg` conventions, their bundled
+Moonraker/nginx/etc - see the OpenKE memory's `project_moonraker_nginx_dependency.md` and
+`project_ke_deploy.md` for how deep that assumption runs). SimpleAF's environment is genuinely
+different (their own install layout, config conventions, service management).
+
+**Open question, not yet researched or decided**: pellcorp (SimpleAF's author) already maintains
+their own GuppyScreen fork, **"grumpyscreen"** (see the OpenKE memory's
+`reference_pellcorp_grumpyscreen.md` - already a known sibling project, we've shared touchscreen
+commits with them before). The real options for whoever picks this up:
+1. Point end users at pellcorp's existing `grumpyscreen` for the UI layer, and only ship our own
+   prtouch/z_compensate module as an add-on to their environment - least new work, but means the
+   UI experience isn't OpenKE's own and any OpenKE-specific feature work doesn't reach these users.
+2. Adapt OpenKE's own GuppyScreen to run on SimpleAF's environment directly - more work, keeps
+   OpenKE's own UI/feature set, but is real, unscoped porting effort (how much of `ke-next`'s
+   install/deploy assumptions break under SimpleAF's layout is completely unknown right now).
+3. Some hybrid (upstream useful pieces between the two projects) - not explored at all.
+
+None of this is decided or researched beyond noting it exists. Whoever resumes this project should
+treat "which UI approach" as a real open design question, not something to assume an answer to.
+
 ## Current focus
 
 The load-cell/pressure-probe ("prtouch") auxiliary Z-fine-tune layer - the one thing SimpleAF
@@ -57,7 +99,15 @@ except this probe layer, with no SWD required.
     `sendf`), not proprietary plumbing.
   - `prtouch_v1_wrapper.py` - older generation, fetched for completeness, not yet cross-checked
     against this device (which runs v2-era code).
-- `klippy_extras/` - where the new, OpenKE-authored replacement module will live. Empty so far.
+- `klippy_extras/` - the new, OpenKE-authored replacement module. Six files
+  (`prtouch_v2.py`/`prtouch_mcu.py`/`prtouch_calibration.py`/`prtouch_probe.py`/
+  `prtouch_nozzle.py`/`z_compensate.py`), currently skeletons only - signatures and docstrings,
+  `raise NotImplementedError` bodies, no real logic yet. See `DESIGN.md` for the layout rationale.
+- `ANALYSIS.md` - complete protocol + algorithm write-up, both reference source files read in full,
+  real production scope confirmed against the live printer. The technical source of truth.
+- `DESIGN.md` - the `klippy_extras/` module layout sketch, including the one real naming-
+  compatibility decision and two smaller open questions, all flagged for confirmation before real
+  implementation starts.
 
 ## License note
 

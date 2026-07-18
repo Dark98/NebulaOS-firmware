@@ -158,6 +158,70 @@ Confirmed, not assumed:
 Phase 1 (build the AX88179 module, test via `insmod`) is now realistic to actually attempt, not
 just plan - the source, the exact symbol, and the exact vermagic target are all in hand.
 
+## 4b. Phase 0 results, continued - real GPT partition table + silicon-level recovery mode
+
+Two more Phase 0 items done properly rather than inferred from sizes.
+
+**GPT partition table, parsed byte-for-byte (read-only `dd` of the first 68 sectors of
+`/dev/mmcblk0`, decoded locally with a small Python script against the real GPT spec - not
+guessed from partition sizes alone as in §2):**
+
+```
+p1  ota           1 MiB     (OTA update state/metadata)
+p2  sn_mac        1 MiB     (serial number / MAC provisioning data)
+p3  rtos          4 MiB   \  real A/B pair - firmware for the X2000's auxiliary
+p4  rtos2         4 MiB   /  XBurst0 real-time core (separate from the main Linux cores)
+p5  kernel        8 MiB   \  real A/B pair - the Linux kernel image (uImage)
+p6  kernel2       8 MiB   /
+p7  rootfs        500 MiB \  real A/B pair - the squashfs root filesystem image
+p8  rootfs2       500 MiB /
+p9  rootfs_data   300 MiB    writable ext4 overlay (confirmed via mount, §2)
+p10 userdata      6130 MiB   /usr/data (confirmed via mount, §2)
+```
+
+This is a **real, genuine A/B update-safety design** - not inferred, confirmed by name. Better
+still, `/proc/cmdline` on the live device reads `root=/dev/mmcblk0p7` - **`p7`/`rootfs` is the
+currently active slot, meaning `p8`/`rootfs2` (and very likely `p6`/`kernel2`) are spare, currently
+unused partitions.** This is about as safe a concrete experimentation target as this device could
+offer: a custom kernel/rootfs could go on the *B* slot entirely, with the *A* slot (currently
+booting, working) completely untouched throughout Phase 1/2 testing.
+
+**Silicon-level recovery mode - resolves the one risk flagged as unconfirmed in §2/§4:**
+`X2000_PM_20220909.pdf` chapter 42 ("XBurst Boot ROM Specification") documents this precisely.
+The X2000 has an internal 16KB mask ROM that always runs first after reset, before anything on
+the eMMC is even read, and its behavior is selected by three physical strap pins:
+
+```
+BOOT_SEL0 = pin PE25, BOOT_SEL1 = pin PE26, BOOT_SEL2 = pin PE27
+
+boot_sel[2:0]   Boot source
+000             SPI flash @ 3.3V
+001             eMMC/SD (MSC2 @ 3.3V)
+010 or 110      USB (recovery/download mode)
+011             NOR flash
+100             SPI flash @ 1.8V
+101             eMMC/SD (MSC0)
+111             eMMC/SD (MSC2 @ 1.8V)
+```
+
+With `boot_sel[2:0]` strapped to `010`/`110`, **the mask ROM itself switches to USB download mode
+and waits for a host PC** - a documented, complete protocol (USB VID:PID `0xa108:0xEAEF` - `0xa108`
+is Ingenic's own vendor ID, which not coincidentally also shows up elsewhere on this exact board's
+`lsusb` output already, `NETWORKING.md` §1 context), 6 vendor control requests
+(`VR_GET_CPU_INFO`/`VR_SET_DATA_ADDRESS`/`VR_SET_DATA_LENGTH`/`VR_FLUSH_CACHES`/
+`VR_PROGRAM_START1`/`VR_PROGRAM_START2`), used to load a small SPL program into internal SRAM and
+run it. **This recovery path lives entirely in mask ROM - it cannot be bricked by any software
+mistake, corrupted bootloader, or bad flash write, because it runs before any of that is ever
+read.** This is the best possible category of recovery mechanism, and it's exactly what the
+"cloner" flashing tool (`NETWORKING.md`/`FIRMWARE.md` §3) talks to.
+
+**One real unknown left, and it's a hardware question, not a software one**: whether `PE25`/`PE26`/
+`PE27` are actually broken out to an accessible pad/test-point/jumper on the Nebula Pad's specific
+PCB, or whether reaching them would need probing the chip package directly. Not answerable via SSH
+- would need physical inspection of the board (or Creality/community teardown photos) whenever a
+real flash is actually attempted. Everything else about the recovery path is now fully documented
+and doesn't need further investigation.
+
 ## 4. Revised difficulty assessment
 
 This materially changes the earlier (`NETWORKING.md` §6) assessment - not because the work
@@ -180,17 +244,19 @@ Creality-specific customization exists on top of the Halley5 reference (touch co
 the exact WiFi/BT combo chip integration, camera driver specifics) - real work, just no longer
 *blind* work, and no longer blocked on "do we even have matching source" (§4a - resolved).
 
-## 5. Gameplan (phased - Phase 0's main item is now done, rest pending explicit go-ahead)
+## 5. Gameplan (Phase 0 essentially complete - rest pending explicit go-ahead)
 
 **Phase 0 - research/acquisition, zero device risk (all local/network, not touching the printer)**
 1. ~~Try to obtain the actual Halley5 Linux-4.4 kernel source tree~~ **DONE (§4a)** - found and
    cloned locally (`vendor/x2000_kernel`, `vendor/buildroot-x2000`), exact version match confirmed.
-2. Review `X2000_PM_20220909.pdf` properly - specifically for boot-mode/strap-pin selection and
-   recovery-entry procedure. **Not done this pass** - still the next real Phase 0 item.
-3. Map the exact partition table byte-for-byte (still read-only). **Partially done** - sizes/mount
-   points mapped (§2), but not diffed byte-for-byte against `partitions.tab`/GPT labels yet. Live
-   device tree top-level nodes spot-checked (§4a) and look plausible, but not diffed node-by-node
-   against the reference `.dts` yet - real remaining task.
+2. ~~Review `X2000_PM_20220909.pdf` for boot-mode/recovery-entry procedure~~ **DONE (§4b)** - full
+   silicon-level USB recovery mode documented and understood. One remaining sub-item is a hardware
+   question (are the strap pins physically accessible on this board), not answerable remotely.
+3. ~~Map the exact partition table byte-for-byte~~ **DONE (§4b)** - real GPT parse, not inferred:
+   confirmed genuine A/B redundancy (`kernel`/`kernel2`, `rootfs`/`rootfs2`) and confirmed via
+   `/proc/cmdline` which slot is active (`p7`) vs. spare (`p8`). Live device tree top-level nodes
+   spot-checked (§4a) and look plausible; a full node-by-node diff against the reference `.dts` is
+   the one remaining minor Phase 0 item, low priority given everything else now confirmed.
 
 **Phase 1 - smallest possible real test, still low risk (the ethernet driver, track 2)**
 4. Build the `ax88179_178a` kernel *module* (not a full kernel) against `vendor/x2000_kernel`,

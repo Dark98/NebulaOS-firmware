@@ -6,35 +6,40 @@ Ender-3 V3 KE (Nebula Pad), **completely separate from the OpenKE/GuppyScreen pr
 repo's branches or release planning. See that project's own memory
 (`project_mainline_klipper_ke_separate.md`) for the full backstory and prior research.
 
-## Status: PAUSED (2026-07-18)
+## Status: PAUSED (2026-07-18), scope corrected the same day - read this before anything else
 
-Analysis is complete and this is intentionally paused here - resume only once `ke-next`
-(the separate OpenKE/GuppyScreen repo) has finished its own real-device testing. **No further
-investigation is needed before resuming** - read `ANALYSIS.md` in full, then go straight to
-design/implementation. See `ANALYSIS.md` §7-8 for the exact scope and next-step checklist, and
-the OpenKE memory file `project_mainline_klipper_ke_separate.md`'s final "Status: PAUSED" section
-for the same checklist duplicated there.
+**Correction, same day as the pause above**: the standing assumption that a full mainline-Klipper
+migration needs an SWD reflash was wrong. [pellcorp's SimpleAF](https://github.com/pellcorp/creality)
+already runs a custom, mainline-adjacent Klipper build on this exact printer (Ender 3 V3 KE is an
+explicitly supported target) with **zero SWD, zero soldering** - via a reverse-engineered serial
+in-application-programming protocol (`k1/mcu_util.py` in that repo) that flashes custom firmware
+over the same serial line Klipper already uses. SimpleAF's own FAQ is explicit that dropping
+load-cell probe support was a choice, not a limitation: *"There are no plans to support load cells
+in simple af."* Full correction with sources: the OpenKE memory file
+`project_mainline_klipper_ke_separate.md`'s "CORRECTED 2026-07-18" section (near the top).
 
-Short version of where this landed: the real, user-facing feature (per-print auto-Z-offset) is
-buildable from `prtouch_v2` primitives already read completely and documented in `ANALYSIS.md`
-(MCU protocol, `run_step_prtouch`, `cal_tri_data`, `clear_nozzle`, `env_self_check`) plus one small
-new piece of orchestration logic - not a full 2202-line port (confirmed against the real printer
-that most of that file, its own homing/bed-mesh code, is dead code in production - BLTouch owns
-that), and not a binary reverse-engineering project (`z_compensate`, the one remaining closed
-module, turned out to have no MCU protocol of its own - it just calls into `prtouch_v2`).
+**What this changes**: this workspace's actual job is best described as **"SimpleAF + the probe."**
+Everything analyzed/designed here (protocol, algorithm, module skeleton) is still exactly right and
+still needed - it's the one piece SimpleAF deliberately doesn't provide. What's newly open: whether
+`klippy_extras/`'s design should target SimpleAF's own environment directly (their Klipper fork,
+their config/mount conventions) rather than a hypothetical standalone host tree - not yet
+researched, flagged as the next real question once work resumes.
+
+Still paused until `ke-next` (the separate OpenKE/GuppyScreen repo) finishes its own real-device
+testing.
 
 ## Current focus
 
-The load-cell/pressure-probe ("prtouch") auxiliary Z-fine-tune layer. This does **not** require
-reflashing the toolhead MCU - the currently-installed (Creality) firmware already implements the
-custom commands needed; a new host-side Klipper "extra" can talk to it directly, the same way
-Creality's own `hx711s.py`/`dirzctl.py` do, using entirely standard Klipper host APIs
-(`mcu.create_oid()`, `mcu.add_config_cmd()`, `mcu.lookup_command()`, `mcu.register_response()`).
+The load-cell/pressure-probe ("prtouch") auxiliary Z-fine-tune layer - the one thing SimpleAF
+doesn't provide. Building it doesn't require reflashing the toolhead MCU either way: the
+currently-installed (Creality) firmware already implements the custom commands needed, and a new
+host-side Klipper "extra" can talk to it directly, the same way Creality's own
+`hx711s.py`/`dirzctl.py` do, using entirely standard Klipper host APIs (`mcu.create_oid()`,
+`mcu.add_config_cmd()`, `mcu.lookup_command()`, `mcu.register_response()`).
 
-Basic motion/homing/heating/BLTouch is a separate, already-solved problem (mainline's own
-`bltouch.py` is stock and needs no new work) - and still requires the community's documented
-SWD-flash path if a full mainline migration is ever pursued. This directory is only about the
-prtouch/load-cell piece for now.
+Basic motion/homing/heating/BLTouch is a separate, already-solved problem either way - mainline's
+own `bltouch.py` is stock, and SimpleAF already provides a complete working base for everything
+except this probe layer, with no SWD required.
 
 ## Layout
 

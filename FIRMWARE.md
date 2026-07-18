@@ -267,7 +267,67 @@ the exact WiFi/BT combo chip integration, camera driver specifics) - real work, 
    reuse rather than rebuild). Test via `insmod` on the real, idle printer - session-only, worst
    case is a hang + power cycle, no image changes (see `NETWORKING.md` §2 for why this specific
    test is low-risk). Real, concrete proof our source/toolchain match is correct before attempting
-   anything bigger. **Not started - next concrete step, ready to attempt.**
+   anything bigger.
+
+   **Build + vermagic verification DONE (2026-07-19). `insmod` test NOT done yet - resume here.**
+
+   Toolchain: reused the same Docker image already proven for OpenKE's own MIPS builds
+   (`pellcorp/k1-bash-build@sha256:0b96d1d65175c5a2e3a83a64c3212d08dd774fef0900f991e0ebc570ba896c85`,
+   see `~/Documents/guppyscreen/scripts/build-nginx-mipsel.sh`). It bundles Ingenic's own
+   `mips-gcc720-glibc229` toolchain at `/opt/toolchains/mips-gcc720-glibc229/bin/` - confirmed via
+   the compiler's version banner ("Ingenic Linux-Release5.0.2-Default(xburst2(fp64)+glibc2.29)") to
+   be Ingenic's actual vendor toolchain for this exact chip family, not just "a MIPS toolchain that
+   happens to work." Default container user (`developer`) can't `apt-get install`; use
+   `docker run --user root`. `bc` isn't in the image by default and is required by
+   `include/generated/timeconst.h` - install it inline (`apt-get install -y bc`) before building; a
+   pre-existing, unrelated, non-fatal Kconfig bug in this vendor tree
+   (`drivers/net/wireless/bcmdhd/Kconfig:29: error: recursive dependency detected!`) fires on every
+   config step but `.config` is still written correctly regardless - ignore the noise.
+
+   Exact commands, run inside the container with `vendor/x2000_kernel` mounted at `/src` and `cwd`
+   there:
+   ```sh
+   export ARCH=mips
+   export CROSS_COMPILE=mips-linux-gnu-
+   export PATH=/opt/toolchains/mips-gcc720-glibc229/bin:$PATH
+   apt-get install -y bc   # once per container invocation, needs --user root
+   make x2000_module_base_linux_mmc2_defconfig
+   ./scripts/config --module CONFIG_USB_USBNET
+   ./scripts/config --module CONFIG_USB_NET_AX88179_178A
+   ./scripts/config --module CONFIG_MII
+   make olddefconfig
+   make -j$(nproc) modules_prepare
+   make -j$(nproc) M=drivers/net modules
+   make -j$(nproc) M=drivers/net/usb modules
+   ```
+   Produces (among incidental siblings in the same directories, harmless/unused):
+   `drivers/net/mii.ko`, `drivers/net/usb/ax88179_178a.ko`, `drivers/net/usb/usbnet.ko`,
+   `drivers/net/usb/asix.ko`. Confirmed present in the generated `.config` before building: `SMP=y`,
+   `PREEMPT=y`, `MODULE_UNLOAD=y`, `MODULES=y`, `LOCALVERSION=""`, no `MODVERSIONS` line - the exact
+   components of the real device's vermagic. **Verified after build**: `strings <file>.ko | grep
+   ^vermagic=` on all four `.ko` files each reads exactly
+   `vermagic=4.4.94 SMP preempt mod_unload MIPS32_R2 32BIT` - byte-identical to the string extracted
+   from the real device's own existing modules (`NETWORKING.md` §2). Since `CONFIG_MODVERSIONS` is
+   off on the real device (confirmed same place), this coarse vermagic match is the only
+   compatibility gate that matters - no per-symbol CRC check needed.
+
+   Built `.ko` files copied to a stable, durable location (not just left inside the gitignored
+   `vendor/` clone, which could be deleted/re-cloned):
+   `~/Documents/ke-mainline-klipper/artifacts/ax88179-modules/` (`ax88179_178a.ko`, `usbnet.ko`,
+   `mii.ko`, `asix.ko`).
+
+   **Remaining step, next concrete action**: `scp` these four `.ko` files to the real printer,
+   confirm it's idle via a *fresh* `print_stats` check (it was mid-print - `BUTTRESS BASE M10 (L)`,
+   PETG - when last checked 2026-07-19; that check is now stale, re-check don't trust it), then
+   `insmod mii.ko && insmod usbnet.ko && insmod asix.ko && insmod ax88179_178a.ko` (load order
+   matters - dependencies first), and check `dmesg`/`ip link` for a new interface. If it works. add
+   an init script matching Creality's own `/module_driver/*.sh` pattern for persistence (§5 step 4
+   below covers this already). If `insmod` reports a version mismatch despite the matching
+   vermagic string, the next thing to check would be per-symbol CRCs after all (re-verify the
+   `CONFIG_MODVERSIONS`-off assumption against the built `.ko`'s own `Module.symvers` output - the
+   `usb` subdirectory's build emitted a "Symbol version dump ./Module.symvers is missing" warning
+   not seen on the first (`drivers/net`) build; not yet investigated, likely benign since modversions
+   is off on the target too, but worth a first look if `insmod` unexpectedly fails).
 
 **Phase 2 - real custom builds, moderate risk, only after Phase 1 succeeds**
 5. Build a custom Buildroot-based rootfs image (newer Buildroot release, more modern package

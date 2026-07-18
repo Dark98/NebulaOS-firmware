@@ -28,20 +28,32 @@ All three tracks share the same workspace and a lot of platform-level groundwork
 kernel source, etc.) - that shared material lives in track 3's files/memory, not duplicated across
 all three.
 
-## Status: RESUMING (2026-07-19) - `ke-next` testing finished, pause condition lifted
+## Status: IN PROGRESS (2026-07-19) - mid-way through Todo item 1, resume at the insmod step
 
 `ke-next`'s M600 fixes were confirmed working on real hardware and `v1.5.0-OpenKE` shipped
 (2026-07-18/19) - the "paused until ke-next real-device testing is done" condition below is now
-satisfied. Picking this workspace back up. See "Todo" right below for exactly what's next.
+satisfied, and work on Todo item 1 (below) is underway: the `ax88179_178a` kernel module is built
+and vermagic-verified, but not yet transferred to or tested on the real device (session paused
+here because the printer was mid-print). **Next session: go straight to Todo item 1's "Remaining"
+paragraph** - don't redo the build, just re-check the printer is idle and run the `insmod` test.
 
 ## Todo (as of 2026-07-19)
 
-1. **[Track 3, ready now] Phase 1 - build + test the ethernet driver.** Cross-compile
-   `ax88179_178a` as a kernel module against `vendor/x2000_kernel` (already cloned, exact version
-   match confirmed), enable `CONFIG_USB_NET_AX88179_178A`, match the device's exact vermagic
-   (`FIRMWARE.md`/`NETWORKING.md` §2), then `insmod` it on the real, idle printer. Session-only
-   test, low risk (see `NETWORKING.md` §2 for why). This is also track 2's entire remaining fix -
-   one piece of work closes both. Nothing else is blocking this; it's the concrete next action.
+1. **[Track 3, IN PROGRESS - resume here] Phase 1 - build + test the ethernet driver.**
+   **Build + vermagic verification DONE (2026-07-19)**: `ax88179_178a.ko`, `usbnet.ko`, `mii.ko`,
+   `asix.ko` all cross-compiled against `vendor/x2000_kernel` with `CONFIG_USB_NET_AX88179_178A`
+   enabled, and all four confirmed to report the exact same
+   `vermagic=4.4.94 SMP preempt mod_unload MIPS32_R2 32BIT` string as the real device's own existing
+   modules. Built files are saved at `artifacts/ax88179-modules/` (four `.ko` files) - durable, not
+   inside the gitignored `vendor/` clone. Full build recipe (exact commands, toolchain, gotchas
+   already hit and fixed) is in `FIRMWARE.md` §5 step 4 - read that before redoing any of this work.
+   **Remaining, not yet done**: `scp` the four `.ko` files to the real printer, confirm it's idle
+   with a *fresh* `print_stats` check (do not trust the 2026-07-19 check - it was mid-print and is
+   now stale), then `insmod` them (dependency order: `mii` → `usbnet` → `asix` → `ax88179_178a`) and
+   check `dmesg`/`ip link` for a new interface. Session-only test, low risk either way (see
+   `NETWORKING.md` §2 for why - nothing persists across a reboot unless we deliberately add an init
+   script, which only happens after success is confirmed). This is also track 2's entire remaining
+   fix - one piece of work closes both.
 2. **[Track 1] Resolve one open design question before writing real `klippy_extras/` logic**:
    should the module target SimpleAF's own environment (their Klipper fork, config/mount
    conventions) directly, or a standalone host tree? Not yet researched. Answering this should
@@ -179,6 +191,10 @@ except this probe layer, with no SWD required.
   GitHub code search and cloned locally for track 3/Phase 1 work. Provenance/exact repo URLs and
   commit state are recorded in `FIRMWARE.md` §4a - re-clone from there if this workspace ever moves,
   don't assume `vendor/` travels with the repo.
+- `artifacts/ax88179-modules/` - built, vermagic-verified kernel modules from track 3/Phase 1
+  (`ax88179_178a.ko`, `usbnet.ko`, `mii.ko`, `asix.ko`) - **not gitignored on purpose**, small
+  binary build outputs worth keeping around rather than a large source tree. See `FIRMWARE.md` §5
+  step 4 for the exact build recipe and current status (built + verified, not yet `insmod`-tested).
 
 ## License note
 

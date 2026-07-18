@@ -1,10 +1,21 @@
 # ke-mainline-klipper
 
-Standalone investigation/build for running mainline (upstream) Klipper on the Creality
-Ender-3 V3 KE (Nebula Pad), **completely separate from the OpenKE/GuppyScreen project**
+Standalone investigation/build workspace for this printer's underlying platform (Klipper fork,
+kernel, OS), **completely separate from the OpenKE/GuppyScreen project**
 (`~/Documents/guppyscreen`, `ke-next`/`main` branches). Nothing here should be folded into that
-repo's branches or release planning. See that project's own memory
-(`project_mainline_klipper_ke_separate.md`) for the full backstory and prior research.
+repo's branches or release planning.
+
+## Two tracks (as of 2026-07-18)
+
+1. **Mainline Klipper + load-cell probe** - see "Status" and "Current focus" below, plus
+   `ANALYSIS.md`/`DESIGN.md`. Goal: "SimpleAF + the probe" (SimpleAF's own framing, see below).
+   PAUSED, resume after `ke-next` testing.
+2. **USB-ethernet adapter compatibility** - see `NETWORKING.md`. A separate motivation (WiFi
+   reliability on this printer), same underlying platform. Investigation done, nothing implemented
+   yet. Also feeds directly into the "own firmware package" question in the same doc.
+
+Both tracks share the same memory backing in the OpenKE memory system - track 1 in
+`project_mainline_klipper_ke_separate.md`, track 2 in `project_ke_platform_networking.md`.
 
 ## Status: PAUSED (2026-07-18), scope corrected the same day - read this before anything else
 

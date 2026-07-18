@@ -5,23 +5,28 @@ kernel, OS), **completely separate from the OpenKE/GuppyScreen project**
 (`~/Documents/guppyscreen`, `ke-next`/`main` branches). Nothing here should be folded into that
 repo's branches or release planning.
 
-## Two tracks (as of 2026-07-18)
+## Three tracks (as of 2026-07-18)
 
 1. **Mainline Klipper + load-cell probe** - see "Status" and "Current focus" below, plus
    `ANALYSIS.md`/`DESIGN.md`. Goal: "SimpleAF + the probe" (SimpleAF's own framing, see below).
-   PAUSED, resume after `ke-next` testing.
-2. **USB-ethernet adapter compatibility** - see `NETWORKING.md`. A separate motivation (WiFi
-   reliability on this printer), same underlying platform. Investigation done, nothing implemented
-   yet.
+   PAUSED, resume after `ke-next` testing. Memory: `project_mainline_klipper_ke_separate.md`.
+2. **USB-ethernet adapter compatibility** - see `NETWORKING.md`. Motivated by poor WiFi
+   reliability. Fully scoped, not started - the fix now lives inside track 3's Phase 1 (see below).
+   Memory: `project_ke_platform_networking.md`.
+3. **Build our own firmware package (kernel + OS)** - see `FIRMWARE.md`, the source-of-truth doc
+   for this track, kept up to date as work continues (edit it in place rather than creating new
+   dated files - `git log` on this file already gives the chronological trail if ever needed).
+   The big underlying question both track 2 needed and the user asked directly: how hard would a
+   real custom kernel/OS be, not just a driver or a Klipper module. **Phase 0 (research/source
+   acquisition) is essentially complete** - real vendor documentation was found in the OpenKE
+   workspace's `docs hw/` directory, an exact-matching kernel source was found on GitHub and cloned
+   into `vendor/` (gitignored), the real partition table was parsed, and the chip's silicon-level
+   recovery mode is fully documented. Phase 1 (build + test the ethernet driver as first proof) is
+   the ready next step. Memory: `project_ke_custom_firmware.md`.
 
-Both tracks share the same memory backing in the OpenKE memory system - track 1 in
-`project_mainline_klipper_ke_separate.md`, track 2 in `project_ke_platform_networking.md`.
-
-**`FIRMWARE.md`** - the bigger question underlying both tracks: how hard would it be to build our
-own complete firmware image (kernel + OS), not just add a driver or a Klipper module. Real vendor
-documentation for this exact chip/kernel generation exists in the OpenKE workspace's `docs hw/`
-directory and materially changes the answer - full analysis plus a phased gameplan, nothing
-executed yet.
+All three tracks share the same workspace and a lot of platform-level groundwork (SoC identity,
+kernel source, etc.) - that shared material lives in track 3's files/memory, not duplicated across
+all three.
 
 ## Status: PAUSED (2026-07-18), scope corrected the same day - read this before anything else
 
@@ -121,10 +126,20 @@ except this probe layer, with no SWD required.
   `prtouch_nozzle.py`/`z_compensate.py`), currently skeletons only - signatures and docstrings,
   `raise NotImplementedError` bodies, no real logic yet. See `DESIGN.md` for the layout rationale.
 - `ANALYSIS.md` - complete protocol + algorithm write-up, both reference source files read in full,
-  real production scope confirmed against the live printer. The technical source of truth.
+  real production scope confirmed against the live printer. The technical source of truth for
+  track 1.
 - `DESIGN.md` - the `klippy_extras/` module layout sketch, including the one real naming-
   compatibility decision and two smaller open questions, all flagged for confirmation before real
   implementation starts.
+- `NETWORKING.md` - track 2's write-up (the USB-ethernet adapter investigation).
+- `FIRMWARE.md` - track 3's write-up and the actual phased gameplan (research/acquisition ->
+  ethernet-module proof -> custom Buildroot rootfs -> eventual real flash). The source of truth for
+  "how hard would a full custom firmware/OS be" - kept current in place as work progresses.
+- `vendor/` - **gitignored**, not committed. Real, exact-version-matching kernel source
+  (`x2000_kernel`) and a matching Halley5 Buildroot config (`buildroot-x2000`), both found via
+  GitHub code search and cloned locally for track 3/Phase 1 work. Provenance/exact repo URLs and
+  commit state are recorded in `FIRMWARE.md` §4a - re-clone from there if this workspace ever moves,
+  don't assume `vendor/` travels with the repo.
 
 ## License note
 

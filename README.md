@@ -28,7 +28,46 @@ All three tracks share the same workspace and a lot of platform-level groundwork
 kernel source, etc.) - that shared material lives in track 3's files/memory, not duplicated across
 all three.
 
-## Status: PAUSED (2026-07-18), scope corrected the same day - read this before anything else
+## Status: RESUMING (2026-07-19) - `ke-next` testing finished, pause condition lifted
+
+`ke-next`'s M600 fixes were confirmed working on real hardware and `v1.5.0-OpenKE` shipped
+(2026-07-18/19) - the "paused until ke-next real-device testing is done" condition below is now
+satisfied. Picking this workspace back up. See "Todo" right below for exactly what's next.
+
+## Todo (as of 2026-07-19)
+
+1. **[Track 3, ready now] Phase 1 - build + test the ethernet driver.** Cross-compile
+   `ax88179_178a` as a kernel module against `vendor/x2000_kernel` (already cloned, exact version
+   match confirmed), enable `CONFIG_USB_NET_AX88179_178A`, match the device's exact vermagic
+   (`FIRMWARE.md`/`NETWORKING.md` §2), then `insmod` it on the real, idle printer. Session-only
+   test, low risk (see `NETWORKING.md` §2 for why). This is also track 2's entire remaining fix -
+   one piece of work closes both. Nothing else is blocking this; it's the concrete next action.
+2. **[Track 1] Resolve one open design question before writing real `klippy_extras/` logic**:
+   should the module target SimpleAF's own environment (their Klipper fork, config/mount
+   conventions) directly, or a standalone host tree? Not yet researched. Answering this should
+   come before filling in the `NotImplementedError` bodies in `klippy_extras/`, since it affects
+   the module's assumptions (paths, how it's loaded, etc.).
+3. **[Track 1] Resolve the two smaller open questions in `DESIGN.md`**: whether to register
+   `Z_OFFSET_AUTO` at all (leaning no), and how closely to mirror Creality's `PR_ERR_CODE_*`
+   catalog vs. plain `command_error` (leaning toward the latter). Small, but flagged rather than
+   silently decided.
+4. **[Track 1] Once 2-3 are settled: implement `klippy_extras/`** - fill in the six skeleton
+   files' `NotImplementedError` bodies per `DESIGN.md`. The biggest single piece is porting
+   `run_step_prtouch`/`cal_tri_data`'s calibration math (fully understood, documented in
+   `ANALYSIS.md` §3-4) into `prtouch_probe.py`/`prtouch_calibration.py`.
+5. **[Track 3] Once Phase 1 succeeds: Phase 2** - a custom Buildroot rootfs using the
+   now-validated kernel/toolchain, using the spare `rootfs2`/`kernel2` partition slots (confirmed
+   unused, `FIRMWARE.md` §4b) rather than the active ones.
+6. **[New since last session] Adapt GuppyScreen for this environment** - the three-option question
+   in "GuppyScreen/OpenKE also needs adapting" above (point at pellcorp's `grumpyscreen`, port
+   OpenKE's own UI, or a hybrid) is unresearched and will eventually need answering, but isn't
+   blocking anything above yet - it's downstream of tracks 1 and 3 actually working.
+
+**Recommended order: 1 first** (concrete, ready, low-risk, unblocks track 2 entirely as a
+byproduct), **then 2-4** (track 1's real implementation work), **then 5**. Item 6 whenever it
+becomes the actual bottleneck, not before.
+
+## Scope corrected 2026-07-18 - read this before anything else
 
 **Correction, same day as the pause above**: the standing assumption that a full mainline-Klipper
 migration needs an SWD reflash was wrong. [pellcorp's SimpleAF](https://github.com/pellcorp/creality)

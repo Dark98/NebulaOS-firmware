@@ -101,11 +101,62 @@ Two key resources sitting in `~/Documents/guppyscreen/docs hw/`, not looked at u
   R5.2.2`) for the newer SDK generation - useful reference even though our device is on the older
   Linux-4.4-based Halley5 SDK, not this one.
 
-**Not yet confirmed**: whether the actual Halley5 Linux-4.4 kernel *source code* (as opposed to
-just this development manual) is obtainable the same way - the manual itself doesn't include a
-source download link, unlike the newer SDK's release notes which at least link the flashing tool.
-Likely gated behind an Ingenic customer/NDA relationship for the older SDK generation specifically.
-This is the single most important open question - see the gameplan below.
+**Update - this question is now answered, see §5a below.** The kernel source itself (not just the
+manual) turned out to be publicly obtainable, exact-version-matching, and is now cloned locally.
+
+## 4a. Phase 0 results (2026-07-18) - the kernel source match, found and cloned
+
+GitHub code search for the exact strings found live on this device (`x2000_module_base`,
+`halley5_v20`) turned up two public repos carrying a full Ingenic X2000/Halley5 kernel tree:
+[`Jubian540/x2000_kernel`](https://github.com/Jubian540/x2000_kernel) and
+[`bakueikozo/atomkernel4`](https://github.com/bakueikozo/atomkernel4), plus a matching Buildroot
+config: [`lone0/buildroot-x2000`](https://github.com/lone0/buildroot-x2000) ("Buildroot for
+Halley5, the evaluation board for Ingenic X2000 SoC"). All shallow-cloned into this workspace's new
+`vendor/` directory (`vendor/x2000_kernel`, `vendor/buildroot-x2000` - gitignored-worthy, large,
+not meant to be committed wholesale; see note at the end of this section).
+
+Confirmed, not assumed:
+
+- **Exact kernel version match**: `vendor/x2000_kernel/Makefile` -> `VERSION = 4, PATCHLEVEL = 4,
+  SUBLEVEL = 94` - this is genuinely `4.4.94`, byte-identical to this device's own
+  `vermagic=4.4.94` extracted back in `NETWORKING.md` §2. Not "close enough" - exact.
+  Codename: "Blurry Fish Butt" (the real, if silly, upstream 4.4 release codename).
+  - **This is a real find - but likely not, or not purely, a redistributable one.** No provenance
+    is documented in either repo (no README noting how it was obtained); given the file layout
+    (full stock Linux tree plus vendor board files, no visible license/attribution changes) this
+    reads as a reupload of an internal Ingenic SDK drop, the kind that circulates through Chinese
+    hardware-hacking channels (a pattern one of these accounts explicitly names elsewhere: "reupload
+    from gittea/baidu cloud" on a related repo). The kernel itself is GPLv2 (inherently
+    redistributable, and Ingenic's own patches on top inherit that), but treat this as an unofficial
+    community mirror, not an Ingenic-sanctioned release - keep it local/reference-only for now,
+    don't publish or redistribute further without thinking about it properly first.
+- **Board files match exactly**: `arch/mips/boot/dts/ingenic/x2000_module_base.dts`,
+  `x2000_module_base_mmc0.dts`, `x2000_module_base_mmc2.dts` (matching this device's live
+  `/proc/device-tree/compatible` = `ingenic,x2000_module_base` exactly) and
+  `arch/mips/configs/halley5_v20_linux_msc_defconfig` /
+  `halley5_v20_linux_sfc_nand_recovery_defconfig` (matching the kernel manual's defconfig table
+  exactly, §3 above) both exist in this tree.
+- **The AX88179 driver (the whole point of track 2) is already in this exact source tree**:
+  `drivers/net/usb/ax88179_178a.c`, `usbnet.c`, `asix_common.c`, `asix_devices.c` all present.
+  Confirmed **not enabled** in the closest-matching defconfig
+  (`x2000_module_base_linux_mmc2_defconfig`: `# CONFIG_USB_USBNET is not set`). Exact Kconfig
+  symbol confirmed from `drivers/net/usb/Kconfig`: **`CONFIG_USB_NET_AX88179_178A`** ("ASIX
+  AX88179/178A USB 3.0/2.0 to Gigabit Ethernet" - literally names our exact adapter). This turns
+  track 2 from "build a driver against a hoped-for-compatible source" into "flip a defconfig option
+  and rebuild" - about as tractable as this kind of problem gets.
+- **`lone0/buildroot-x2000` has a real `board/halley5/` directory and `configs/halley5_x2000_defconfig`**
+  - a genuine, matching Buildroot config for this exact reference board (though it targets a plain
+  rootfs, not squashfs+overlay - `BR2_TARGET_ROOTFS_SQUASHFS` is unset there, so Creality's
+  read-only-squashfs-plus-overlay scheme, §2, is their own customization on top of the vendor
+  reference, not something this base config already does).
+- **Live device tree spot-check**: `/proc/device-tree/` on the real printer lists real, plausible
+  Ingenic X2000 nodes (`ahb0`/`ahb1`/`ahb2`, `apb`, `cpufreq-dt`, `interrupt-controller`,
+  `reserved-memory`, `rtcclk`, `spi_gpio`) - consistent with a real X2000 device tree, not yet
+  diffed node-by-node against the reference `.dts` (real remaining task, not done this pass).
+
+**What this changes**: Phase 0's single biggest open question (matching kernel source) is answered.
+Phase 1 (build the AX88179 module, test via `insmod`) is now realistic to actually attempt, not
+just plan - the source, the exact symbol, and the exact vermagic target are all in hand.
 
 ## 4. Revised difficulty assessment
 
@@ -123,37 +174,34 @@ favor:
 - The base OS image is read-only with an overlay (§2) - normal experimentation is naturally
   contained.
 
-What's still genuinely hard, unchanged from before: actually obtaining a matching kernel *source*
-tree (not just the manual) is unconfirmed, and doing real board-level kernel work (not just adding
-a module) means working carefully through 189 pages of real, detailed vendor documentation plus
-whatever Creality-specific customization exists on top of the Halley5 reference (touch controller
-specifics, the exact WiFi/BT combo chip integration, camera driver specifics) - real work, just no
-longer *blind* work.
+What's still genuinely hard: doing real board-level kernel *work* (not just adding a module) means
+working carefully through 189 pages of real, detailed vendor documentation plus whatever
+Creality-specific customization exists on top of the Halley5 reference (touch controller specifics,
+the exact WiFi/BT combo chip integration, camera driver specifics) - real work, just no longer
+*blind* work, and no longer blocked on "do we even have matching source" (§4a - resolved).
 
-## 5. Gameplan (phased, nothing executed yet - all pending explicit go-ahead per phase)
+## 5. Gameplan (phased - Phase 0's main item is now done, rest pending explicit go-ahead)
 
 **Phase 0 - research/acquisition, zero device risk (all local/network, not touching the printer)**
-1. Try to obtain the actual Halley5 Linux-4.4 kernel source tree: check `Ingenic-community`'s
-   GitHub org for anything matching this specific BSP/kernel version (not just their newer 5.10
-   docs); check whether the `ftp.ingenic.com.cn` public server (§3) hosts anything for the older
-   SDK generation, not just the newer one; check IP-camera/embedded-hacking communities (Ingenic
-   chips, esp. T-series, are common there - X2000/Halley5 coverage unconfirmed but worth a real
-   look) for anyone who has already extracted or obtained this exact SDK.
-2. Review `X2000_PM_20220909.pdf` properly (not yet done) - specifically for boot-mode/strap-pin
-   selection and recovery-entry procedure, to know concretely how to reach a safe recovery/download
-   mode if something goes wrong later.
-3. Map the exact partition table byte-for-byte (still read-only - dump partition headers/labels
-   directly rather than inferring from size alone) and, if accessible, pull the live device tree
-   blob to diff against Halley5's reference `.dts` files - tells us precisely how much Creality
-   customized vs. the vendor reference.
+1. ~~Try to obtain the actual Halley5 Linux-4.4 kernel source tree~~ **DONE (§4a)** - found and
+   cloned locally (`vendor/x2000_kernel`, `vendor/buildroot-x2000`), exact version match confirmed.
+2. Review `X2000_PM_20220909.pdf` properly - specifically for boot-mode/strap-pin selection and
+   recovery-entry procedure. **Not done this pass** - still the next real Phase 0 item.
+3. Map the exact partition table byte-for-byte (still read-only). **Partially done** - sizes/mount
+   points mapped (§2), but not diffed byte-for-byte against `partitions.tab`/GPT labels yet. Live
+   device tree top-level nodes spot-checked (§4a) and look plausible, but not diffed node-by-node
+   against the reference `.dts` yet - real remaining task.
 
 **Phase 1 - smallest possible real test, still low risk (the ethernet driver, track 2)**
-4. If Phase 0 yields a matching-enough kernel source, build the `ax88179_178a`/`usbnet` kernel
-   *module* (not a full kernel) against it, matching the exact vermagic already extracted
-   (`NETWORKING.md` §2). Test via `insmod` on the real, idle printer - session-only, worst case is
-   a hang + power cycle, no image changes (see `NETWORKING.md` §2 for why this specific test is
-   low-risk). This is real, concrete proof our toolchain/source match is correct before attempting
-   anything bigger.
+4. Build the `ax88179_178a` kernel *module* (not a full kernel) against `vendor/x2000_kernel`,
+   using the `x2000_module_base_linux_mmc2_defconfig` as a base with
+   `CONFIG_USB_NET_AX88179_178A=m` enabled, matching the exact vermagic already extracted
+   (`NETWORKING.md` §2 - `4.4.94 SMP preempt mod_unload MIPS32_R2 32BIT`). Needs a matching MIPS
+   cross-compiler (OpenKE already has MIPS cross-compilation experience/tooling from other work -
+   reuse rather than rebuild). Test via `insmod` on the real, idle printer - session-only, worst
+   case is a hang + power cycle, no image changes (see `NETWORKING.md` §2 for why this specific
+   test is low-risk). Real, concrete proof our source/toolchain match is correct before attempting
+   anything bigger. **Not started - next concrete step, ready to attempt.**
 
 **Phase 2 - real custom builds, moderate risk, only after Phase 1 succeeds**
 5. Build a custom Buildroot-based rootfs image (newer Buildroot release, more modern package

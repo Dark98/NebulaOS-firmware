@@ -188,7 +188,46 @@ envelope Creality's own shipped code operates under today, on this same hardware
 reimplementation carries the same real-world risk profile already accepted by every stock KE running
 this firmware, no better and no worse.
 
-## 7. Not yet done (next real steps, not started)
+## 7. Scope, confirmed against the real printer (2026-07-18, read-only SSH, printer idle)
+
+Checked what actually runs in production, not just what prtouch_v2 exposes:
+
+- **`gcode_macro.cfg`'s real `G29` macro** (the one a real bed-mesh calibration runs) is
+  `G28` -> `BED_MESH_CALIBRATE` -> save - stock Klipper only, using the `probe` object (BLTouch).
+  **`prtouch_v2`'s own `run_G28_Z`/`run_G29_Z`/`bed_mesh_post_proc` are never invoked in real
+  production on this printer** - confirmed not just inferred. That entire ~500-line chunk of the
+  file we read doesn't need porting.
+- **The real per-print auto-Z-offset routine** lives in `klippy/extras/custom_macro.py`
+  (plaintext, stock-adjacent, not compiled - read in full) - its `CX_PRINT_LEVELING_CALIBRATION`
+  command is what the app actually triggers before a print with leveling calibration on: `G28` ->
+  heat nozzle/bed -> `CRTENSE_NOZZLE_CLEAR HOT_START_TEMP=.. HOT_RUB_TEMP=.. BED_ADDTEMP=..` ->
+  `Z_OFFSET_CALIBRATION` -> cool down -> `G28 Z` -> `BED_MESH_CALIBRATE` -> `CXSAVE_CONFIG`. Both
+  `CRTENSE_NOZZLE_CLEAR` and `Z_OFFSET_CALIBRATION` are registered by `z_compensate_wrapper.so` -
+  the closed module - not by `prtouch_v2`.
+- **The important discovery**: `strings` on `z_compensate_wrapper.so` shows it registers **no**
+  `config_*`/`create_oid`/`add_config_cmd` calls of its own - it does `lookup_object` and directly
+  references `prtouch_v2`, `run_step_prtouch`, `start_step_prtouch_cmd`, `write_swap_prtouch_cmd`,
+  `read_swap_prtouch_cmd` by name. **`z_compensate` is a thin orchestration layer on top of
+  `prtouch_v2`'s own primitives, not a second independent MCU protocol.** Its own `[z_compensate]`
+  config keys in `printer.cfg` (`clr_noz_start_x/y`, `clr_noz_len_x/y`, `pa_clr_dis_mm_x/y`) match
+  `prtouch_v2`'s own `clear_nozzle()` parameter names exactly - strong evidence
+  `CRTENSE_NOZZLE_CLEAR` is `prtouch_v2.clear_nozzle()` (already fully read, §4) called with
+  different temperature args, not separate logic. `bl_offset: 0,27` in `[z_compensate]` matches
+  `[bltouch]`'s own `y_offset: 27` exactly, consistent with `Z_OFFSET_CALIBRATION` touch-probing at
+  the same physical point BLTouch already homed, offset by the nozzle-to-probe-tip distance, then
+  reconciling the two readings.
+
+**Net effect on scope**: the real, user-facing feature (per-print auto-Z-offset) is buildable from
+primitives we've already read completely (`run_step_prtouch`, `cal_tri_data`, `clear_nozzle`,
+`env_self_check`, the MCU protocol) plus one new, small, well-scoped piece of orchestration logic
+(touch-probe at the BLTouch-homed point adjusted by `bl_offset`, diff against the current probe
+`z_offset`, apply via - almost certainly - stock Klipper's own `Z_OFFSET_APPLY_PROBE`, which also
+turned up in the `z_compensate_wrapper.so` strings). Not a verbatim port of closed code (impossible,
+we don't have it) - a fresh, small design on solid, fully-understood ground. This is meaningfully
+less work than "port all 2202 lines," and doesn't require reverse-engineering the compiled
+`z_compensate_wrapper.so` at all.
+
+## 8. Not yet done (next real steps, not started)
 
 - No code written yet in `klippy_extras/` - this file is analysis only, as scoped.
 - `z_compensate_wrapper.so` reverse-engineering (see §5) - separate, harder, not assumed necessary

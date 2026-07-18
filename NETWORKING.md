@@ -1,4 +1,4 @@
-# USB-ethernet adapter compatibility + "build our own firmware" feasibility
+# USB-ethernet adapter compatibility
 
 Track 2 of this workspace (see `README.md`). Motivation: WiFi reliability on this printer is poor
 (user's words: "wifi sucks") - a working USB-ethernet adapter would sidestep that entirely. This
@@ -6,6 +6,13 @@ investigation is separate from the mainline-Klipper/load-cell track (track 1) bu
 underlying platform, so findings here (SoC identity, kernel module mechanism, storage layout) are
 useful background for both. All findings below came from **read-only** SSH investigation of the
 real, idle printer (2026-07-18) - zero writes made.
+
+**"How hard to build our own full firmware/OS" has its own, more thorough answer now: see
+`FIRMWARE.md`** - it supersedes §6 below after reviewing the official Ingenic vendor documentation
+already sitting in the OpenKE workspace's `docs hw/` directory (not reviewed when §6 was first
+written) and confirming the real OS (Buildroot, not Ubuntu) directly on the device. §6 is kept
+below for the session-by-session record but `FIRMWARE.md` is the current, complete answer with an
+actual phased gameplan.
 
 ## 1. The adapter itself - detected fine, just no driver
 

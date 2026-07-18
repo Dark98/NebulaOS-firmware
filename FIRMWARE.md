@@ -1,0 +1,181 @@
+# Building our own firmware package (OS included) - full analysis + gameplan
+
+Supersedes `NETWORKING.md` §6's shorter answer to the same question, after the user pointed at two
+things that materially change the picture: (1) the real OS running here (corrected below), and
+(2) official Ingenic vendor documentation for this exact chip/kernel generation already sitting in
+`~/Documents/guppyscreen/docs hw/` - unreviewed until this pass. Everything below is read-only
+findings (device queried live, idle, no writes) plus documentation review - **nothing has been
+flashed, built, or changed on the device.**
+
+## 1. Correcting the OS assumption - it's Buildroot, not Ubuntu
+
+Checked directly on the live device: `/etc/os-release` reads:
+
+```
+NAME=Buildroot
+VERSION=2020.02.1-g1ad352d2bd-dirty
+ID=buildroot
+VERSION_ID=2020.02.1
+PRETTY_NAME="Buildroot 2020.02.1"
+```
+
+This is [Buildroot](https://buildroot.org/), not Ubuntu - a lightweight, source-based embedded
+Linux build system, not a general-purpose distro. This is actually *better* news for "more
+lightweight, more up to date" than Ubuntu would have been: Buildroot is already about as minimal as
+it gets, extremely well-documented, and - critically - it's confirmed to be the *exact* system
+already in use here (see §3), so building our own updated image means using the same, familiar
+tool the vendor already used, not introducing a new one.
+
+## 2. Exact hardware + reference platform, now fully mapped
+
+- **SoC**: Ingenic X2000 (XBurst II, MIPS32R2) - confirmed multiple ways: `/proc/cpuinfo`
+  (`system type: xburst2-based`), and now also directly from the live device tree:
+  `/proc/device-tree/compatible` = `ingenic,x2000_module_base` + `ingenic,x2000`.
+- **Reference board family**: Ingenic's own "Halley5" X2000 evaluation board (see §3) - Creality's
+  Nebula Pad is a customized board built on this reference design, standard practice for these
+  vendor SoCs.
+- **Storage layout, fully mapped this session** (`/proc/partitions` + `mount`, all read-only):
+  ```
+  mmcblk0p1  1 MiB    (likely xboot/bootloader - small, matches ref. table's "xboot" role)
+  mmcblk0p2  1 MiB    (likely a paired/backup slot for p1)
+  mmcblk0p3  4 MiB    (likely kernel/boot - paired with p4)
+  mmcblk0p4  4 MiB    (likely kernel/boot backup, or dtb)
+  mmcblk0p5  8 MiB    (likely dtb or another paired slot)
+  mmcblk0p6  8 MiB    (paired with p5)
+  mmcblk0p7  500 MiB  (candidate: squashfs rootfs image, "/rom")
+  mmcblk0p8  500 MiB  (candidate: paired/backup rootfs slot - real A/B redundancy)
+  mmcblk0p9  300 MiB  ext4, mounted at /overlay - the writable overlay layer (see below)
+  mmcblk0p10 ~6 GiB   ext4, mounted at /usr/data - the actual persistent user-data partition
+                       (printer_data, Klipper config, our own OpenKE install all live here)
+  ```
+  Exact p1-p8 role assignment is inferred from size/position matching the Halley5 reference
+  `partitions.tab` layout (§3), not yet confirmed byte-for-byte - a real next step, not a risk in
+  itself (read-only to confirm).
+- **Root filesystem architecture - genuinely reassuring for experimentation risk**: `mount` shows
+  `/dev/root` mounted read-only as squashfs at `/rom`, with `mmcblk0p9` (ext4) providing a writable
+  `overlayfs` upper layer mounted as `/` itself. This is a standard, safe embedded-Linux pattern:
+  **the base OS image never gets written to directly during normal operation** - all runtime
+  changes land in the overlay, and `/usr/data` (the big partition) is separate again. This means
+  many kinds of experimentation are recoverable by design, not just by luck.
+
+## 3. The official Ingenic documentation already in `docs hw/` - previously unreviewed
+
+Two key resources sitting in `~/Documents/guppyscreen/docs hw/`, not looked at until this pass:
+
+- **`02-Halley5_Linux4.4内核开发手册.pdf`** ("Halley5 Linux 4.4 Kernel Development Manual", Ingenic
+  Semiconductor, v2.0, 2021) - 189 pages, **real, detailed, engineering-grade vendor documentation**
+  for the exact kernel generation this device runs (`vermagic=4.4.94`) on the exact reference board
+  family (Halley5, X2000). Confirmed by reading it directly (not just skimming):
+  - Real kernel defconfig list including `halley5_v20_linux_msc_defconfig` (eMMC/SD boot - matches
+    this device exactly) and, importantly, **`halley5_v20_linux_sfc_nand_recovery_defconfig`
+    ("used for OTA-upgrade recovery config")** - recovery is a standard, designed-in part of this
+    platform, not something uniquely locked down by Creality. A reference partition table example
+    in the same manual includes an explicit `recovery` partition alongside `xboot`/`boot`/
+    `pretest`/`reserved`.
+  - Concrete, actionable instructions for modifying and reflashing the device tree (`make
+    kernel-dtbs`, exact output paths, exact Kconfig symbol `INGENIC_BUILTIN_DTB`, exact flash
+    offsets for eMMC: dtb at `0xb00000`).
+  - A full chapter (28) on the SoC's built-in Gigabit Ethernet MAC (GMAC/RGMII) - not directly
+    usable without hardware (the Nebula Pad doesn't appear to have a populated ethernet PHY), but
+    confirms the SoC itself has real wired-ethernet silicon.
+  - Kconfig-level detail for the USB host/device stack (exact symbol names, e.g. `VFAT_FS`,
+    default USB host support = mass storage/camera/HID only - **matches exactly what we found live
+    on the device this session**, strong evidence this manual really does describe this device's
+    actual configuration, not just a generic relative).
+  - Confirms the rootfs build system is **Buildroot** (`buildroot/dl/...`,
+    `buildroot/package/ingenic/...` paths throughout) - matches §1's live confirmation exactly.
+- **`X2000_PM_20220909.pdf`** - the X2000 chip Programming Manual (43MB, official chip-level
+  reference) - not yet reviewed in depth this session, real next step (register-level detail,
+  likely including boot-mode/strap-pin selection, useful for understanding recovery-mode entry).
+- **`ingenic-linux-docs-ingenic-master/`** - a full clone of Ingenic's public docs repo, mostly
+  covering their *newer* kernel-5.10-based SDKs (X2000/X1600/X2500/X26XX). One concrete, valuable
+  find inside it: a kernel-5.10 X2000 SDK release note documents a **public FTP server with public
+  credentials** for their official flashing tool:
+  ```
+  ftp://ftp.ingenic.com.cn/DevSupport/Tools/USBBurner/cloner-2.5.54-{ubuntu,windows}_alpha.tar.gz
+  account: ingenic_public   password: BFdg2f9B12
+  ```
+  Real, vendor-published, explicitly public credentials (not a leak) - genuine evidence the tooling
+  ecosystem for this chip family is realistically obtainable, not something to reverse-engineer
+  blind. Also documents the exact cross-compiler used (`gcc 7.2.0, Ingenic MIPS LINUX Tools
+  R5.2.2`) for the newer SDK generation - useful reference even though our device is on the older
+  Linux-4.4-based Halley5 SDK, not this one.
+
+**Not yet confirmed**: whether the actual Halley5 Linux-4.4 kernel *source code* (as opposed to
+just this development manual) is obtainable the same way - the manual itself doesn't include a
+source download link, unlike the newer SDK's release notes which at least link the flashing tool.
+Likely gated behind an Ingenic customer/NDA relationship for the older SDK generation specifically.
+This is the single most important open question - see the gameplan below.
+
+## 4. Revised difficulty assessment
+
+This materially changes the earlier (`NETWORKING.md` §6) assessment - not because the work
+shrinks to zero, but because several previously-unknown risk factors are now resolved in our
+favor:
+
+- Recovery is a real, standard, vendor-designed feature of this exact platform (§3), not an
+  unknown - meaningfully reduces "irrecoverable brick" risk for kernel/rootfs-level work.
+- The rootfs build system is the one we'd have chosen anyway (Buildroot) and is already confirmed
+  in use, not something to introduce fresh.
+- We have genuine, detailed, engineering-grade vendor documentation for the exact kernel
+  generation and reference board family this device is built from - not a generic "some MIPS SoC"
+  situation, a specific, well-documented one.
+- The base OS image is read-only with an overlay (§2) - normal experimentation is naturally
+  contained.
+
+What's still genuinely hard, unchanged from before: actually obtaining a matching kernel *source*
+tree (not just the manual) is unconfirmed, and doing real board-level kernel work (not just adding
+a module) means working carefully through 189 pages of real, detailed vendor documentation plus
+whatever Creality-specific customization exists on top of the Halley5 reference (touch controller
+specifics, the exact WiFi/BT combo chip integration, camera driver specifics) - real work, just no
+longer *blind* work.
+
+## 5. Gameplan (phased, nothing executed yet - all pending explicit go-ahead per phase)
+
+**Phase 0 - research/acquisition, zero device risk (all local/network, not touching the printer)**
+1. Try to obtain the actual Halley5 Linux-4.4 kernel source tree: check `Ingenic-community`'s
+   GitHub org for anything matching this specific BSP/kernel version (not just their newer 5.10
+   docs); check whether the `ftp.ingenic.com.cn` public server (§3) hosts anything for the older
+   SDK generation, not just the newer one; check IP-camera/embedded-hacking communities (Ingenic
+   chips, esp. T-series, are common there - X2000/Halley5 coverage unconfirmed but worth a real
+   look) for anyone who has already extracted or obtained this exact SDK.
+2. Review `X2000_PM_20220909.pdf` properly (not yet done) - specifically for boot-mode/strap-pin
+   selection and recovery-entry procedure, to know concretely how to reach a safe recovery/download
+   mode if something goes wrong later.
+3. Map the exact partition table byte-for-byte (still read-only - dump partition headers/labels
+   directly rather than inferring from size alone) and, if accessible, pull the live device tree
+   blob to diff against Halley5's reference `.dts` files - tells us precisely how much Creality
+   customized vs. the vendor reference.
+
+**Phase 1 - smallest possible real test, still low risk (the ethernet driver, track 2)**
+4. If Phase 0 yields a matching-enough kernel source, build the `ax88179_178a`/`usbnet` kernel
+   *module* (not a full kernel) against it, matching the exact vermagic already extracted
+   (`NETWORKING.md` §2). Test via `insmod` on the real, idle printer - session-only, worst case is
+   a hang + power cycle, no image changes (see `NETWORKING.md` §2 for why this specific test is
+   low-risk). This is real, concrete proof our toolchain/source match is correct before attempting
+   anything bigger.
+
+**Phase 2 - real custom builds, moderate risk, only after Phase 1 succeeds**
+5. Build a custom Buildroot-based rootfs image (newer Buildroot release, more modern package
+   versions, our own choice of what to include) using the confirmed-matching kernel/toolchain -
+   this is the actual "more lightweight, more up to date OS" the user asked about, and it's
+   realistically achievable *because* Phase 0/1 de-risked the toolchain/source-match question first.
+   Test-boot via whatever safe recovery mechanism Phase 0 identified, not by overwriting the only
+   working rootfs slot blind.
+6. Only if there's a specific concrete reason (not yet identified): consider kernel changes beyond
+   adding modules (e.g. a newer Ingenic-community kernel fork, if the version gap turns out small).
+
+**Phase 3 - only if everything above is solid and validated**
+7. A real flash of kernel+rootfs to the live printer, using the platform's own confirmed recovery
+   path as a safety net, only after dry-running the process as many times as reasonably possible
+   against non-production copies (e.g. test on the paired/backup partition slot if p3/p4 or
+   p7/p8 really are A/B pairs, confirmed in Phase 0).
+
+**Explicitly not recommended, no real reason to do it here**: replacing the bootloader (`xboot`) -
+no concrete benefit identified for this project, and it's the single highest-risk component to get
+wrong regardless of how well-documented the recovery path turns out to be.
+
+Nothing above has been started. This is a plan to execute in later sessions, one phase at a time,
+with the user's explicit go-ahead before any step that touches the real device beyond read-only
+queries - fully consistent with how every other risky-adjacent step in this workspace has been
+handled so far.

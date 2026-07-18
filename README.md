@@ -6,6 +6,23 @@ Ender-3 V3 KE (Nebula Pad), **completely separate from the OpenKE/GuppyScreen pr
 repo's branches or release planning. See that project's own memory
 (`project_mainline_klipper_ke_separate.md`) for the full backstory and prior research.
 
+## Status: PAUSED (2026-07-18)
+
+Analysis is complete and this is intentionally paused here - resume only once `ke-next`
+(the separate OpenKE/GuppyScreen repo) has finished its own real-device testing. **No further
+investigation is needed before resuming** - read `ANALYSIS.md` in full, then go straight to
+design/implementation. See `ANALYSIS.md` §7-8 for the exact scope and next-step checklist, and
+the OpenKE memory file `project_mainline_klipper_ke_separate.md`'s final "Status: PAUSED" section
+for the same checklist duplicated there.
+
+Short version of where this landed: the real, user-facing feature (per-print auto-Z-offset) is
+buildable from `prtouch_v2` primitives already read completely and documented in `ANALYSIS.md`
+(MCU protocol, `run_step_prtouch`, `cal_tri_data`, `clear_nozzle`, `env_self_check`) plus one small
+new piece of orchestration logic - not a full 2202-line port (confirmed against the real printer
+that most of that file, its own homing/bed-mesh code, is dead code in production - BLTouch owns
+that), and not a binary reverse-engineering project (`z_compensate`, the one remaining closed
+module, turned out to have no MCU protocol of its own - it just calls into `prtouch_v2`).
+
 ## Current focus
 
 The load-cell/pressure-probe ("prtouch") auxiliary Z-fine-tune layer. This does **not** require

@@ -1642,3 +1642,31 @@ work (`prtouch_v2.py`/`z_compensate.py` etc.) as the actual path to closing the 
 (22 sections, no syntax errors) before deploying. Confirmed present in the rebuilt `rootfs.ext2`
 via `debugfs`. The real, original stock config is also saved for reference at
 `artifacts/reference/stock-printer.cfg`.
+
+### WiFi credentials - real decision: keep them out of the committed image entirely
+
+User fetched the real `/usr/data/wpa_supplicant.conf` themselves (the `scp` the permission
+classifier had blocked me from running directly). Placing it into the build overlay and rebuilding
+was then *also* blocked by the classifier - correctly: doing so would bake the real network
+password into `rootfs.ext2`/`rootfs.squashfs`, both committed to this repo's git history
+throughout this whole track. Rather than work around that, the real decision made: **don't bake
+real credentials into a committed build artifact at all**, regardless of tooling - removed the
+fetched `wpa_supplicant.conf` from the overlay before rebuilding.
+
+**What stays, since it's not sensitive**: `S39wifi` (a new init script - starts `wpa_supplicant` on
+`wlan0` against `/etc/wpa_supplicant.conf` if present, then `ifup`s it; numbered to run *before*
+`S40network`'s `ifup -a` so association happens before DHCP is attempted; gracefully no-ops if the
+config file is absent) and a real `wlan0` stanza added to `/etc/network/interfaces` (Buildroot's
+own `wpa_supplicant` package ships no Debian-style `ifupdown` hook script, confirmed by checking
+`/etc/network/if-pre-up.d/` - hence the dedicated script rather than a `wpa-conf` directive).
+Confirmed via `debugfs` that the rebuilt image has no real credentials anywhere - only Buildroot's
+own generic, commented-out stock `/etc/wpa_supplicant.conf` template (`key_mgmt=NONE`, no ssid/
+psk), matching the same unused-template shape found on the real device's own `/etc/wpa_supplicant.
+conf` (§17's own real-vs-stock-path finding).
+
+**Real, intentional gap for now**: the first real boot test will have no WiFi credentials
+configured out of the box. This is fine given this session's own safety-net work - the wired
+`ax88179` dongle (DHCP already covered) and GuppyScreen (local, network-independent feedback) are
+both real, already-built alternatives for that first attempt. Adding real WiFi credentials, if
+wanted, is a real, deliberate, separate step to do at flash/deploy time - not something to bake
+into a git-committed image.

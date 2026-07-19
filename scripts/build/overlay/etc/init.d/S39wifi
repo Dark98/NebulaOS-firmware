@@ -1,0 +1,56 @@
+#!/bin/sh
+#
+# OpenKE addition (FIRMWARE.md sec 17/18): starts wpa_supplicant on wlan0
+# against the real credentials fetched from the live device
+# (/usr/data/wpa_supplicant.conf there - the stock /etc/wpa_supplicant.conf
+# is an unused empty template, confirmed via the live wpa_supplicant
+# process's own /proc/<pid>/cmdline). Numbered S39 - runs before
+# S40network's `ifup -a`, so wlan0 has already associated by the time
+# udhcpc tries it (this script also explicitly re-runs `ifup wlan0` itself
+# after associating, as a real belt-and-suspenders rather than relying on
+# ordering alone).
+#
+# ctrl_interface=/var/run/wpa_supplicant in the config already matches what
+# GuppyScreen's own guppyconfig.json expects for its WiFi panel.
+
+CONF=/etc/wpa_supplicant.conf
+PIDFILE=/var/run/wpa_supplicant-wlan0.pid
+
+start() {
+	if [ ! -f "$CONF" ]; then
+		echo "S45wifi: $CONF not present, skipping"
+		return 0
+	fi
+	echo "Starting wpa_supplicant on wlan0"
+	mkdir -p /var/run/wpa_supplicant
+	start-stop-daemon -S -b -m -p "$PIDFILE" \
+		-x /usr/sbin/wpa_supplicant -- \
+		-i wlan0 -c "$CONF"
+	sleep 2
+	/sbin/ifup wlan0 2>/dev/null
+}
+
+stop() {
+	echo "Stopping wpa_supplicant"
+	/sbin/ifdown wlan0 2>/dev/null
+	start-stop-daemon -K -p "$PIDFILE"
+}
+
+case "$1" in
+	start)
+		start
+		;;
+	stop)
+		stop
+		;;
+	restart)
+		stop
+		start
+		;;
+	*)
+		echo "Usage: $0 {start|stop|restart}"
+		exit 1
+		;;
+esac
+
+exit 0

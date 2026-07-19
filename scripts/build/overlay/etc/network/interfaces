@@ -1,0 +1,19 @@
+# interface file - Buildroot's own auto-generated eth0 stanza preserved,
+# wlan0 added (FIRMWARE.md sec 17/18) for the WiFi credentials fetched from
+# the real device. wpa_supplicant itself is started by S45wifi (it
+# associates first; ifup's own udhcpc then gets the DHCP lease) - Buildroot's
+# wpa_supplicant package doesn't ship the Debian-style ifupdown wpa-conf
+# hook, confirmed by checking /etc/network/if-pre-up.d/ has no such script.
+
+auto lo
+iface lo inet loopback
+
+auto eth0
+iface eth0 inet dhcp
+  pre-up /etc/network/nfs_check
+  wait-delay 15
+  hostname $(hostname)
+
+auto wlan0
+iface wlan0 inet dhcp
+  wait-delay 15

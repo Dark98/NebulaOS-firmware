@@ -217,11 +217,17 @@ real package-selection/squashfs work first before it's even worth attempting.
    §12)**, and **USB-Ethernet (`ax88179_178a`) support was added fresh for this kernel too
    (`FIRMWARE.md` §16 - a separate build from Phase 1's 4.4.94 one, hit the same "menu gate not
    enabled by default" Kconfig class of bug as touch's own fix above)** - every peripheral now has
-   real code built and present in the image. Still remaining for real parity: squashfs+overlay
-   conversion (still plain ext2), the app stack (see item 8 below),
-   and the actual real-hardware boot test. **Still uses the spare `rootfs2`/`kernel2` partition
-   slots as the eventual target once a real flash is ever attempted** (confirmed unused,
-   `FIRMWARE.md` §4b) - nothing about that plan changed.
+   real code built and present in the image. **Squashfs now built too (`FIRMWARE.md` §17)** -
+   `rootfs.squashfs` (43.56 MB) as an additional image output alongside the proven `rootfs.ext2`,
+   matching the real device's filesystem format (the full production A/B+overlay scheme itself is
+   still real, separate future work). **GuppyScreen also cross-compiled and wired in for real
+   local visual feedback during the first boot test** (`FIRMWARE.md` §17) - not the full
+   environment-adaptation project (item 7 below), just a real, working binary + config given the
+   risk that losing WiFi on first boot with no local UI means no way back into the device at all.
+   Remaining: the app stack (see item 8 below), WiFi credentials for the first boot (pending a user
+   decision, see `FIRMWARE.md` §17), and the actual real-hardware boot test. **Still uses the spare
+   `rootfs2`/`kernel2` partition slots as the eventual target once a real flash is ever attempted**
+   (confirmed unused, `FIRMWARE.md` §4b) - nothing about that plan changed.
 7. **[New since last session] Adapt GuppyScreen for this environment** - the three-option question
    in "GuppyScreen/OpenKE also needs adapting" above (point at pellcorp's `grumpyscreen`, port
    OpenKE's own UI, or a hybrid) is unresearched and will eventually need answering, but isn't

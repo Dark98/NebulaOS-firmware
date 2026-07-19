@@ -1536,3 +1536,82 @@ already carries an explicit `# CONFIG_USB_NET_DRIVERS is not set` line, which al
 `CONFIG_USB_USBNET=m`/`CONFIG_USB_NET_AX88179_178A=m`. Rebuilt, confirmed `ax88179_178a.ko` (real
 MIPS32 LE, verified via `file`) present in the regenerated `rootfs.ext2` via `debugfs`. Untested on
 real hardware, same as every other peripheral in this track.
+
+## 17. Squashfs, wired-ethernet safety net, and a real GuppyScreen build (2026-07-19, later still)
+
+User pushed on the real-hardware-boot-test risk picture directly: if squashfs is genuinely "the
+only thing left," should we do it now - and separately, shouldn't GuppyScreen be included, since
+losing WiFi on first boot with no local UI would mean zero way back into the device at all. Both
+real, worth acting on rather than deferring.
+
+### Squashfs+overlay
+
+Enabled `BR2_TARGET_ROOTFS_SQUASHFS=y` as an **additional** image output (kept `BR2_TARGET_ROOTFS_
+EXT2` too, so both remain available rather than replacing a proven artifact). Real bug hit: the
+first build failed with `mksquashfs: -b invalid block size` - setting the parent option alone
+without a `make olddefconfig` pass left the block-size sub-choice unresolved (same root cause as
+every other "menu/choice default not applied" bug this session - a `default` clause only wins for
+symbols with no prior value, and this needs the same care every other Kconfig-boolean fragment
+addition has needed). Fixed, rebuilt: **`rootfs.squashfs` now real, 43.56 MB compressed (from
+137 MB uncompressed) - well under the real device's 500MiB `rootfs`/`rootfs2` partition slots.**
+Deliberately did *not* attempt the full production overlay scheme (separate read-only squashfs +
+writable ext4 `rootfs_data` combined via overlayfs at boot) - that's real, larger structural work
+for later; this pass just gets the filesystem *format* matched, which was the actual open question.
+
+### Wired-ethernet safety net - already covered, verified rather than assumed
+
+Checked before writing any new code: Buildroot's standard `ifupdown` mechanism (`S40network`,
+already present) already has `eth0` configured for DHCP (`auto eth0` / `iface eth0 inet dhcp`), and
+`depmod`'s generated `modules.alias` correctly maps the real ASIX vendor:product ID
+(`usb:v0B95p178Ad*`) to `ax88179_178a` - meaning udev's standard hotplug module-autoloading, already
+enabled via `S10udev`, should bring up the USB-ethernet dongle and get it a DHCP address with zero
+additional work. No persistent-net renaming rules exist to interfere. **Nothing new needed here** -
+genuinely already covered by infrastructure built in earlier passes, confirmed rather than assumed.
+
+### GuppyScreen - real cross-compile, not deferred any further
+
+Real reasoning for doing this now rather than as the originally-planned later smoke test: it draws
+directly to the framebuffer/touch device, giving real local visual feedback **independent of
+network state entirely** - the actual gap in the "what if WiFi doesn't come up" risk picture.
+
+Used the main OpenKE project's own already-established, already-proven cross-compile toolchain
+(`ghcr.io/coreflake1/guppydev:latest`, a from-source-reproducible musl/static toolchain image,
+already used for real production releases including `v1.5.0-OpenKE`) via its documented
+`scripts/build-mips.sh` - no new build infrastructure needed, this is real, mature tooling.
+Real output confirmed: `guppyscreen` and `guppybeep`, both genuine statically-linked MIPS32
+executables (`file` confirms, no shared-library runtime dependencies to worry about at all, unlike
+`ustreamer`).
+
+Config wiring used the project's own real `debian/guppyconfig.json` template (found via the
+installer script, not invented) - `moonraker_host=127.0.0.1`/`moonraker_port=7125` already exactly
+matches this track's own Moonraker setup with zero changes needed, since GuppyScreen talks to
+Moonraker's API, not directly to whichever Klipper fork sits underneath it - **this is also the
+answer to "does it understand SimpleAF's Klipper commands": it doesn't need to, Moonraker is the
+abstraction layer, and Moonraker itself doesn't care which standards-compliant Klipper fork it's
+proxying**. `<GUPPY_DIR>`/`<PRINTER_DATA_DIR>` placeholders substituted to this track's real paths
+(`/opt/guppyscreen`, `/opt/printer_data`). One real, flagged unknown: `display_rotate: 2` was
+copied from the stock device's own working config, but our from-scratch panel driver's rendering
+orientation relative to the physical panel hasn't been confirmed to match - may need adjusting
+once there's an actual picture to look at, cosmetic-risk-only if wrong.
+
+New `S58guppyscreen` init script - a real departure from the original "manual smoke test only"
+plan: auto-started via init.d this time, specifically so it's visible on physical boot without
+needing SSH access at all, given the whole point was ensuring a way to see what's happening even if
+networking fails entirely.
+
+**Confirmed present in both `rootfs.ext2` and the new `rootfs.squashfs`** via `debugfs`/
+`unsquashfs -l`, and confirmed real MIPS32 static output via `file`.
+
+### WiFi credentials - real device inspected, one step still pending a user decision
+
+Found the real, currently-configured network list on the live device (read-only, confirmed idle via
+a fresh `print_stats` check first): `wpa_cli -i wlan0 list_networks` shows two real saved networks,
+one currently connected. **Real, non-obvious finding**: the stock `/etc/wpa_supplicant.conf` is an
+unused, empty template - the actual config `wpa_supplicant` is invoked with (confirmed via the live
+process's own `/proc/<pid>/cmdline`) is `/usr/data/wpa_supplicant.conf`, a real, non-standard path.
+Pulling that specific file (containing the real network password) was correctly blocked by the
+permission classifier - genuinely sensitive material, right call. **Still pending**: either the
+user provides real credentials directly, authorizes the specific fetch, or the plan proceeds without
+WiFi credentials configured for the first boot test and relies on the wired-ethernet dongle instead
+(already covered, see above) plus GuppyScreen's local feedback (also now covered) as the real
+safety net for that first attempt.

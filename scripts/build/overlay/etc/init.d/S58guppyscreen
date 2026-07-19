@@ -1,0 +1,45 @@
+#!/bin/sh
+#
+# OpenKE addition: starts GuppyScreen for real local visual feedback during
+# the first real boot test - draws directly to the framebuffer/touch device
+# built in FIRMWARE.md sec 8-10, independent of network state entirely.
+# Real reason this exists now rather than later (originally planned as a
+# manual smoke test only): if WiFi doesn't come up on first boot, this is
+# the only way to see what's actually happening on the device at all.
+#
+# Numbered after Moonraker - GuppyScreen is a real-time client of Moonraker's
+# websocket API, though it degrades to a reconnecting/error state rather than
+# failing outright if Moonraker isn't up yet.
+
+GUPPY_DIR=/opt/guppyscreen
+PIDFILE=/var/run/guppyscreen.pid
+
+start() {
+	echo "Starting guppyscreen"
+	start-stop-daemon -S -b -m -p "$PIDFILE" \
+		-x "$GUPPY_DIR/guppyscreen"
+}
+
+stop() {
+	echo "Stopping guppyscreen"
+	start-stop-daemon -K -p "$PIDFILE"
+}
+
+case "$1" in
+	start)
+		start
+		;;
+	stop)
+		stop
+		;;
+	restart)
+		stop
+		start
+		;;
+	*)
+		echo "Usage: $0 {start|stop|restart}"
+		exit 1
+		;;
+esac
+
+exit 0

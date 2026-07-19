@@ -436,3 +436,127 @@ verified-as-far-as-possible-without-hardware build artifact to pick up in a late
 step at a time, with the user's explicit go-ahead before any step that touches the real device
 beyond read-only queries - fully consistent with how every other risky-adjacent step in this
 workspace has been handled so far.
+
+## 6. Live comparison against the real printer (2026-07-19) - what parity actually needs, reframed around "as open as possible"
+
+**New framing from the user, stated explicitly this session**: the goal of this whole workspace is
+"a complete 'open' printer, as much as possible" - not just a working replacement, a *more open*
+one where feasible. This matters concretely: several places below where the real device uses
+Creality's own closed/out-of-tree driver, this kernel's fork already has a real, fully open
+mainline equivalent - meaning the honest goal isn't just "match parity" but "match or improve on
+openness," and this section reflects that framing throughout.
+
+User turned the printer on specifically so this comparison could be done for real instead of from
+memory/assumption. All of the following is read-only (`ssh`, `lsmod`, `dmesg`, `i2cdetect`, no
+writes) against the live device, cross-checked directly against the actual kernel source tree this
+workspace already has (`vendor/buildroot-x2000/output/build/linux-<sha>/`, the same 6.1.28
+Ingenic-community tree Phase 2 built).
+
+**The real device's 14 custom kernel modules, confirmed exactly** (`lsmod` + `/module_driver/`
+listing, matches the "14 modules" figure already in this file from earlier forensics):
+`soc_watchdog`, `soc_efuse`, `ns2009_touch`, `lcd_general_480x272`, `hci_uart_h5_kernel_4_4_94`,
+`cywdhd`, `soc_dtrng`, `soc_msc`, `soc_fb`, `soc_fb_layer_mixer`, `soc_rotator`, `pwm_backlight`,
+`soc_pwm`, `soc_gpio`, `soc_i2c`, `soc_utils`, `rmem_manager`, `utils` (18 module names in `lsmod`
+- some inter-depend, `utils`/`soc_utils` are shared low-level helpers most others link against).
+
+### Per-peripheral assessment
+
+**Camera - LOW risk, and can end up *more* open than stock, not just at parity.** The real device's
+camera path is UVC webcam (`CCX2F3298`, `/dev/video4`) into Creality's own closed `cam_app`, which
+drives Ingenic's proprietary "Helix"/"Felix" V4L2 M2M hardware H.264/JPEG encoder
+(`vpu-helix`/`vpu-felix`, built into the kernel, not a loadable module, no public source). **The
+user pointed at the actual fix**: `pellcorp/k1-ustreamer` (a real MIT-licensed port of the
+open-source µStreamer project) + `pellcorp/creality`'s `k1/services/S50webcam` init script - which
+runs `ustreamer -c HW -m MJPEG -d $V4L_DEVICE` directly against the UVC webcam device node. `-c HW`
+means the *webcam's own onboard ISP* does the MJPEG compression (standard behavior for basically
+any USB UVC webcam) - this **never touches Ingenic's Helix encoder at all**, the exact same
+approach every generic Voron/Klipper printer with a USB webcam already uses. This is a strictly
+better position than "match Creality's closed pipeline": skip it entirely, use a fully open
+component instead. What's actually needed: `CONFIG_USB_VIDEO_CLASS` (`uvcvideo`, stock mainline USB
+video driver, confirmed present in this kernel's `Kconfig` - just currently disabled,
+`CONFIG_MEDIA_SUPPORT` is off in the current build) enabled and the kernel rebuilt, plus
+cross-compiling `k1-ustreamer` for this target and adding the `S50webcam`-equivalent init script.
+No device-tree work, no proprietary driver needed at all.
+
+**WiFi - LOW-MEDIUM risk, and a real openness upgrade over stock.** Live device: `dmesg` confirms
+the actual chip is a **Cypress CYW43438** (SDIO, vendor:device `02D0:A9A6`), loaded via Creality's
+own closed `cywdhd.ko` (927 KB blob) plus a real firmware file already on the device,
+`/lib/firmware/wifi_bcm/cyw43438-7.46.58.13.bin`. **CYW43438 is the exact same combo chip used on
+the Raspberry Pi 3B and Pi Zero W** - one of the most mainline-supported WiFi chips that exists,
+specifically *because* of Pi ubiquity. Confirmed directly: this exact kernel tree's `halley5`
+defconfig **already has `CONFIG_BRCMFMAC=m` with SDIO support enabled** (the fully open, in-tree
+mainline driver) - almost certainly because the reference Halley5 eval board itself also pairs
+with a Broadcom/Cypress SDIO chip. Not yet confirmed byte-exact chip-ID match in
+`brcmfmac`'s own `chip.c` tables (found `BRCM_CC_43430_CHIP_ID`/`CY_CC_43439_CHIP_ID` nearby but
+not an exact `43438` literal in a quick grep - needs a closer check, not a blocker, very likely
+fine given how well-trodden this exact chip is). The firmware blob itself would still be needed
+(same as every Pi does) - the *driver* would be fully open, a real upgrade over Creality's closed
+`cywdhd`.
+
+**Bluetooth - LOW-MEDIUM risk, similarly upgradeable.** Live device: `BCM4343A1` combo silicon (same
+package as the WiFi side), loaded via Creality's own `hci_uart_h5_kernel_4_4_94.ko` - literally
+named for this exact kernel build, i.e. certainly won't load as-is on a 6.1 kernel regardless.
+Real Broadcom patch-RAM firmware files already exist on the device in standard `.hcd` format
+(`/lib/firmware/bt_bcm/BCM4343A1_*.hcd`) - this is the *same* file format mainline Linux's own
+`hci_uart` H5 (three-wire UART) protocol support plus `btbcm`/`hci_bcm` firmware loading already
+knows how to consume. Confirmed the H5 protocol option exists in this kernel's `Kconfig`
+(`Bluetooth: Three-wire UART (H5) protocol support`); not yet enabled in the current build
+(`CONFIG_BT_HCIUART` unset) - a real but straightforward config-and-rebuild task, not a research
+gap, and the existing `.hcd` firmware files can likely be reused as-is.
+
+**Touch panel - the one genuinely uncertain, real-work peripheral.** Live device: `ns2009_touch.ko`
+against an I2C-attached NS2009 resistive touch controller (confirmed via `i2cdetect`/
+`/sys/bus/i2c/devices/*/name` showing `ns2009` on the live device). Checked this kernel's
+`drivers/input/touchscreen/` directory directly - **no `ns2009`-named driver exists**, mainline or
+otherwise, in this source tree. The closest generic candidates (`ads7846.c`,
+`resistive-adc-touch.c`) are for different chip protocols, not drop-in compatible. This is the one
+piece that most likely needs either a real new driver written against the NS2009's own register
+protocol, or porting/adapting Creality's existing `ns2009_touch.ko` source (only 8.5 KB - small,
+plausibly tractable) to the newer kernel's driver model. Flagged clearly as real, unstarted work,
+not a config flip.
+
+**Display/LCD - genuinely uncertain, but the *available* option is architecturally better.** Live
+device: Creality's own out-of-tree fbdev-style stack (`soc_fb` + `soc_fb_layer_mixer` +
+`soc_rotator` + `lcd_general_480x272` + `pwm_backlight`/`soc_pwm` for backlight). This kernel tree
+instead has a real, modern **DRM driver for Ingenic display hardware**
+(`drivers/gpu/drm/ingenic/ingenic-drm-drv.c` + `ingenic-ipu.c`) - the architecturally-preferred,
+actively-maintained-upstream approach vs. legacy fbdev, and genuinely more "open" in the sense of
+being a real upstream-style driver rather than a vendor out-of-tree module. Currently disabled in
+our build (`CONFIG_DRM` unset). **Unconfirmed**: whether this DRM driver's LCDC support covers the
+exact small (480x272) panel/timing this specific board uses - that's real device-tree work, not
+yet started, genuinely uncertain until tried.
+
+**Core SoC infrastructure - likely LOW risk, probably mostly already solved by this newer kernel.**
+The remaining custom modules (`soc_watchdog`, `soc_efuse`, `soc_dtrng`, `soc_msc`, `soc_gpio`,
+`soc_i2c`, `soc_utils`/`utils`, `rmem_manager`) are Creality's own out-of-tree wrappers around core
+SoC functions (RNG, MMC/SD host controller, pin control, I2C, reserved-memory/DMA management).
+This kernel tree already has real, properly-in-tree equivalents for the X2000 specifically:
+`drivers/char/hw_random/ingenic-rng.c`/`ingenic-trng.c`, `drivers/mmc/host/ingenic_mmc.c` +
+`sdhci-ingenic.c`, `drivers/pinctrl/pinctrl-ingenic.c`, `drivers/tty/serial/8250/8250_ingenic.c`,
+and more (`drivers/clk/ingenic`, `drivers/phy/ingenic`, `drivers/net/ethernet/stmicro/stmmac/
+dwmac-ingenic.c`). Not individually build/boot-tested this pass, but the presence of a real,
+apparently-complete driver set for this SoC family (rather than needing to port any of Creality's
+14 custom modules directly) is a strong, concrete reason to expect this layer mostly "just works"
+once the kernel config enables the right options - the actual open question is device-tree
+correctness for this board's exact pin mapping, not driver existence.
+
+**App stack and filesystem format - unchanged from Phase 2's own list, real substantial work,
+untouched this pass**: Klipper/Moonraker/nginx/`k1-ustreamer`/GuppyScreen packaging, and converting
+from plain ext2 to squashfs+overlay to match the real device's A/B partition format. Both still
+completely unstarted.
+
+### Net effect on the difficulty assessment
+
+This live comparison is materially more encouraging than a generic "port 14 modules" framing would
+suggest. Several pieces that looked like they'd need porting Creality's own closed drivers instead
+have real, existing, fully-open mainline equivalents already sitting in the kernel source this
+workspace is already using - WiFi (`brcmfmac`) and Bluetooth (`hci_uart` H5) most concretely, with
+the existing firmware files on the device directly reusable in both cases; camera bypasses the
+proprietary encoder entirely via the user's own `k1-ustreamer` suggestion; display has a real
+architecturally-better option available, just unconfirmed for this exact panel. **The touch
+controller (NS2009) is now the single clearest remaining "real new driver work" item** - everything
+else resolves to "enable the right kernel config options and confirm via device-tree work," which
+is a fundamentally different (and more tractable) category of task than "reverse-engineer or port a
+closed driver." None of this has been attempted yet - this section is the reconnaissance that makes
+the next real step (enabling these configs, doing a real build, and testing on real hardware with
+the user present) concrete rather than speculative.

@@ -1929,3 +1929,71 @@ labeled). Cross-confirms cleanly: **the real recovery port is the MicroUSB port,
 USB-C-shaped Gsensor connector.** The PDF also has its own real, practical warning worth repeating: "there
 are two types of MicroUSB cables: one is for power supply only" - a charge-only cable will silently
 fail this procedure, worth having a known-good data cable in hand before attempting it.
+
+## 23. Pushed toward "absolute" recovery confidence - real engineering closed most of the gap, one part of it structurally can't be closed remotely
+
+User: confidence in recoverability needs to be total, not "very likely." Investigated concretely
+rather than restate the same reasoning more firmly - found one real correctness bug in what was
+already built, and did real engineering to close as much of the remaining gap as possible without
+physical hardware access.
+
+**Read the PDF's actual connection instructions, not just the port name.** "1.1 Unplug the screen and
+printer connection cable" - the recovery procedure is meant to be done with the Nebula Pad
+disconnected from the rest of the printer. "1.2 Connect... using a MicroUSB cable" - power comes from
+the USB cable itself (a "dual-purpose signal cable for communication and power supply"), no separate
+12V/24V PSU connection implied or needed. This is a clean, isolated, low-stakes procedure by design,
+not one requiring the whole printer powered up.
+
+**Built and source-verified the actual recovery tool, rather than trust "should exist and work."**
+Cloned `ballaswag/ingenic-usbboot`, built it from source (not the checked-in prebuilt binary) against
+this workstation's `libusb-1.0`, confirmed it compiles cleanly and its usage text lists `x2000` (this
+exact chip, not just the K1's `x2000e`) with the right VID:PID (`a108:eaef`) and staging addresses
+already documented in §4b. Found a capability worth knowing about ahead of time:
+**`--force-swap-ota` unconditionally writes `ota:kernel` regardless of the partition's current
+contents** - a real, already-built "make it point at stock no matter what's there" reset, on top of
+the plain `--swap-ota` toggle. Also confirmed via its `--upload`/`--download`/`--addr`/`--length`
+primitives that this tool operates on raw byte offsets, not by parsing our own device's GPT - meaning
+even a corrupted partition table on our end (which nothing in this plan should ever cause, but worth
+knowing) wouldn't prevent this recovery path from working. **Not vendored into this repo** - the
+upstream repo has no license file, so redistributing its source/binary here isn't appropriate; only
+the fetch+build steps are documented (`git clone https://github.com/ballaswag/ingenic-usbboot && cd
+ingenic-usbboot && make`).
+
+**Found and fixed a real correctness bug in `S00revert-safety`/`S99confirm-good` from §22.** Reading
+`ingenic-usbboot`'s own `swap_ota_partition()` source gave the exact ground-truth byte format Creality's
+mechanism uses: it reads/writes a full zeroed 512-byte buffer and its match check requires an exact
+`"ota:kernel\n"` (11-byte) prefix. Our own scripts used `echo -n "ota:kernel"` - 10 bytes, **no
+trailing newline at all** - which would NOT satisfy that check and would fall into `usbboot`'s
+"unexpected value" branch unless `--force-swap-ota` were used. Fixed: both scripts now source a new
+shared `/etc/ota_marker.sh` helper that writes the exact `"ota:kernel\n\n"` / `"ota:kernel2\n\n"`
+12/13-byte strings (matching the live device's own raw partition dump byte-for-byte, confirmed in
+§19) and explicitly zero-pads the rest of the 512-byte region via bounds-checked `dd bs=1 seek=/count=`
+(deliberately not `conv=sync`, whose support in this BusyBox build isn't confirmed). **Verified against
+a local regular-file simulation before trusting it anywhere near real hardware** - confirmed both the
+initial write and a re-toggle to the longer `"ota:kernel2"` string leave zero stale bytes from the
+previous write, and the output matched the live device's captured bytes exactly.
+
+**Built `scripts/flash-spare-slot.sh`** - the actual script that will write `uImage`/`rootfs.squashfs`
+to `kernel2`/`rootfs2` when the time comes. Every check aborts loudly rather than proceeding on a
+mismatch: resolves the `by-partlabel` symlinks and refuses to run if they don't point at the expected
+`/dev/mmcblk0p6`/`p8` (catches a changed partition table rather than trusting hardcoded assumptions
+silently), refuses if either target device is currently the mounted root (the whole safety property of
+using the spare slot, enforced in code rather than just in the plan), checks real file sizes against
+the real, previously-confirmed partition capacities (`uImage` 6,386,403 / 8,388,608 bytes = 76% full;
+`rootfs.squashfs` 45,850,624 / 524,288,000 bytes = 9% full - comfortable margin on both), and - the
+part that actually matters most - **reads back exactly the written byte range after every write and
+compares its md5 against the source file's md5**, refusing to report success on any mismatch. Verified
+this exact read-back logic locally against dummy files first: confirmed it correctly matches when data
+is written correctly (even with real trailing garbage past the image in the "partition"), and correctly
+detects a single deliberately-injected corrupted byte. Never touches the ota marker itself - that
+remains `S00revert-safety`'s job, at boot, in the new image.
+
+**Net effect on the two confidence questions**: recoverability is now about as close to "total" as
+software engineering and pre-verification can make it - the byte-format bug is fixed and tested, the
+write path is bounds-checked and self-verifying, the recovery tool is built, source-inspected, and
+known not to depend on our own GPT staying intact, and the procedure's power/connection requirements
+are understood from the primary source. **What remains cannot be closed by more investigation**: whether
+the physical boot/reset buttons and MicroUSB port genuinely behave on *this* individual unit exactly as
+documented for the model - a hardware fact, not a software one, only resolvable by the dry run itself.
+That residual gap is the reason the dry run was always the recommended precondition, not an
+afterthought - and it's now the *only* meaningfully unclosed piece, rather than one of several.

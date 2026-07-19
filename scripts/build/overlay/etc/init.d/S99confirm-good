@@ -18,6 +18,11 @@
 # enabled in this build, and this is plain local HTTP (no TLS involved), so
 # the HTTPS-support gap that bit an earlier fetch in this project doesn't
 # apply here.
+#
+# Byte format for the marker write: /etc/ota_marker.sh (shared with
+# S00revert-safety) - verified byte-for-byte before being trusted here.
+
+. /etc/ota_marker.sh
 
 RETRIES=30
 DELAY=5
@@ -31,7 +36,7 @@ case "$1" in
 		i=0
 		while [ "$i" -lt "$RETRIES" ]; do
 			if check_moonraker; then
-				echo -n "ota:kernel2" > /dev/mmcblk0p1
+				write_ota_marker "ota:kernel2"
 				echo "S99confirm-good: Moonraker confirmed healthy, ota marker flipped forward"
 				exit 0
 			fi

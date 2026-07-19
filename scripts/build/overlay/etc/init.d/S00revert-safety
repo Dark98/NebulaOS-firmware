@@ -14,11 +14,14 @@
 #
 # Deliberately touches only /dev/mmcblk0p1 (the 1MB "ota" partition) - never
 # /dev/mmcblk0p6 or p8 (kernel2/rootfs2, this image's own home). Real device
-# forensics for this mechanism: FIRMWARE.md sec 19.
+# forensics for this mechanism: FIRMWARE.md sec 19. Byte format details and
+# verification: /etc/ota_marker.sh (shared with S99confirm-good).
+
+. /etc/ota_marker.sh
 
 case "$1" in
 	start)
-		echo -n "ota:kernel" > /dev/mmcblk0p1
+		write_ota_marker "ota:kernel"
 		;;
 	*)
 		;;

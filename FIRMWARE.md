@@ -1884,3 +1884,48 @@ faith. One was genuinely testable remotely; the other isn't:
 physical UART header location (needs the case open - PA2/PA3 is now a concrete, evidence-backed
 starting point for continuity-testing rather than a blind guess), implement the revert-first init
 script, and do the physical USB-recovery dry run.
+
+## 22. Revert-first init built, RTC checked (clean), and a real cross-project port mixup avoided
+
+Three more items from the same round of pushback.
+
+**Revert-first init - built.** New `scripts/build/overlay/etc/init.d/S00revert-safety` runs before
+every other init script, even `syslogd`/`klogd` - its only job is `echo -n "ota:kernel" >
+/dev/mmcblk0p1`, unconditionally, the instant this image starts booting. A second script,
+`S99confirm-good`, runs last (after `klipper`/`moonraker`/`guppyscreen`/`nginx` have all been started
+by their own `S5x` scripts) and polls Moonraker's real HTTP API (`/server/info`, up to 30 retries x
+5s) before flipping the marker forward to `ota:kernel2` - "started" isn't "healthy," so this checks
+for real rather than assuming. If Moonraker never responds, the marker is deliberately left on
+`ota:kernel` (stock) rather than retrying a boot that never actually got healthy. Net effect: any
+crash or hang *after* `S00` runs self-heals on the next reboot - power cycle, watchdog, anything - with
+zero USB/physical-recovery steps needed. The one gap this can't close (a kernel that panics before
+ever reaching `/etc/init.d` at all) is unchanged from the design discussion - still needs external
+recovery for that one case specifically.
+
+**RTC - checked, no fix needed.** The live device's `rtc@10003000` is `status = "ok"` by default in
+the base `x2000.dtsi` (no board-level override needed, unlike `uart4`), and the current kernel config
+already has `CONFIG_RTC_DRV_INGENIC=y` plus `CONFIG_RTC_HCTOSYS=y` (auto-sets system time from the RTC
+at boot, in-kernel, before userspace even starts) - both already correct, nothing to fix here.
+**One real, minor, non-blocking finding along the way**: the live device's own `hwclock` reads back
+`Sun Mar 1 19:22:26 2020` - a stale factory-epoch value - while the running system's actual `date` is
+correct (`Jul 20 2026`). This means NTP (over the network, after boot) is what's actually keeping this
+device's clock right, not a battery-backed RTC - the hardware RTC itself does not appear to hold real
+time across power loss on this unit. Consequence for our own first boot test (deliberately no network,
+per §17): expect wrong/stale log timestamps until a later boot with network access, but this is
+cosmetic - nothing in the boot path depends on correct wall-clock time to function.
+
+**A real, potentially costly mixup avoided**: user connected this session's plan back to
+[[project_nebula_pad_usb_topology]] (the sibling `guppyscreen` project's own investigation) - the
+Nebula Pad's Gsensor/accelerometer connector is USB-C-*shaped* but is actually a dedicated SPI+power
+harness (`spi_gpio`, bit-banged GPIO), confirmed there via `lsusb`/`dmesg` - not part of the real USB
+tree at all. If the boot+reset USB recovery procedure were attempted on *that* connector, it would
+never work, regardless of holding the buttons correctly, since there's no USB data path present at
+all - and it would very plausibly look like "the recovery mechanism doesn't exist" rather than "wrong
+port." Checked directly against the primary source rather than assume the two projects' findings
+lined up: **the official `Brick Rescue and Wire Brushing.pdf` (already used in §3/§4b) states, verbatim,
+"Connect the computer and the mainboard's MicroUSB port using a MicroUSB cable"** - a physically
+distinct connector from the Gsensor port on the same board photo (§4b already noted both are separately
+labeled). Cross-confirms cleanly: **the real recovery port is the MicroUSB port, never the
+USB-C-shaped Gsensor connector.** The PDF also has its own real, practical warning worth repeating: "there
+are two types of MicroUSB cables: one is for power supply only" - a charge-only cable will silently
+fail this procedure, worth having a known-good data cable in hand before attempting it.

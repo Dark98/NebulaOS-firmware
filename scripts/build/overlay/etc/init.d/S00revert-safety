@@ -1,0 +1,26 @@
+#!/bin/sh
+#
+# Revert-first boot safety (FIRMWARE.md sec 21/22). Runs before every other
+# init script, even syslogd/klogd - its only job is to point the ota marker
+# back at the stock kernel/rootfs (p5/p7) the instant this custom image
+# starts booting at all.
+#
+# Effect: if anything after this point crashes, hangs, or never even reaches
+# S99confirm-good, the *next* reboot - power cycle, watchdog, whatever -
+# lands back on stock automatically. No USB cable, no boot/reset buttons, no
+# working shell on the failed boot required. S99confirm-good is the only
+# thing that ever flips this back forward, and only once the real app stack
+# is confirmed listening, not just because init reached that point.
+#
+# Deliberately touches only /dev/mmcblk0p1 (the 1MB "ota" partition) - never
+# /dev/mmcblk0p6 or p8 (kernel2/rootfs2, this image's own home). Real device
+# forensics for this mechanism: FIRMWARE.md sec 19.
+
+case "$1" in
+	start)
+		echo -n "ota:kernel" > /dev/mmcblk0p1
+		;;
+	*)
+		;;
+esac
+exit 0

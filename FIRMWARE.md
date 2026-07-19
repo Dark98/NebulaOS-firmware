@@ -902,3 +902,83 @@ user present, same standing rule as everywhere else in this workspace):
    not started, same gap Phase 2's original build had.
 5. **The actual real-hardware boot test** - the only real verification any of this works. Not
    attempted, needs the user present.
+
+## 9. Recovery/brick-risk investigation (2026-07-19) - the real safety net, confirmed from primary sources
+
+User asked directly, before going any further: "shouldn't we build everything first? will we not
+brick the pad?" - a fair question given how much build work had already happened without any real
+device testing. Investigated properly rather than reassuring from memory: checked the *actual*
+official Creality recovery documentation for this exact printer (not just the Phase 0 chip-level
+research), and the real U-Boot source in the SDK already in hand.
+
+### The real answer: yes, there's a documented, official, physical recovery path - confirmed by reading the actual PDF, not a search-engine summary
+
+User pointed at two pages. The Creality-Helper-Script wiki's K1 recovery page fetched cleanly; the
+official Creality KE-specific wiki page didn't render via `WebFetch` (JS-rendered page, only a
+title came through) - but a web search surfaced the real, primary source: a PDF directly in
+`CrealityOfficial/Ender-3_V3_KE_Annex` (`firmware recovery tool/Brick Rescue and Wire Brushing.pdf`).
+**Downloaded and read that PDF directly** (not the search engine's synthesized text, which turned
+out to blend details from the K1 page in a way worth not trusting at face value - the same
+"verify the primary source" lesson from the `ingenic,lcd.yaml` incident earlier this session).
+
+**Confirmed, from the actual official document**:
+- **"Screen" = the Nebula Pad itself is what gets recovered** - the PDF's own photos show the
+  literal "Creality Nebula Pad" (model `N-Pad01`) enclosure being opened via a "Base Shell Screw",
+  confirming this recovery process targets exactly the X2000 SBC this whole track has been about,
+  not a separate motion-control board.
+- **Real physical "boot button" and "reset button" exist directly on the Nebula Pad's own PCB** -
+  labeled in the PDF's own board photo, next to the MicroUSB port, 3D-printer port, Gsensor port,
+  and WiFi antenna connector. **No soldering, no multimeter continuity tracing, no probing raw
+  chip pins required** - this fully resolves Phase 0's one flagged unknown ("are the BOOT_SEL strap
+  pins physically accessible on this board") in the best possible way: yes, via a documented button
+  combo (hold both 3 seconds, release reset first then boot), not by chance-finding a test pad.
+- **This is genuinely the same USB-download/mask-ROM recovery mode already researched in Phase 0** -
+  confirmed by the PDF's own Device Manager screenshot showing "Ingenic USB BOOT DEVICE" (the exact
+  driver name X2000's Boot ROM chapter already predicted), and the same "cloner" tool family already
+  found (`cloner-2.5.18-windows_alpha` here vs. `2.5.54`/`2.5.36.1` found elsewhere - same lineage,
+  different snapshots).
+- **Official, ready-made recovery images exist and are Creality-published**: the PDF links
+  `CrealityOfficial/Ender-3_V3_KE_Klipper` as the "Wire Brush Pack" download - real `.ingenic`
+  firmware bundles, not something we'd have to construct ourselves. The recovery tool's own GUI
+  (screenshotted in the PDF) shows five flashable components - `boot`/`uboot`/`rtos`/`kernel`/
+  `rootfs` - reflashed together as one bundle, confirming a full known-good factory image can always
+  be restored this way, independent of whatever state the spare partition experiments leave things
+  in.
+
+**Net effect on the actual risk picture**: this is a *materially* better answer than Phase 0's
+original "recovery exists in theory, physical access unconfirmed." The escape hatch is real,
+documented by Creality themselves for this exact product, requires no special tools beyond a
+screwdriver/USB cable, and has ready-made factory images to restore from. This should be treated as
+a real prerequisite to *confirm hands-on* (open the case, verify the buttons are exactly where the
+photo shows, ideally have the `.ingenic` recovery package downloaded and the cloner tool ready
+*before* ever attempting a custom boot test) rather than something to assume works from documentation
+alone - but the documentation itself is about as strong as this kind of thing gets.
+
+### The other half of the question - how does normal (non-recovery) A/B slot selection actually work - only partially resolved
+
+Checked the U-Boot source in the same 6.6 SDK (`u-boot/board/ingenic/x2000_halley5/`) for the real
+slot-selection logic. Found real board files (`board.c`, `partitions.tab`,
+`partitions_mmc_ota.tab`), but **the reference `partitions_mmc_ota.tab` doesn't even show an A/B
+pair** (`uboot`/`kernel`/`recovery`/`nv`/`resource`/`userdata`/`system`/`storage` - one `kernel`,
+one `system`, no `kernel2`/`system2`) - confirming Creality's actual A/B scheme on the real device
+is their own customization on top of this generic reference, not something directly visible in the
+vendor U-Boot source as shipped.
+
+**Checked the live device directly instead** (read-only, printer was mid-print throughout -
+confirmed via a fresh `print_stats` check first, single small read, no interference): the real
+`ota` partition (`mmcblk0p1`, 1 MiB) contains exactly 11 meaningful bytes - the plaintext string
+`ota:kernel\n`, followed by all zeros. This is a real, minimal flag - but it doesn't look like a
+full "which slot is active" pointer (no slot number/letter encoded), more likely a progress marker
+for an in-flight OTA update process. The kernel's actual boot slot
+(`root=/dev/mmcblk0p7 rootfstype=squashfs ro`, confirmed via `/proc/cmdline`) must be decided
+*earlier*, most likely via U-Boot's own environment variables - not directly read this pass (no
+`fw_printenv` on the device, and no separate U-Boot-env partition identified/read yet).
+
+**Honest status**: the *recovery* half of the safety question is now very well-answered. The
+*normal-operation A/B slot-selection* mechanism is still not fully pinned down - real, remaining,
+low-priority research (not urgent, since the recovery path above is a strong enough safety net on
+its own that not fully understanding the *normal* slot-switch mechanism doesn't block moving
+forward carefully). If it matters later (e.g. to understand whether a failed boot on the spare slot
+would automatically fall back to the working one, or would need the recovery process above), it's
+worth reading U-Boot's actual boot script/environment more directly - via a real device
+(`fw_printenv`-style env partition, if one exists) rather than guessing further from source alone.

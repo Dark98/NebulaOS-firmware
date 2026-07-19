@@ -251,7 +251,14 @@ class PrtouchMCU:
         for i in range(0, MAX_BUF_LEN, 2):
             if len(self.pres_res) > i and self.pres_res[i]['index'] == i:
                 continue
-            params = self.manual_get_pres_cmd.send([self.step_oid, i])
+            # NOTE: the original (prtouch_v2_wrapper.py line 641) sends self.step_oid here,
+            # which looks like a copy-paste bug from ck_and_manual_get_step - manual_get_pres
+            # is registered under pres_oid (config_pres_prtouch/add_pres_prtouch), so this uses
+            # pres_oid instead. This is a clean rewrite, not a verbatim port (ANALYSIS.md sec 6),
+            # so this was corrected rather than preserved; flagged in case real-hardware testing
+            # ever shows the original's behavior was intentional for some reason not visible in
+            # the source.
+            params = self.manual_get_pres_cmd.send([self.pres_oid, i])
             self.pres_tri_time = params['tri_time'] / 10000.
             self.pres_tri_chs = params['tri_chs']
             self.pres_buf_cnt = params['buf_cnt']

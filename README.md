@@ -30,7 +30,7 @@ All three tracks share the same workspace and a lot of platform-level groundwork
 kernel source, etc.) - that shared material lives in track 3's files/memory, not duplicated across
 all three.
 
-## Status: IN PROGRESS (2026-07-19) - Track 3 Phase 2 now has touch/display/WiFi/BT/camera all built and wired into the rootfs, SSH/password/console access-path audited and fixed, one real U-Boot slot-selection gap left open; Track 3 item 1 (insmod) resume point unchanged
+## Status: IN PROGRESS (2026-07-19/20) - Track 3 Phase 2 now has touch/display/WiFi/BT/camera all built and wired into the rootfs, SSH/password/console access-path audited and fixed, and the U-Boot slot-selection mechanism fully resolved via live device forensics (real regression risk found + backed up in the same pass); Track 3 item 1 (insmod) resume point unchanged
 
 `ke-next`'s M600 fixes were confirmed working on real hardware and `v1.5.0-OpenKE` shipped
 (2026-07-18/19) - the "paused until ke-next real-device testing is done" condition below is now
@@ -269,12 +269,20 @@ the user present, and is now the single most valuable next real-hardware session
 everything up to that point is built and waiting). Squashfs conversion and item 7's GuppyScreen
 question can wait, both substantial enough to warrant their own dedicated session.
 
-**Before item 8's boot test can actually be attempted**: the real, open U-Boot slot-selection gap
-flagged in item 6 above (`FIRMWARE.md` §18) needs resolving first - U-Boot's environment currently
-points at `root=/dev/mmcblk0p7`, and nothing in this Buildroot build touches that. Investigate the
-real U-Boot environment/bootargs mechanism on this device (likely needs live-device forensics,
-possibly the user's own knowledge of this device's A/B convention) before assuming the boot test
-can even reach our image.
+**U-Boot slot-selection gap RESOLVED 2026-07-19/20 via live read-only forensics on the real
+device** (`FIRMWARE.md` §19): there is no U-Boot env at all on this device (no `fw_printenv`, no
+MTD env store) - the entire A/B mechanism is one plaintext marker (`ota:kernel` / `ota:kernel2`)
+in a dedicated 1MB `ota` partition (`/dev/mmcblk0p1`), read/written by Creality's own
+`/etc/ota_bin/*.sh` via plain `dd`. Booting our image from the spare slot needs no U-Boot changes:
+write `uImage`→`/dev/mmcblk0p6` (`kernel2`), `rootfs.squashfs`→`/dev/mmcblk0p8` (`rootfs2`), then
+write the string `ota:kernel2` to `/dev/mmcblk0p1`. Reverting is the same trick in reverse
+(`ota:kernel`, its current value). **Real regression risk found in the same pass**: `kernel2`/
+`rootfs2` are NOT blank - both already hold Creality's real factory-fallback image (valid uImage/
+squashfs magic, confirmed via read-only `dd`+`od`). Mitigated: both partitions were pulled
+byte-for-byte to the workstation first (`kernel2.img`/`rootfs2.img`, md5-recorded, kept out of git
+- proprietary firmware, not project code) before anything is ever written to them. The boot test
+itself (writing our own image + flipping the marker) is still real, still needs the user present,
+and should only happen with that backup confirmed in place first.
 
 ## Scope corrected 2026-07-18 - read this before anything else
 

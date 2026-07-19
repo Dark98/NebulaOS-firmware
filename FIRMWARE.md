@@ -1710,3 +1710,62 @@ attempt loading our image at all - this is real, unexplored bootloader-side work
 investigated (§9 already flagged "how normal A/B slot selection works" as "only partially
 resolved" - this is the same open question, now confirmed to matter concretely for the boot test
 itself, not just as a background curiosity).
+
+## 19. The U-Boot slot-selection mechanism, fully resolved via live read-only forensics - and one real regression risk found and mitigated
+
+§18 left the slot-selection question open. Investigated it directly on the real device (idle,
+`print_stats.state == "complete"` reconfirmed before and after - zero writes performed anywhere in
+this section's work, every command below is read-only from the device's point of view).
+
+**The real mechanism, found via `/dev/disk/by-partlabel/` and `/etc/ota_bin/*.sh`** (Creality's own
+OTA scripts, plain shell, fully readable):
+
+- There is **no U-Boot environment at all** on this device - no `fw_printenv`/`fw_setenv` binaries
+  exist, `/etc/fw_env.config` doesn't exist, `/proc/mtd` is empty (no UBI/MTD env store either).
+- Real GPT partition labels (`/dev/disk/by-partlabel/`): `ota`→p1 (1MB), `sn_mac`→p2 (1MB),
+  `rtos`→p3/`rtos2`→p4 (4MB each, the X2000's separate RTOS core firmware - unrelated to this
+  track's Linux work), `kernel`→p5/`kernel2`→p6 (8MB each), `rootfs`→p7/`rootfs2`→p8 (500MB each),
+  `rootfs_data`→p9 (300MB, mounted `/overlay`), `userdata`→p10 (6.1GB, mounted `/usr/data`).
+- The **entire A/B mechanism is a single plaintext marker string** written into the 1MB `ota`
+  partition (p1) - literally `ota:kernel` or `ota:kernel2`, nothing more. Confirmed by reading it
+  live: currently `ota:kernel`, which matches the live `root=/dev/mmcblk0p7` exactly (`ota:kernel`
+  means "the kernel/rootfs/rtos slot-set is active", i.e. p5/p7/p3 - the `2`-suffixed partitions
+  always move together as the other slot-set, not independently).
+  `/etc/ota_bin/ota_local_method.sh`'s `local_get_kernel_dev_path()` /
+  `local_get_rootfs_dev_path()` / `local_set_next_boot_device()` all read/write this exact marker
+  via `mmc_read_str ota` / `mmc_write_str ota ota:$name` (in `ota_utils.sh` - literally `dd if=`
+  and `echo $str > $dev` against the raw partition device node).
+- Necessarily, **U-Boot itself must read this same 1MB partition at boot** to decide both which
+  `kernel`/`kernel2` uImage to load and which `root=` to pass - that logic lives inside U-Boot's own
+  (Creality-modified) binary, not in any standard/mainline U-Boot env mechanism, and is invisible to
+  userspace beyond this one shared string.
+
+**What this means for our custom build**: booting our kernel/rootfs from the spare slot needs no
+U-Boot source changes at all - just `dd` our `uImage` to `/dev/mmcblk0p6`, our `rootfs.squashfs` to
+`/dev/mmcblk0p8`, then write the single string `ota:kernel2` to `/dev/mmcblk0p1` using the exact
+same mechanism Creality's own OTA already uses. Reverting is just as trivial: write `ota:kernel`
+back (the value it already holds today) to instantly return to the stock slot, regardless of
+kernel2/rootfs2's contents. This resolves §9 and §18's open question - not "unexplored", now fully
+understood and low-complexity.
+
+**One real regression risk found, and mitigated**: `kernel2`/`rootfs2` were assumed to be spare,
+presumably-blank space. They are not. Read-only inspection (`dd if=... | od`, first 64 bytes) found
+**both slots already hold a valid factory-fallback image** - `kernel2` has a real uImage magic
+(`27 05 19 56`) and the same `Linux-4.4.94` label as the live `kernel` partition; `rootfs2` has a
+real squashfs magic (`hsqs`) with the same header shape as the live `rootfs` partition. This is
+Creality's own shipped factory-redundancy copy, not empty space - **overwriting it with our
+experimental image, without a backup, would have destroyed the device's only real fallback slot**,
+meaning a bad custom boot plus any problem at all flipping the `ota` marker back would have left no
+way to recover the device via software alone.
+
+**Mitigation taken this session**: both partitions were pulled byte-for-byte to the workstation
+before anything is ever written to them - `kernel2.img` (8,388,608 bytes) and `rootfs2.img`
+(524,288,000 bytes), md5-recorded, in the session scratchpad, **deliberately not committed to this
+repo** (it's Creality's proprietary factory firmware, not project code - same principle as keeping
+real WiFi credentials out of git). Before any future write to `p6`/`p8`, these backups mean the
+factory fallback slot can always be restored exactly (`dd` them back), independent of whatever
+happens with our own custom image.
+
+**Still not done, and still needs the user present**: actually writing our image to `p6`/`p8` and
+flipping the `ota` marker. Do this only after `06-verify.sh`'s build is considered final - and only
+with the factory backup above confirmed present first.

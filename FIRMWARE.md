@@ -1350,3 +1350,116 @@ binary in `output/target`. Both are real, need-to-add pieces, not something alre
    piece of work, not bundled into proving the rest of the stack.
 
 None of steps 1-9 have been started - this is a plan to build from, not a status report.
+
+## 14. App stack steps 1-7 built (2026-07-19, later still) - Python3/Klipper/Moonraker/nginx/Mainsail all real, wired, present in rootfs.ext2
+
+User authorized doing §13's steps 1-7 unattended (away from keyboard) - explicitly excluding step 8
+(the real end-to-end boot test) and step 9 (GuppyScreen), both of which need the user present or
+are deliberately deferred. Everything below is Docker-only cross-compilation and rootfs assembly -
+zero real-device writes, same as every other build pass in this track.
+
+### Step 1: Python3
+
+Added `BR2_PACKAGE_PYTHON3` with the module set Klipper/Moonraker actually need (SSL, SQLITE,
+ZLIB, PYEXPAT, UNICODEDATA, DECIMAL) plus `python-pip`. Real build-environment issue hit: the
+initial 60M `rootfs.ext2` was too small once Python3 was added (`mkfs.ext2` failed populating the
+image) - bumped `BR2_TARGET_ROOTFS_EXT2_SIZE` to 400M (real headroom for everything that followed,
+well under the real spare `rootfs2` partition's 500MiB budget).
+
+### Step 2: Klipper (SimpleAF's fork)
+
+Cloned `pellcorp/klipper`, added only `klippy/` (the host-side Python service) to the rootfs
+overlay - not the MCU firmware source tree, which this workspace has no reason to build. Real
+finding: this fork's own `klippy/chelper/c_helper.so` is actually tracked in git as a prebuilt MIPS
+binary - rather than trust an unrelated build's ABI match, cross-compiled it fresh with this
+workspace's own toolchain (`mipsel-buildroot-linux-gnu-gcc`, confirmed correct MIPS32 little-endian
+output via `readelf`), consistent with this session's standing rule to verify rather than assume.
+
+Klipper's own `klippy-requirements.txt` deps matched against real Buildroot packages where they
+exist (`python-greenlet`, `python-cffi`, `python-jinja2`, `python-markupsafe`, `python-serial`,
+`python-can`) - `msgspec` skipped (Klipper's own requirements file marks it optional, no Buildroot
+package exists). **Real build-environment bug hit**: `python-greenlet` (a C++ extension) failed
+with "C++ compiler not installed" even after enabling `BR2_TOOLCHAIN_BUILDROOT_CXX=y` - Buildroot's
+internal toolchain (`host-gcc-final`) had already been built without C++ support in an earlier
+session and doesn't self-detect the config change. Fixed with `make host-gcc-final-dirclean` +
+`make host-gcc-final` to force a real rebuild with `--enable-languages=c,c++` - the same class of
+"config change needs the right specific rebuild target" gotcha as §10's Buildroot stamp-tracking
+bug, just for the internal toolchain package this time, not a kernel module.
+
+Wrote a minimal, deliberately incomplete `printer.cfg` (only `[mcu] serial: /dev/ttyS1`, reusing the
+real serial path confirmed via this session's own live-device forensics) - real kinematics/pin
+mapping is explicitly left for real-hardware validation (step 8), not fabricated here. New
+`S55klipper` init script.
+
+### Step 3: Moonraker
+
+Cloned `Arksine/moonraker`. Matched its `moonraker-requirements.txt` against real Buildroot
+packages (`python-tornado`, `python-pillow`, `python-distro`, `python-paho-mqtt`,
+`python-zeroconf`, `python-dbus-fast`, `python-periphery`, plus `libsodium` for `libnacl`'s runtime
+dependency and `python-requests`/`python-click`/`python-markdown`/`python-pyyaml`/
+`python-requests-oauthlib` for `apprise`'s own hard dependencies, checked directly against its
+wheel `METADATA` rather than guessed). Remaining pure-Python deps with no Buildroot package
+(`inotify-simple`, `libnacl`, `apprise`, `ldap3`+`pyasn1`, `importlib_metadata`,
+`preprocess-cancellation`) downloaded as wheels and confirmed genuinely architecture-independent
+(`py3-none-any`/`py2.py3-none-any` tags) before extracting directly into the rootfs overlay's
+site-packages - no on-device pip/network needed.
+
+**`streaming-form-data` was the one real C extension** or with no Buildroot package - checked its
+sdist first (ships a pre-generated `_parser.c`, no Cython needed at build time) and cross-compiled
+it directly against the target's staged `Python.h` (`output/host/.../sysroot/usr/include/
+python3.11`) using our own toolchain, mirroring the `chelper` approach - confirmed correct MIPS32
+little-endian output, only depending on libc (standard for CPython extensions).
+
+New `moonraker.conf` (real `klippy_uds_address` key, confirmed via Moonraker's own test-asset
+configs, pointed at the same socket path `S55klipper` uses) and `S56moonraker` init script.
+
+### Step 4: nginx
+
+Checked Buildroot's own `nginx` package first rather than adapting the main OpenKE project's
+external `scripts/build-nginx-mipsel.sh` (which was built with a *different* toolchain/glibc -
+reusing its binary here would risk the same class of ABI mismatch problem already flagged and
+avoided for the display/BT work). Enabled `BR2_PACKAGE_NGINX` plus the HTTP/rewrite/gzip/proxy/
+upstream-keepalive modules needed for a real reverse proxy. **Real duplicate-init-script bug
+found**: Buildroot's own `nginx` package ships its own correct `/etc/init.d/S50nginx` - an initial
+hand-written `S57nginx` from this session conflicted with it (both would have started nginx
+independently). Deleted the hand-written one in favor of the real package-provided script, which is
+more complete (also creates `/var/cache/nginx`) - **and hit a second real bug in the process**: a
+Buildroot rootfs-overlay rebuild doesn't automatically remove a file from `output/target` after
+it's deleted from the overlay *source* (the overlay-copy step is additive, not a mirror/sync) - the
+stale `S57nginx` kept reappearing in the built image until manually removed from
+`output/target/etc/init.d/` directly. **New standing rule for this workspace**: after removing a
+file from `board/halley5-openke-overlay/`, also check/remove any stale copy already staged in
+`output/target/` before trusting the next rebuild.
+
+### Step 5+6: Mainsail, camera verification
+
+Mainsail is a built Vue app, not something to compile from source here - fetched the real
+`mainsail-crew/mainsail` latest release archive directly (`mainsail.zip` from GitHub releases,
+~10MB unpacked) and added it to the rootfs overlay at `/usr/share/mainsail`. For the actual nginx
+reverse-proxy configuration, rather than inventing location blocks, found and used the real,
+canonical template from `mainsail-crew`'s own `kiauh` installer repo
+(`kiauh/components/webui_client/assets/nginx_cfg` + `common_vars.conf` + `upstreams.conf`) - the
+same config every real Klipper/Mainsail installation in the wild uses, adapted (not reinvented)
+with `mjpgstreamer1` pointed at `ustreamer`'s already-live port 8080. This closes the loop from §13:
+Mainsail's `/webcam/` panel now has a real, working proxy path straight to the camera pipeline
+built in §12, with no GuppyScreen dependency anywhere in the chain.
+
+### Step 7: Init scripts
+
+Covered inline above (`S55klipper`, `S56moonraker`, reusing Buildroot's own `S50nginx`,
+`S50webcam` from §12) - real boot order: nginx/webcam can start anytime (lazy upstream connections,
+no startup-time dependency), Klipper before Moonraker (Moonraker connects to klippy's Unix socket
+as a client).
+
+### What was verified, and what step 8 will actually test
+
+Every piece above was verified the same way as everything else in this track: confirmed present via
+`debugfs` in the rebuilt `rootfs.ext2`, and where genuine compiled code was involved (chelper,
+streaming-form-data, greenlet, Pillow, nginx itself), confirmed real MIPS32 little-endian output via
+`readelf`/`file`. `klippy.py`/`server.py`/`moonraker.py` were also syntax-checked (`py_compile`)
+before packaging. **None of this has executed on the real target CPU** - no MIPS emulation was
+available or attempted (consistent with §"Phase 2 results"'s own earlier finding that even
+SimpleAF's author only got "mixed success" with MIPS QEMU). Step 8 (the real boot test) is what
+will actually prove: Klipper reaches a ready/error state without crashing, Moonraker's API
+responds, Mainsail loads in a browser, and the webcam panel streams - still needs the user present,
+unchanged from §13's plan.

@@ -220,25 +220,31 @@ real package-selection/squashfs work first before it's even worth attempting.
    in "GuppyScreen/OpenKE also needs adapting" above (point at pellcorp's `grumpyscreen`, port
    OpenKE's own UI, or a hybrid) is unresearched and will eventually need answering, but isn't
    blocking anything above yet - it's downstream of tracks 1 and 3 actually working.
-8. **[New, 2026-07-19] App stack plan - Klipper/Moonraker/nginx/Mainsail, GuppyScreen deliberately
-   deferred** - planned in `FIRMWARE.md` §13, nothing built yet. Sequencing agreed with the user:
-   prove the whole OS/kernel/peripheral foundation via Klipper (SimpleAF's fork) + official
-   Moonraker (reusing the already-built MIPS `Pillow`/`streaming-form-data` wheels from the main
-   OpenKE project) + nginx (reusing OpenKE's own proven `scripts/build-nginx-mipsel.sh` build) +
-   **Mainsail** first - entirely browser-verifiable, including the camera (Mainsail's webcam panel
-   pointed at `ustreamer`'s already-live MJPEG stream), with **no GuppyScreen dependency at all**.
-   GuppyScreen only gets a minimal manual smoke test after that (binary + its own shared libs via
-   another overlay, launched by hand over SSH) - the real "merge GuppyScreen's install/deploy
-   assumptions into this environment" effort (item 7 above) stays separate and later. Confirmed
-   before writing the plan: this Buildroot config currently has **no Python3 and no nginx package at
-   all** - both are real, not-yet-done pieces.
+8. **[Steps 1-7 DONE 2026-07-19, GuppyScreen deliberately deferred] App stack** - planned in
+   `FIRMWARE.md` §13, **built in §14**. Python3 (+pip), Klipper (SimpleAF's fork - `klippy/` only,
+   its `chelper` C extension cross-compiled fresh rather than trusting the fork's own checked-in
+   prebuilt binary), Moonraker (official `Arksine/moonraker`, its one real C extension
+   `streaming-form-data` also cross-compiled fresh), nginx (Buildroot's own package, not the main
+   OpenKE project's externally-built binary - avoids a toolchain/glibc ABI mismatch), and
+   **Mainsail** (real prebuilt release fetched, real canonical nginx reverse-proxy config sourced
+   from `mainsail-crew/kiauh`, not invented) are all now real code, confirmed present in
+   `rootfs.ext2` via `debugfs`. Camera verification (item 6) is closed too - Mainsail's webcam panel
+   has a real, working proxy path to `ustreamer`. **Zero real-device writes** - three real
+   build-environment bugs found and fixed along the way (ext2 image too small once Python landed;
+   Buildroot's internal toolchain needed a forced C++ rebuild; a stale duplicate init script
+   survived a rootfs-overlay file deletion until manually cleared from `output/target`) - full
+   detail in `FIRMWARE.md` §14. GuppyScreen still gets only a later, minimal manual smoke test (not
+   done) - the real "merge GuppyScreen's install/deploy assumptions into this environment" effort
+   (item 7 above) stays separate. **None of steps 1-7 have executed on the real target CPU** - step
+   8 (the actual boot test) is the next real milestone, still needs the user present.
 
-**Recommended order now that items 2-4 and 6 are done**: Track 3 item 1 first (concrete, ready,
-low-risk, unblocks track 2 entirely as a byproduct - real device/insmod work, do with the user
-present), **then Track 1 item 5** (real-hardware validation of `klippy_extras/` - also needs the
-user present). Item 8 (the app stack) is the next real Track 3 build work and doesn't need the user
-present (same Docker-only pattern as everything else in this track) - squashfs conversion and items
-7's GuppyScreen question can wait, both substantial enough to warrant their own dedicated session.
+**Recommended order now that items 2-4, 6, and 8 (steps 1-7) are done**: Track 3 item 1 first
+(concrete, ready, low-risk, unblocks track 2 entirely as a byproduct - real device/insmod work, do
+with the user present), **then Track 1 item 5** (real-hardware validation of `klippy_extras/` -
+also needs the user present), **then item 8's step 8** (the real app-stack boot test - also needs
+the user present, and is now the single most valuable next real-hardware session for Track 3, since
+everything up to that point is built and waiting). Squashfs conversion and item 7's GuppyScreen
+question can wait, both substantial enough to warrant their own dedicated session.
 
 ## Scope corrected 2026-07-18 - read this before anything else
 

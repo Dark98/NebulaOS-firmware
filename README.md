@@ -154,17 +154,26 @@ real package-selection/squashfs work first before it's even worth attempting.
    printer attended the whole time (raw MCU step pulses, no `trsync` safety net - ANALYSIS.md §6).
    **Do not attempt this without the user present** - this is real hardware, not a reversible
    config change.
-6. **[Track 3, BUILD DONE 2026-07-19, NOT hardware-tested]** ~~a custom Buildroot rootfs using the
-   now-validated kernel/toolchain~~ - real, working `uImage` (Linux 6.1.28) + `rootfs.ext2`
-   (Buildroot 2023.11.1) built cleanly, zero errors, saved at `artifacts/buildroot-halley5-image/`.
-   QEMU boot-tested as a bonus - expected negative result (no X2000 machine model exists in QEMU,
-   confirmed via prior art before trying), not a build defect; the build's own correctness was
-   independently confirmed via `debugfs` inspection instead. Full account, including what's still
-   needed for real parity (package selection, squashfs conversion, device-tree fit, and the actual
-   real-hardware boot test) is in `FIRMWARE.md`'s new "Phase 2 results" section - read that before
-   picking this back up. **Still uses the spare `rootfs2`/`kernel2` partition slots as the eventual
-   target once a real flash is ever attempted** (confirmed unused, `FIRMWARE.md` §4b) - nothing
-   about that plan changed, only Phase 2's build step itself is now done.
+6. **[Track 3, REBASED 2026-07-19, NOT hardware-tested]** ~~a custom Buildroot rootfs using the
+   now-validated kernel/toolchain~~ - first built against `Ingenic-community/linux` (6.1.28), then
+   **rebased onto `Llixuma/ingenic-linux-kernel6.6-x2000-v1.0-20250221`** (a more complete, newer
+   vendor SDK with native X2000 display+camera support, found and verified same session - see
+   `FIRMWARE.md` §7's "Update" subsection) **by explicit user instruction**. Real, working `uImage`
+   (Linux **6.6.18-rt23** - a real-time kernel, unplanned bonus) + `rootfs.ext2` built cleanly using
+   the real vendor defconfig `x2000_halley5_v30_linux` (display + camera both enabled by default in
+   this one defconfig switch), saved at `artifacts/buildroot-halley5-v30-image/` (the earlier
+   6.1-based `artifacts/buildroot-halley5-image/` is superseded but left in place). Three real,
+   distinct build errors hit and fixed along the way (a known upstream Linux `binder.h` quirk, a
+   stale kernel-headers version label, a repeat of Phase 1's "fresh container has no packages"
+   gotcha) - full detail in `FIRMWARE.md` §8. **The NS2009 touch driver was also re-ported and
+   rebuilt against this new kernel** (two more real, kernel-version-specific fixes found: the
+   `i2c_driver.probe` callback signature change, and `CONFIG_INPUT_TOUCHSCREEN`'s own menu gate not
+   being enabled by default) - saved at `artifacts/ns2009-driver/`, vermagic-consistent with the
+   new kernel. Full account, including what's still needed for real parity (WiFi/BT config,
+   squashfs conversion, a real panel device-tree entry, and the actual real-hardware boot test) is
+   in `FIRMWARE.md` §8 - read that before picking this back up. **Still uses the spare
+   `rootfs2`/`kernel2` partition slots as the eventual target once a real flash is ever attempted**
+   (confirmed unused, `FIRMWARE.md` §4b) - nothing about that plan changed.
 7. **[New since last session] Adapt GuppyScreen for this environment** - the three-option question
    in "GuppyScreen/OpenKE also needs adapting" above (point at pellcorp's `grumpyscreen`, port
    OpenKE's own UI, or a hybrid) is unresearched and will eventually need answering, but isn't
@@ -287,19 +296,28 @@ except this probe layer, with no SWD required.
   ethernet-module proof -> custom Buildroot rootfs -> eventual real flash). The source of truth for
   "how hard would a full custom firmware/OS be" - kept current in place as work progresses.
 - `vendor/` - **gitignored**, not committed. Real, exact-version-matching kernel source
-  (`x2000_kernel`) and a matching Halley5 Buildroot config (`buildroot-x2000`), both found via
-  GitHub code search and cloned locally for track 3/Phase 1 work. Provenance/exact repo URLs and
-  commit state are recorded in `FIRMWARE.md` §4a - re-clone from there if this workspace ever moves,
-  don't assume `vendor/` travels with the repo.
+  (`x2000_kernel`, 4.4.94) and a matching Halley5 Buildroot config (`buildroot-x2000`), both found
+  via GitHub code search and cloned for track 3/Phase 1 work. Also `x2000_kernel_6.6` (sparse
+  checkout of `Llixuma/ingenic-linux-kernel6.6-x2000-v1.0-20250221`'s `kernel/kernel-6.6`, ~1.8 GB)
+  - the current Phase 2 kernel source, referenced by `buildroot-x2000/local.mk`'s
+  `LINUX_OVERRIDE_SRCDIR`. Provenance/exact repo URLs and commit state are recorded in `FIRMWARE.md`
+  §4a (4.4.94 tree) and §8 (6.6 tree) - re-clone from there if this workspace ever moves, don't
+  assume `vendor/` travels with the repo.
 - `artifacts/ax88179-modules/` - built, vermagic-verified kernel modules from track 3/Phase 1
   (`ax88179_178a.ko`, `usbnet.ko`, `mii.ko`, `asix.ko`) - **not gitignored on purpose**, small
   binary build outputs worth keeping around rather than a large source tree. See `FIRMWARE.md` §5
   step 4 for the exact build recipe and current status (built + verified, not yet `insmod`-tested).
-- `artifacts/buildroot-halley5-image/` - built kernel (`uImage`, Linux 6.1.28) + rootfs
-  (`rootfs.ext2`, Buildroot 2023.11.1) + the exact `.config` used (`buildroot.config`) from track
-  3/Phase 2 - **not gitignored on purpose**, same reasoning as the ax88179 artifacts above. See
-  `FIRMWARE.md`'s "Phase 2 results" section for the build recipe, what was verified (cross-compile
-  + `debugfs` inspection) vs. not (no real boot test - QEMU has no X2000 machine model, real
+- `artifacts/buildroot-halley5-image/` - **superseded, kept for reference** - built kernel
+  (`uImage`, Linux 6.1.28) + rootfs from track 3/Phase 2's *original* build against
+  `Ingenic-community/linux`, before the rebase below. Not deleted since it's still a valid build of
+  a different kernel lineage, just no longer the current target.
+- `artifacts/buildroot-halley5-v30-image/` - **current** track 3/Phase 2 build: `uImage` (Linux
+  **6.6.18-rt23**) + `rootfs.ext2` (Buildroot 2023.11.1) + `buildroot.config`/`kernel.config`
+  (exact configs used) + `local.mk` (the source-override mechanism) + `binder-h-fix-note.txt`,
+  built against `Llixuma/ingenic-linux-kernel6.6-x2000-v1.0-20250221` (rebased here 2026-07-19 by
+  explicit user instruction - see `FIRMWARE.md` §8). **Not gitignored on purpose**, same reasoning
+  as the ax88179 artifacts above. See `FIRMWARE.md` §8 for the build recipe, the three real build
+  errors hit and fixed, what was verified (cross-compile + `debugfs` inspection) vs. not (no real
   hardware not attempted), and what's still needed for production parity.
 
 ## License note

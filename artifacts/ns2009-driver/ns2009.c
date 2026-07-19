@@ -167,8 +167,7 @@ static int ns2009_ts_request_polled_input_dev(struct ns2009_data *data)
 	return 0;
 }
 
-static int ns2009_ts_probe(struct i2c_client *client,
-			   const struct i2c_device_id *id)
+static int ns2009_ts_probe(struct i2c_client *client)
 {
 	struct ns2009_data *data;
 	struct device *dev = &client->dev;

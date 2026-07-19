@@ -775,7 +775,130 @@ straightforward name-based searching missed it initially.
    would need redoing against this new base, and the ported NS2009 touch driver (§7 above) would
    need re-verifying/re-building against it too.
 
-**Not yet decided which of these two to pursue - a real strategic choice, not a research gap
-anymore.** Both are viable; option 2 is probably the better long-term foundation given how much
-more complete this SDK is, but carries real redo cost for already-completed work. Flagged for an
-explicit decision before more build time is spent, rather than silently picking one.
+**Decided: option 2 (rebase Phase 2 entirely onto the 6.6 SDK), by explicit user instruction.**
+Done same day. Full account below.
+
+## 8. Phase 2 rebase onto the 6.6 SDK - DONE (2026-07-19), zero device writes
+
+Rebuilt Phase 2's kernel+rootfs from scratch against `Llixuma/ingenic-linux-kernel6.6-x2000-v1.0-20250221`
+instead of `Ingenic-community/linux`, using `vendor/buildroot-x2000`'s existing, already-proven
+Buildroot pipeline (same Docker toolchain as before) - **not** the vendor's own elaborate
+Android-style "lunch"/`envsetup.sh` build harness found alongside the kernel in that SDK (real,
+complete, but a much larger, riskier surface to adopt whole-cloth than reusing our own
+already-debugged pipeline just pointed at a different kernel source).
+
+**Setup**:
+- Sparse-cloned just `kernel/kernel-6.6` from the SDK (684 MB full repo; sparse checkout keeps
+  this to ~1.8 GB working copy) into `vendor/x2000_kernel_6.6` (gitignored, same as other `vendor/`
+  clones).
+- Pointed Buildroot at this local source via its standard `<pkg>_OVERRIDE_SRCDIR` mechanism
+  (`local.mk` in `vendor/buildroot-x2000`, referenced by the already-present
+  `BR2_PACKAGE_OVERRIDE_FILE="$(CONFIG_DIR)/local.mk"`) - bypasses Buildroot's own download/git-
+  clone step entirely via an rsync copy, the standard Buildroot way to build against a local
+  source tree without wrapping it in a tarball or a nested git remote.
+- Switched `BR2_LINUX_KERNEL_DEFCONFIG` from the community fork's `"halley5"` to the real vendor
+  SDK's own `"x2000_halley5_v30_linux"` (matching the real defconfig file,
+  `arch/mips/configs/x2000_halley5_v30_linux_defconfig`, confirmed present in the cloned tree) -
+  **already has `CONFIG_FB_INGENIC_STAGE=y` and `CONFIG_USB_VIDEO_CLASS=y`/`CONFIG_MEDIA_SUPPORT=y`
+  enabled by default**, i.e. display and camera support both come for free from this one defconfig
+  switch, no manual config flipping needed for either.
+
+**Three real, distinct build errors hit and fixed** (each genuinely new, not a repeat of Phase 2's
+original gotchas):
+1. **`linux-headers-custom` failed on a `binder.h` "leak" check** -
+   `error: include/uapi/linux/android/binder.h: leak CONFIG_ANDROID_BINDER_IPC_64BIT to user-space`.
+   This is a known, real quirk of this *exact* upstream Linux header (present in real
+   `torvalds/linux` too, not something Ingenic introduced) when run through `make headers_install`
+   outside a full kernel build context. Fixed by removing the 3-line
+   `#ifndef CONFIG_ANDROID_BINDER_IPC_64BIT ... #endif` block from the local clone's copy of that
+   header - we have no use for Android binder IPC on this device. Noted at
+   `artifacts/buildroot-halley5-v30-image/binder-h-fix-note.txt` for provenance.
+2. **Kernel-headers version mismatch**: `Incorrect selection of kernel headers: expected 6.1.x, got
+   6.6.x`. Root cause, found by tracing through Buildroot's own `linux-headers` package logic (not
+   guessed): with `BR2_KERNEL_HEADERS_AS_KERNEL=y` selected, the *expected* headers version is
+   derived from `BR2_LINUX_KERNEL_VERSION` - which still held the old Ingenic-community git commit
+   SHA from before the rebase (irrelevant to fetching once `OVERRIDE_SRCDIR` bypasses the download
+   step, but still consulted for *this* label/consistency-check purpose). Two earlier attempts to
+   fix this by hand-patching derived choice-group symbols
+   (`BR2_PACKAGE_HOST_LINUX_HEADERS_CUSTOM_6_1` → `_6_6`) didn't work, because that whole choice
+   group is unused in `AS_KERNEL` mode - a good reminder that hand-editing Kconfig-derived symbols
+   in a raw `.config` is fragile; the robust fix was updating the one real source value
+   (`BR2_LINUX_KERNEL_VERSION="6.6.18"`) and letting `make olddefconfig` recompute everything
+   dependent on it correctly.
+3. **`bc: not found`** during an incremental (non-full-`make`) module build - same class of gotcha
+   Phase 1 already documented (fresh `docker run` invocations start a package-less container; only
+   the bind-mounted source tree persists across separate invocations, not `apt-get`-installed
+   packages) - fixed by re-running the `apt-get install` step before the incremental build command.
+
+**Build succeeded cleanly after these fixes.** Verified output:
+- `uImage` (5.9 MB) and `rootfs.ext2` (60 MB), kernel release string `6.6.18-rt23` (a **PREEMPT_RT**
+  real-time kernel variant - a genuinely good property for a 3D-printer motion controller, not
+  something specifically sought out but a welcome side effect of using this SDK's own default
+  config).
+- Kernel `.config` confirmed: `CONFIG_FB_INGENIC=y`, `CONFIG_FB_INGENIC_STAGE=y`,
+  `CONFIG_USB_VIDEO_CLASS=y`, `CONFIG_MEDIA_SUPPORT=y`, `CONFIG_CPU_MIPS32_R5=y` (this SDK's own
+  choice, real and internally consistent - unlike the earlier 6.1 rebase's stray `MIPS32_R1` note,
+  no mismatch flagged here; not independently cross-checked against real device precedent since
+  this is a different, newer reference design (`v30`) than the device's own shipped `v20`/4.4.94
+  kernel, so some real config differences between hardware revisions are expected and not
+  necessarily a red flag).
+- Rootfs sanity-checked via `debugfs` exactly as Phase 2's original build was: correct top-level
+  layout, `os-release` reads `Buildroot 2023.11.1`, `/bin/busybox` present and correctly sized.
+- Saved to `artifacts/buildroot-halley5-v30-image/`: `uImage`, `rootfs.ext2`, `buildroot.config`,
+  `kernel.config` (the actual kernel `.config` used, for reference), `local.mk` (the override
+  mechanism, for reproducibility), `binder-h-fix-note.txt`. The original 6.1-based
+  `artifacts/buildroot-halley5-image/` is **superseded but left in place**, not deleted - no reason
+  to discard it, and it remains a real, valid build of a different (older) kernel lineage if ever
+  useful for comparison.
+
+### NS2009 touch driver re-ported against the new 6.6.18-rt23 kernel, same day
+
+Reused the already-ported driver from the 6.1 rebase (§7's "Update - actually done" subsection)
+rather than starting over - the driver itself (generic I2C + input-subsystem APIs) is
+kernel-version-agnostic by design, but the *kernel's own API surface* had moved again in ways worth
+finding and fixing properly rather than assuming compatibility:
+
+1. **`i2c_driver.probe` signature changed** between 6.1 and 6.6: the old
+   `int (*probe)(struct i2c_client *, const struct i2c_device_id *)` two-argument form (what the
+   driver still used) is gone in this kernel's `include/linux/i2c.h` - only the newer
+   `int (*probe)(struct i2c_client *client)` single-argument form remains. Found this by reading
+   the actual header directly (not assuming it'd still compile), fixed by dropping the now-unused
+   `const struct i2c_device_id *id` parameter from `ns2009_ts_probe()`'s signature - the function
+   body never used `id` anyway.
+2. **`CONFIG_INPUT_TOUCHSCREEN`'s own `menuconfig` gate wasn't enabled at all** in the
+   `x2000_halley5_v30_linux_defconfig` - the entire touchscreen-driver subsystem is off by default
+   in this reference config (plausibly because Ingenic's own reference board doesn't necessarily
+   ship a resistive touch panel the way this printer does). Without this enabled first, the new
+   `TOUCHSCREEN_NS2009` Kconfig entry has no menu to attach to and `make olddefconfig` silently
+   drops it - not a bug, correct Kconfig dependency behavior, but a real thing to find and fix
+   (`./scripts/config --enable CONFIG_INPUT_TOUCHSCREEN` before setting `TOUCHSCREEN_NS2009`).
+3. Wired up `Kconfig`/`Makefile` entries in `drivers/input/touchscreen/` (new `config
+   TOUCHSCREEN_NS2009` entry modeled on the neighboring `TOUCHSCREEN_TSC2007` entry;
+   `obj-$(CONFIG_TOUCHSCREEN_NS2009) += ns2009.o` in the `Makefile`) in the local
+   `vendor/x2000_kernel_6.6` clone - real, durable changes to that local tree (not committed to the
+   upstream repo, just how it's built here), same treatment as the `binder.h` fix above.
+
+**Verified output**: `strings ns2009.ko` reads `vermagic=6.6.18-rt23 SMP preempt mod_unload
+MIPS32_R5 32BIT`, `license=GPL`, `name=ns2009` - **vermagic's `MIPS32_R5` matches the kernel's own
+`.config` exactly this time**, no repeat of the earlier 6.1 rebase's `R1`-vs-`R2` mismatch. Real
+device-tree alias confirmed present: `alias=of:N*T*Cnsiway,ns2009` - ready to bind against a real
+`compatible = "nsiway,ns2009"` device-tree node. Saved (overwriting the 6.1-era copies, which are
+superseded) at `artifacts/ns2009-driver/`: `ns2009.c` (final ported source, both this session's and
+the earlier 6.1 rebase's fixes applied), `ns2009.ko` (built against 6.6.18-rt23 now).
+
+**Still needed before any of this is real on hardware** (none attempted, real device, needs the
+user present, same standing rule as everywhere else in this workspace):
+1. A device-tree node (`compatible = "nsiway,ns2009"`) at the confirmed live I2C address (bus 4,
+   address 0x48, §6/§7) with appropriate `touchscreen-*` properties - orientation/calibration for
+   this specific board not yet determined.
+2. WiFi (`brcmfmac`)/Bluetooth (`hci_uart` H5) config enabling - not done this pass, deferred (this
+   session's scope was the display/touch rebase specifically); the `x2000_halley5_v30_linux_defconfig`
+   didn't have these on by default the way the old 6.1 community fork's `halley5_x2000_defconfig`
+   did, confirmed not yet re-checked against this new tree.
+3. A real device-tree panel entry for this board's actual 480x272 parallel-RGB panel (§7's
+   "displays" findings) - not started; the `HALLEY5_MIPI_LCD_*` examples in this SDK are for MIPI
+   panels, not this board's likely simpler panel type.
+4. Converting from plain ext2 to squashfs+overlay to match the real device's A/B partition format -
+   not started, same gap Phase 2's original build had.
+5. **The actual real-hardware boot test** - the only real verification any of this works. Not
+   attempted, needs the user present.

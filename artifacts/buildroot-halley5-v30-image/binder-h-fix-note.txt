@@ -1,0 +1,16 @@
+Patch applied to the local kernel_6.6 clone (not upstreamed, not committed to that repo,
+just how it's built here):
+
+File: kernel/kernel-6.6/include/uapi/linux/android/binder.h
+
+Removed this block (lines removed entirely, not commented out):
+    #ifndef CONFIG_ANDROID_BINDER_IPC_64BIT
+    #define BINDER_IPC_32BIT 1
+    #endif
+
+Reason: Buildroot's headers_install sanity check ("headers_check") flags this exact
+construct as "leak CONFIG_ANDROID_BINDER_IPC_64BIT to user-space" and fails the build.
+This is a known, real quirk of this specific upstream Linux header when exported via
+`make headers_install` outside a full kernel build context - not something Ingenic
+introduced. We don't need Android binder IPC on this device at all, so the block was
+removed rather than worked around.

@@ -1834,3 +1834,53 @@ a real, unnecessary device risk for no practical gain.
 `Ender-3_V3_KE_F005_ota_img_V1.1.0.12.img`, and their extracted contents) are kept in the session
 scratchpad, not this repo - Creality's proprietary firmware, not project code, same principle as
 §19's factory-partition backups and the WiFi-credentials decision.
+
+## 21. Test plan drafted, then a real bug found in it: our console UART was never wired to any physical pins at all
+
+User pushback on the draft boot-test plan raised two real points worth recording. First: writing to
+the *currently active* rootfs/kernel slot instead of the spare doesn't remove the need for a
+fallback mechanism (something still has to flip the `ota` marker back if the new image fails) - it
+just adds real risk, since it means overwriting a block device the running kernel has mounted right
+now, instead of an idle one. The spare-slot plan from §19 stands as-is. Second: a genuinely better
+answer to "what if it doesn't boot and we have no access at all" is to not rely on physical/USB
+recovery for the common failure modes in the first place. Since we own every line of the custom
+rootfs, its very first init step can unconditionally flip the `ota` marker back to `ota:kernel`
+immediately, before anything else runs, and only flip it forward again once the system has confirmed
+itself healthy later in boot. That makes any crash *after* userspace starts self-healing on the next
+reboot, no USB, no buttons. The one gap that can't close: a kernel that fails before ever reaching
+our init code (panic pre-rootfs-mount) - still needs external recovery for that one case. Not yet
+implemented - real next step before any live attempt.
+
+User then asked to actually test the two items §20 flagged as unconfirmed rather than take them on
+faith. One was genuinely testable remotely; the other isn't:
+
+- **UART4/console pin routing - tested, and a real bug was found and fixed.** Checked whether our
+  board DTS (`halley5_v30.dts`) even wires up the physical pins behind `console=ttyS4` at all. It
+  didn't: `x2000-v12.dtsi` leaves `uart4` at `status = "disabled"` by default, and the board file had
+  **no override for it whatsoever** - meaning our custom kernel's console would have produced zero
+  output on real hardware regardless of the getty fix in §18. Pulled the real device's own live
+  device tree via `/sys/firmware/fdt` (root-readable, read-only) and decompiled it with Buildroot's
+  own `host/bin/dtc` to find the real answer instead of guessing: the stock board's `uart4` uses
+  pinctrl group `uart4-pa` (`ingenic,pinmux = <phandle-for-gpa 2 3>`, i.e. physical pins **PA2/PA3**),
+  not the only option this kernel tree happened to predefine (`uart4_pd`, PD13/PD14 - unrelated
+  pins). Fixed by enabling `&uart4` in `halley5_v30.dts` with `pinctrl-0 = <&uart4_pa>` - the v12
+  pinctrl tree already had a usable `uart4_pa` node (`gpa 0-3`, a superset covering the same PA2/PA3
+  pins), so no new pinctrl node was needed, just the missing board-level override. **Not yet
+  rebuilt into `uImage`** - the fix is only in kernel source (`vendor/x2000_kernel`) so far.
+  (A first attempt at this fix landed in the wrong file - `x2000-pinctrl.dtsi`, the base X2000
+  variant - before checking that `halley5_v30.dts` actually includes `x2000-v12.dtsi`, a materially
+  different pinctrl tree. Caught and corrected before it went anywhere.)
+- **Real hardware watchdog confirmed present and unused**: `/proc/device-tree/apb/watchdog@0x10002000`
+  (`status: ok`) and working `/dev/watchdog`/`/dev/watchdog0` device nodes exist on the live device,
+  with no daemon currently petting them. This is the concrete hardware this session's proposed
+  "revert-first init" auto-recovery idea would run on - confirmed real and available, not assumed.
+- **USB-recovery dry run (§20's other unconfirmed item) - genuinely not remotely testable.** Running
+  `ballaswag/ingenic-usbboot --dump-partition` against the real device needs a USB cable connected to
+  the printer's board and the boot+reset button combo held at power-on - physical actions only
+  possible with hands on the actual hardware. Said so plainly rather than claim to have confirmed
+  something that requires physical presence to confirm.
+
+**Still open before any real attempt**: rebuild `uImage` with the uart4 fix, confirm the real board's
+physical UART header location (needs the case open - PA2/PA3 is now a concrete, evidence-backed
+starting point for continuity-testing rather than a blind guess), implement the revert-first init
+script, and do the physical USB-recovery dry run.

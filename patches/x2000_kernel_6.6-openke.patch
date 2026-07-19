@@ -664,10 +664,10 @@ index 000000000..e32ed2657
 +MODULE_LICENSE("GPL");
 +MODULE_DESCRIPTION("OpenKE best-effort panel driver for the Ender 3 V3 KE Nebula Pad's 480x272 panel");
 diff --git a/kernel/kernel-6.6/module_drivers/dts/x2000/halley5_v30.dts b/kernel/kernel-6.6/module_drivers/dts/x2000/halley5_v30.dts
-index 9be859853..1b1616cb8 100644
+index 9be859853..035dbbcba 100644
 --- a/kernel/kernel-6.6/module_drivers/dts/x2000/halley5_v30.dts
 +++ b/kernel/kernel-6.6/module_drivers/dts/x2000/halley5_v30.dts
-@@ -96,6 +96,22 @@
+@@ -96,6 +96,36 @@
  	status = "okay";
  	pinctrl-names = "default";
  	pinctrl-0 = <&uart3_pc>;
@@ -687,10 +687,24 @@ index 9be859853..1b1616cb8 100644
 +	bluetooth {
 +		compatible = "openke,bcm4343x-bt";
 +	};
++};
++
++/* Console UART. Had no override at all before 2026-07-20 - uart4 defaults to
++ * status="disabled" in x2000.dtsi, meaning console=ttyS4 in the kernel cmdline
++ * would have produced zero output on real hardware. pinctrl-0 confirmed
++ * against the real device's own live device tree (pulled via
++ * /sys/firmware/fdt, decompiled with dtc) - the stock board's uart4 uses
++ * pinctrl group uart4-pa, physical pins PA2/PA3. This tree's own uart4_pa
++ * (gpa 0-3) is a superset covering the same two pins, so no new pinctrl node
++ * was needed, just this missing board-level override. */
++&uart4 {
++	status = "okay";
++	pinctrl-names = "default";
++	pinctrl-0 = <&uart4_pa>;
  };
  
  &cpufreq {
-@@ -136,7 +152,37 @@
+@@ -136,7 +166,37 @@
  };
  
  &i2c4 {
@@ -729,7 +743,7 @@ index 9be859853..1b1616cb8 100644
  };
  
  
-@@ -200,6 +246,17 @@
+@@ -200,6 +260,17 @@
  	keep-power-in-suspend;
  	ingenic,removal-manual;
  
@@ -747,7 +761,7 @@ index 9be859853..1b1616cb8 100644
  	bcmdhd_wlan: bcmdhd_wlan {
  		 compatible = "android,bcmdhd_wlan";
  		 gpio_wl_reg_on = <&gpd 1 GPIO_ACTIVE_HIGH INGENIC_GPIO_NOBIAS>;
-@@ -207,6 +264,13 @@
+@@ -207,6 +278,13 @@
  	};
  };
  

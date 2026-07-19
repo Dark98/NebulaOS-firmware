@@ -28,14 +28,34 @@ All three tracks share the same workspace and a lot of platform-level groundwork
 kernel source, etc.) - that shared material lives in track 3's files/memory, not duplicated across
 all three.
 
-## Status: IN PROGRESS (2026-07-19) - mid-way through Todo item 1, resume at the insmod step
+## Status: IN PROGRESS (2026-07-19) - Track 1 (items 2-4) implemented while user was away; Track 3 item 1 resume point unchanged
 
 `ke-next`'s M600 fixes were confirmed working on real hardware and `v1.5.0-OpenKE` shipped
 (2026-07-18/19) - the "paused until ke-next real-device testing is done" condition below is now
-satisfied, and work on Todo item 1 (below) is underway: the `ax88179_178a` kernel module is built
-and vermagic-verified, but not yet transferred to or tested on the real device (session paused
-here because the printer was mid-print). **Next session: go straight to Todo item 1's "Remaining"
-paragraph** - don't redo the build, just re-check the printer is idle and run the `insmod` test.
+satisfied. Track 3 item 1 (ethernet driver `insmod` test) is exactly where it was left: the
+`ax88179_178a` kernel module is built and vermagic-verified, but not yet transferred to or tested
+on the real device. **Next session: go straight to Todo item 1's "Remaining" paragraph** - don't
+redo the build, just re-check the printer is idle and run the `insmod` test.
+
+**New this session (2026-07-19, done autonomously while the user was away for the afternoon,
+explicitly pre-approved to make the fork-vs-standalone call and proceed without further
+check-ins)**: Track 1 items 2-4 are done. Researched pellcorp's actual `klipper`/`kalico` forks
+directly (both use the exact stock `klippy/extras/<module>.py` layout, no structural change
+needed for either target - see `DESIGN.md`'s new top section), made the two small flagged calls
+per their stated leaning, and **implemented all six `klippy_extras/` files with real, working
+logic** (no more `NotImplementedError` skeletons) - MCU protocol, calibration math (with 17
+passing standalone unit tests against synthetic data, no hardware needed -
+`klippy_extras/test_prtouch_calibration.py`), touch-probe orchestration, nozzle-wipe, and the new
+`z_compensate` per-print Z-offset piece. All six files pass `python3 -m py_compile`. Full account
+of what changed vs. the original design sketch, and everything deliberately left out of v1, is in
+`DESIGN.md`'s new "What actually changed during implementation" and "Deliberately dropped for v1"
+sections - read those before touching this code.
+
+**Deliberately not done, and should not be done without the user present**: no real hardware was
+touched this session - no flashing, no installing SimpleAF, no changes to the live printer, which
+is shared with `ke-next` testing and where a bad flash has no one present to help recover from.
+The code above is untested against real firmware. **Real-hardware validation is the actual next
+step for Track 1** - see the Todo below.
 
 ## Todo (as of 2026-07-19)
 
@@ -54,30 +74,38 @@ paragraph** - don't redo the build, just re-check the printer is idle and run th
    `NETWORKING.md` §2 for why - nothing persists across a reboot unless we deliberately add an init
    script, which only happens after success is confirmed). This is also track 2's entire remaining
    fix - one piece of work closes both.
-2. **[Track 1] Resolve one open design question before writing real `klippy_extras/` logic**:
-   should the module target SimpleAF's own environment (their Klipper fork, config/mount
-   conventions) directly, or a standalone host tree? Not yet researched. Answering this should
-   come before filling in the `NotImplementedError` bodies in `klippy_extras/`, since it affects
-   the module's assumptions (paths, how it's loaded, etc.).
-3. **[Track 1] Resolve the two smaller open questions in `DESIGN.md`**: whether to register
-   `Z_OFFSET_AUTO` at all (leaning no), and how closely to mirror Creality's `PR_ERR_CODE_*`
-   catalog vs. plain `command_error` (leaning toward the latter). Small, but flagged rather than
-   silently decided.
-4. **[Track 1] Once 2-3 are settled: implement `klippy_extras/`** - fill in the six skeleton
-   files' `NotImplementedError` bodies per `DESIGN.md`. The biggest single piece is porting
-   `run_step_prtouch`/`cal_tri_data`'s calibration math (fully understood, documented in
-   `ANALYSIS.md` §3-4) into `prtouch_probe.py`/`prtouch_calibration.py`.
-5. **[Track 3] Once Phase 1 succeeds: Phase 2** - a custom Buildroot rootfs using the
+2. **[Track 1, DONE 2026-07-19]** ~~Resolve one open design question before writing real
+   `klippy_extras/` logic~~ - resolved: target SimpleAF's own environment. Both of pellcorp's
+   forks (`klipper`, `kalico`) use the exact stock `klippy/extras/<module>.py` layout, so no
+   structural change was needed either way - see `DESIGN.md`'s top section.
+3. **[Track 1, DONE 2026-07-19]** ~~Resolve the two smaller open questions in `DESIGN.md`~~ -
+   both resolved per their stated leaning: `Z_OFFSET_AUTO` not registered, plain `command_error`
+   used instead of Creality's `PR_ERR_CODE_*` catalog.
+4. **[Track 1, DONE 2026-07-19, NOT hardware-tested]** ~~implement `klippy_extras/`~~ - all six
+   files now have real logic (protocol, calibration math, touch-probe, nozzle-wipe, z_compensate).
+   Calibration math has 17 passing standalone unit tests against synthetic data. See `DESIGN.md`'s
+   "What actually changed during implementation" section for the specifics.
+5. **[Track 1, NEW real next step] Real-hardware validation** - nothing in `klippy_extras/` has
+   run against actual MCU firmware yet. Needs, in order: (a) get this code plus the real
+   `printer.cfg` `[prtouch_v2]`/`[z_compensate]` sections onto a test Klipper checkout (SimpleAF's
+   own environment, per the resolved design question above), (b) a `FIRMWARE_RESTART`/config
+   round-trip to confirm the module loads and the MCU accepts the config commands without
+   protocol errors, (c) a real `NOZZLE_CLEAR`/`Z_OFFSET_CALIBRATION` run watched closely with the
+   printer attended the whole time (raw MCU step pulses, no `trsync` safety net - ANALYSIS.md §6).
+   **Do not attempt this without the user present** - this is real hardware, not a reversible
+   config change.
+6. **[Track 3] Once Phase 1 succeeds: Phase 2** - a custom Buildroot rootfs using the
    now-validated kernel/toolchain, using the spare `rootfs2`/`kernel2` partition slots (confirmed
    unused, `FIRMWARE.md` §4b) rather than the active ones.
-6. **[New since last session] Adapt GuppyScreen for this environment** - the three-option question
+7. **[New since last session] Adapt GuppyScreen for this environment** - the three-option question
    in "GuppyScreen/OpenKE also needs adapting" above (point at pellcorp's `grumpyscreen`, port
    OpenKE's own UI, or a hybrid) is unresearched and will eventually need answering, but isn't
    blocking anything above yet - it's downstream of tracks 1 and 3 actually working.
 
-**Recommended order: 1 first** (concrete, ready, low-risk, unblocks track 2 entirely as a
-byproduct), **then 2-4** (track 1's real implementation work), **then 5**. Item 6 whenever it
-becomes the actual bottleneck, not before.
+**Recommended order: Track 3 item 1 first** (concrete, ready, low-risk, unblocks track 2 entirely
+as a byproduct - real device/insmod work, do with the user present), **then Track 1 item 5**
+(real-hardware validation of the now-implemented `klippy_extras/` - also needs the user present),
+**then item 6**. Item 7 whenever it becomes the actual bottleneck, not before.
 
 ## Scope corrected 2026-07-18 - read this before anything else
 
@@ -174,8 +202,10 @@ except this probe layer, with no SWD required.
     against this device (which runs v2-era code).
 - `klippy_extras/` - the new, OpenKE-authored replacement module. Six files
   (`prtouch_v2.py`/`prtouch_mcu.py`/`prtouch_calibration.py`/`prtouch_probe.py`/
-  `prtouch_nozzle.py`/`z_compensate.py`), currently skeletons only - signatures and docstrings,
-  `raise NotImplementedError` bodies, no real logic yet. See `DESIGN.md` for the layout rationale.
+  `prtouch_nozzle.py`/`z_compensate.py`) **implemented 2026-07-19** - real logic, not skeletons;
+  `test_prtouch_calibration.py` has 17 passing standalone unit tests for the pure-math half. Not
+  yet tested against real MCU firmware - see the Todo above. See `DESIGN.md` for the layout
+  rationale and its "What actually changed during implementation" section for specifics.
 - `ANALYSIS.md` - complete protocol + algorithm write-up, both reference source files read in full,
   real production scope confirmed against the live printer. The technical source of truth for
   track 1.

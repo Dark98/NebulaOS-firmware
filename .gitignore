@@ -2,3 +2,5 @@
 # Provenance/exact commit is recorded in FIRMWARE.md - not committed here,
 # re-clone from the URLs there if this workspace moves.
 /vendor/
+__pycache__/
+*.pyc

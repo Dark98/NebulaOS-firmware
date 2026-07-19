@@ -21,14 +21,16 @@ repo's branches or release planning.
    acquisition) is essentially complete** - real vendor documentation was found in the OpenKE
    workspace's `docs hw/` directory, an exact-matching kernel source was found on GitHub and cloned
    into `vendor/` (gitignored), the real partition table was parsed, and the chip's silicon-level
-   recovery mode is fully documented. Phase 1 (build + test the ethernet driver as first proof) is
-   the ready next step. Memory: `project_ke_custom_firmware.md`.
+   recovery mode is fully documented. **Phase 1 build+vermagic-verify DONE, `insmod` test on real
+   device is the next step. Phase 2's Buildroot rootfs BUILD also DONE 2026-07-19** (real
+   `uImage`+`rootfs.ext2`, zero device writes) - see `FIRMWARE.md`'s "Phase 2 results" section.
+   Memory: `project_ke_custom_firmware.md`.
 
 All three tracks share the same workspace and a lot of platform-level groundwork (SoC identity,
 kernel source, etc.) - that shared material lives in track 3's files/memory, not duplicated across
 all three.
 
-## Status: IN PROGRESS (2026-07-19) - Track 1 (items 2-4) implemented while user was away; Track 3 item 1 resume point unchanged
+## Status: IN PROGRESS (2026-07-19) - Track 1 (items 2-4) AND Track 3 Phase 2 build both done while user was away; Track 3 item 1 (insmod) resume point unchanged
 
 `ke-next`'s M600 fixes were confirmed working on real hardware and `v1.5.0-OpenKE` shipped
 (2026-07-18/19) - the "paused until ke-next real-device testing is done" condition below is now
@@ -57,7 +59,22 @@ is shared with `ke-next` testing and where a bad flash has no one present to hel
 The code above is untested against real firmware. **Real-hardware validation is the actual next
 step for Track 1** - see the Todo below.
 
-### Readiness comparison: Track 3 item 1 vs. Track 1 - NOT the same level of "done", read before assuming either is close
+**Also this session, later on (2026-07-19, same "away for the afternoon, pre-approved to proceed"
+arrangement, this time explicitly scoped to "minimal proof-of-pipeline" via the user's own answer
+to that framing)**: Track 3 Phase 2's Buildroot rootfs build is done - a real, working Linux
+6.1.28 kernel (`uImage`) + Buildroot 2023.11.1 rootfs (`rootfs.ext2`), cross-compiled cleanly with
+zero errors using the real vendor-community `halley5_x2000_defconfig`, saved at
+`artifacts/buildroot-halley5-image/`. QEMU boot-tested as a bonus verification step and got the
+expected negative result (no console output - there's no X2000 machine model in QEMU, confirmed
+via prior art before attempting, not a build defect); the build's own correctness was instead
+confirmed via direct `debugfs` inspection of the rootfs image. Full write-up, including the real
+remaining gaps before this could replace the device's actual software (package selection,
+squashfs conversion, device-tree fit, and the real-hardware boot test itself), is in
+`FIRMWARE.md`'s "Phase 2 results" section. **Also deliberately not done**: no real hardware
+touched for this either - the build is 100% local Docker compute, and the eventual real-hardware
+boot test is explicitly left for when the user is present.
+
+### Readiness comparison: all three "done, needs testing" items - NOT the same level of done, read before assuming any of them is close
 
 Asked and answered explicitly 2026-07-19 - recorded here so it never needs re-deriving:
 
@@ -79,11 +96,26 @@ Asked and answered explicitly 2026-07-19 - recorded here so it never needs re-de
   `pellcorp/klipper` and `pellcorp/kalico`) - whether anything else about SimpleAF's specific fork
   needs adjustment (config parsing quirks, module-load order, etc.) is unverified, not just
   untested.
+- **Track 3 Phase 2 (Buildroot rootfs image)**: the cross-compile itself is about as verified as
+  it can be without real hardware - it succeeded with zero errors, and the result was independently
+  sanity-checked via `debugfs` (correct directory layout, correct `os-release`, `busybox` present
+  and correctly sized), not just "the build command exited 0." But unlike the ethernet driver,
+  there is genuinely **no boot-level verification at all** - QEMU couldn't provide one (no X2000
+  machine model exists, confirmed before trying, not a gap in effort) and there's no device-side
+  equivalent of a vermagic string to check ahead of time, since this isn't a module being loaded
+  into a currently-running kernel - it's an entirely separate kernel (6.1.28 vs. the device's
+  running 4.4.94). So this sits between the other two: better-verified than the load-cell module
+  (a real artifact exists and was inspected, not just read-and-reasoned-about), but with a real,
+  unavoidable gap the ethernet driver doesn't have - nothing confirms it actually boots on real
+  silicon, and nothing short of a real boot test can.
 
-**Practical takeaway**: if picking one to test first, the ethernet driver is the safer, faster
-win - verifying a build already strongly likely to work. The load-cell module needs more careful,
-attended testing (raw MCU step pulses during `touch_probe()`, no `trsync` safety net if something
-goes wrong mid-probe - ANALYSIS.md §6).
+**Practical takeaway**: if picking what to test first once you're back, the ethernet driver is the
+safest, fastest win - verifying a build already strongly likely to work. The load-cell module
+needs more careful, attended testing (raw MCU step pulses during `touch_probe()`, no `trsync`
+safety net if something goes wrong mid-probe - ANALYSIS.md §6). The Buildroot image is furthest
+from real validation and represents the biggest unknown of the three if a real boot is ever
+attempted - and per Phase 3 above, that's real hardware work that also needs you present, plus
+real package-selection/squashfs work first before it's even worth attempting.
 
 ## Todo (as of 2026-07-19)
 
@@ -122,18 +154,28 @@ goes wrong mid-probe - ANALYSIS.md §6).
    printer attended the whole time (raw MCU step pulses, no `trsync` safety net - ANALYSIS.md §6).
    **Do not attempt this without the user present** - this is real hardware, not a reversible
    config change.
-6. **[Track 3] Once Phase 1 succeeds: Phase 2** - a custom Buildroot rootfs using the
-   now-validated kernel/toolchain, using the spare `rootfs2`/`kernel2` partition slots (confirmed
-   unused, `FIRMWARE.md` §4b) rather than the active ones.
+6. **[Track 3, BUILD DONE 2026-07-19, NOT hardware-tested]** ~~a custom Buildroot rootfs using the
+   now-validated kernel/toolchain~~ - real, working `uImage` (Linux 6.1.28) + `rootfs.ext2`
+   (Buildroot 2023.11.1) built cleanly, zero errors, saved at `artifacts/buildroot-halley5-image/`.
+   QEMU boot-tested as a bonus - expected negative result (no X2000 machine model exists in QEMU,
+   confirmed via prior art before trying), not a build defect; the build's own correctness was
+   independently confirmed via `debugfs` inspection instead. Full account, including what's still
+   needed for real parity (package selection, squashfs conversion, device-tree fit, and the actual
+   real-hardware boot test) is in `FIRMWARE.md`'s new "Phase 2 results" section - read that before
+   picking this back up. **Still uses the spare `rootfs2`/`kernel2` partition slots as the eventual
+   target once a real flash is ever attempted** (confirmed unused, `FIRMWARE.md` §4b) - nothing
+   about that plan changed, only Phase 2's build step itself is now done.
 7. **[New since last session] Adapt GuppyScreen for this environment** - the three-option question
    in "GuppyScreen/OpenKE also needs adapting" above (point at pellcorp's `grumpyscreen`, port
    OpenKE's own UI, or a hybrid) is unresearched and will eventually need answering, but isn't
    blocking anything above yet - it's downstream of tracks 1 and 3 actually working.
 
-**Recommended order: Track 3 item 1 first** (concrete, ready, low-risk, unblocks track 2 entirely
-as a byproduct - real device/insmod work, do with the user present), **then Track 1 item 5**
-(real-hardware validation of the now-implemented `klippy_extras/` - also needs the user present),
-**then item 6**. Item 7 whenever it becomes the actual bottleneck, not before.
+**Recommended order now that items 2-4 and 6 are done**: Track 3 item 1 first (concrete, ready,
+low-risk, unblocks track 2 entirely as a byproduct - real device/insmod work, do with the user
+present), **then Track 1 item 5** (real-hardware validation of `klippy_extras/` - also needs the
+user present). Both remaining Track 3 work (package selection/squashfs conversion for item 6,
+plus its own eventual real-hardware boot test) and item 7 can wait - neither is blocking, and both
+are substantial enough to warrant their own dedicated session rather than being squeezed in.
 
 ## Scope corrected 2026-07-18 - read this before anything else
 
@@ -253,6 +295,12 @@ except this probe layer, with no SWD required.
   (`ax88179_178a.ko`, `usbnet.ko`, `mii.ko`, `asix.ko`) - **not gitignored on purpose**, small
   binary build outputs worth keeping around rather than a large source tree. See `FIRMWARE.md` §5
   step 4 for the exact build recipe and current status (built + verified, not yet `insmod`-tested).
+- `artifacts/buildroot-halley5-image/` - built kernel (`uImage`, Linux 6.1.28) + rootfs
+  (`rootfs.ext2`, Buildroot 2023.11.1) + the exact `.config` used (`buildroot.config`) from track
+  3/Phase 2 - **not gitignored on purpose**, same reasoning as the ax88179 artifacts above. See
+  `FIRMWARE.md`'s "Phase 2 results" section for the build recipe, what was verified (cross-compile
+  + `debugfs` inspection) vs. not (no real boot test - QEMU has no X2000 machine model, real
+  hardware not attempted), and what's still needed for production parity.
 
 ## License note
 

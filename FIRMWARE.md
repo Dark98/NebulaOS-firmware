@@ -1504,3 +1504,35 @@ and assumed correct):
 Both fixes were found by actually running the scripts against real state (the existing patched
 tree, the existing built image), not by inspection alone - consistent with this whole project's
 standing practice of verifying rather than assuming.
+
+## 16. USB-Ethernet adapter for the custom 6.6 kernel, and moving the 4.4.94 build to its real home (2026-07-19, later still)
+
+The overview table's "Ethernet (USB adapter)" row only ever referred to Phase 1's build - against
+the real device's *current, stock* 4.4.94 kernel, not this workspace's custom 6.6.18-rt23 rebuild.
+User asked directly whether that build needed redoing for the new kernel, given how different the
+two trees are.
+
+**Real answer, checked rather than assumed**: yes, completely - a 4.4.94-built `.ko` cannot load
+into a 6.6.18-rt23 kernel at all (vermagic and the kernel module ABI are both entirely different
+across that version gap, same reasoning as everywhere else in this project). But that also meant
+the Phase 1 build itself was never really "for" this custom-OS track in the first place - it exists
+to test wired ethernet on the printer *as it runs today*, independent of whether/when this custom
+OS project ever ships. **Moved its real home accordingly**: the build recipe
+(`build-ax88179-mipsel.sh`) and built `.ko` files now live in the main OpenKE project
+(`~/Documents/guppyscreen/scripts/build-ax88179-mipsel.sh` +
+`~/Documents/guppyscreen/scripts/vendor/modules/`), matching that repo's own established
+`build-<thing>-mipsel.sh` + `scripts/vendor/` convention (already used for nginx/Pillow/
+streaming-form-data) - not duplicated across both repos. `artifacts/ax88179-modules/` removed from
+this repo; `FIRMWARE.md` §5 step 4 keeps the original recipe write-up for historical reference.
+
+**Added real `ax88179_178a` support to the custom 6.6 build too**, since it's genuinely useful there
+independent of Phase 1 (the driver source already exists in this kernel tree - it's a standard
+mainline USB-net driver, not Ingenic-specific). Confirmed via the real Kconfig that
+`CONFIG_USB_NET_AX88179_178A`/`CONFIG_USB_USBNET` were both simply unset - **hit the same class of
+bug as `CONFIG_INPUT_TOUCHSCREEN` earlier**: `menuconfig USB_NET_DRIVERS` gates the whole submenu,
+and its own `default USB if USB` Kconfig clause never applied because the base vendor defconfig
+already carries an explicit `# CONFIG_USB_NET_DRIVERS is not set` line, which always wins over a
+`default` clause. Fixed by explicitly adding `CONFIG_USB_NET_DRIVERS=y` to the fragment alongside
+`CONFIG_USB_USBNET=m`/`CONFIG_USB_NET_AX88179_178A=m`. Rebuilt, confirmed `ax88179_178a.ko` (real
+MIPS32 LE, verified via `file`) present in the regenerated `rootfs.ext2` via `debugfs`. Untested on
+real hardware, same as every other peripheral in this track.

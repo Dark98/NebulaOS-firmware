@@ -154,21 +154,24 @@ real package-selection/squashfs work first before it's even worth attempting.
 
 ## Todo (as of 2026-07-19)
 
-1. **[Track 3, IN PROGRESS - resume here] Phase 1 - build + test the ethernet driver.**
+1. **[Track 3, MOVED 2026-07-19] Phase 1 - build + test the ethernet driver.**
    **Build + vermagic verification DONE (2026-07-19)**: `ax88179_178a.ko`, `usbnet.ko`, `mii.ko`,
    `asix.ko` all cross-compiled against `vendor/x2000_kernel` with `CONFIG_USB_NET_AX88179_178A`
    enabled, and all four confirmed to report the exact same
    `vermagic=4.4.94 SMP preempt mod_unload MIPS32_R2 32BIT` string as the real device's own existing
-   modules. Built files are saved at `artifacts/ax88179-modules/` (four `.ko` files) - durable, not
-   inside the gitignored `vendor/` clone. Full build recipe (exact commands, toolchain, gotchas
-   already hit and fixed) is in `FIRMWARE.md` §5 step 4 - read that before redoing any of this work.
-   **Remaining, not yet done**: `scp` the four `.ko` files to the real printer, confirm it's idle
-   with a *fresh* `print_stats` check (do not trust the 2026-07-19 check - it was mid-print and is
-   now stale), then `insmod` them (dependency order: `mii` → `usbnet` → `asix` → `ax88179_178a`) and
-   check `dmesg`/`ip link` for a new interface. Session-only test, low risk either way (see
-   `NETWORKING.md` §2 for why - nothing persists across a reboot unless we deliberately add an init
-   script, which only happens after success is confirmed). This is also track 2's entire remaining
-   fix - one piece of work closes both.
+   modules. **This targets the real device's *current, stock* 4.4.94 kernel, not this workspace's
+   custom 6.6.18-rt23 rebuild** - the two are ABI-incompatible regardless (different kernel version,
+   different module ABI entirely) - so the actual deliverable (wired ethernet on the printer as it
+   runs today) is properly homed in the main OpenKE project instead: the build recipe now lives at
+   `~/Documents/guppyscreen/scripts/build-ax88179-mipsel.sh` and the built `.ko` files at
+   `~/Documents/guppyscreen/scripts/vendor/modules/` - moved there since that's the actively-shipped
+   project this fix is actually deployable against, not duplicated in both repos. **Remaining, not
+   yet done, from that new location**: `scp` the four `.ko` files to the real printer, confirm it's
+   idle with a *fresh* `print_stats` check, then `insmod` them (dependency order: `mii` → `usbnet` →
+   `asix` → `ax88179_178a`) and check `dmesg`/`ip link` for a new interface. This is also track 2's
+   entire remaining fix - one piece of work closes both. Separately, the custom 6.6 rootfs *does*
+   now have its own `ax88179_178a` support too (item 6 below) - built fresh against that kernel,
+   not reusing this 4.4.94 build, since they're not interchangeable.
 2. **[Track 1, DONE 2026-07-19]** ~~Resolve one open design question before writing real
    `klippy_extras/` logic~~ - resolved: target SimpleAF's own environment. Both of pellcorp's
    forks (`klipper`, `kalico`) use the exact stock `klippy/extras/<module>.py` layout, so no
@@ -211,8 +214,11 @@ real package-selection/squashfs work first before it's even worth attempting.
    new Broadcom H5 Bluetooth vendor extension was written from scratch (`FIRMWARE.md` §11) -
    resolving the BT H4-vs-H5 tension architecturally, though still untested on real hardware.**
    **Camera (`ustreamer` + libs) and the Core SoC infra RNG gap were also closed (`FIRMWARE.md`
-   §12)** - every peripheral now has real code built and present in the image. Still remaining for
-   real parity: squashfs+overlay conversion (still plain ext2), the app stack (see item 8 below),
+   §12)**, and **USB-Ethernet (`ax88179_178a`) support was added fresh for this kernel too
+   (`FIRMWARE.md` §16 - a separate build from Phase 1's 4.4.94 one, hit the same "menu gate not
+   enabled by default" Kconfig class of bug as touch's own fix above)** - every peripheral now has
+   real code built and present in the image. Still remaining for real parity: squashfs+overlay
+   conversion (still plain ext2), the app stack (see item 8 below),
    and the actual real-hardware boot test. **Still uses the spare `rootfs2`/`kernel2` partition
    slots as the eventual target once a real flash is ever attempted** (confirmed unused,
    `FIRMWARE.md` §4b) - nothing about that plan changed.
@@ -372,10 +378,13 @@ except this probe layer, with no SWD required.
   `LINUX_OVERRIDE_SRCDIR`. Provenance/exact repo URLs and commit state are recorded in `FIRMWARE.md`
   §4a (4.4.94 tree) and §8 (6.6 tree) - re-clone from there if this workspace ever moves, don't
   assume `vendor/` travels with the repo.
-- `artifacts/ax88179-modules/` - built, vermagic-verified kernel modules from track 3/Phase 1
-  (`ax88179_178a.ko`, `usbnet.ko`, `mii.ko`, `asix.ko`) - **not gitignored on purpose**, small
-  binary build outputs worth keeping around rather than a large source tree. See `FIRMWARE.md` §5
-  step 4 for the exact build recipe and current status (built + verified, not yet `insmod`-tested).
+- **`artifacts/ax88179-modules/` - MOVED 2026-07-19** to
+  `~/Documents/guppyscreen/scripts/build-ax88179-mipsel.sh` +
+  `~/Documents/guppyscreen/scripts/vendor/modules/` - this build targets the real device's
+  *current, stock* 4.4.94 kernel (not this workspace's custom 6.6 rebuild, which needs its own
+  separate build, see `FIRMWARE.md` §16), so it's properly homed with the actively-shipped OpenKE
+  project instead of duplicated across both repos. `FIRMWARE.md` §5 step 4 still has the original
+  build recipe/gotchas write-up for historical reference.
 - `artifacts/buildroot-halley5-image/` - **superseded, kept for reference** - built kernel
   (`uImage`, Linux 6.1.28) + rootfs from track 3/Phase 2's *original* build against
   `Ingenic-community/linux`, before the rebase below. Not deleted since it's still a valid build of

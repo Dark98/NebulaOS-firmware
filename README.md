@@ -30,7 +30,7 @@ All three tracks share the same workspace and a lot of platform-level groundwork
 kernel source, etc.) - that shared material lives in track 3's files/memory, not duplicated across
 all three.
 
-## Status: IN PROGRESS (2026-07-19/20) - Track 3 Phase 2 now has touch/display/WiFi/BT/camera all built and wired into the rootfs, SSH/password/console access-path audited and fixed, and the U-Boot slot-selection mechanism fully resolved via live device forensics (real regression risk found + backed up in the same pass); Track 3 item 1 (insmod) resume point unchanged
+## Status: IN PROGRESS (2026-07-19/20) - Track 3 Phase 2 now has touch/display/WiFi/BT/camera all built and wired into the rootfs, SSH/password/console access-path audited and fixed, the U-Boot slot-selection mechanism fully resolved via live device forensics (real regression risk found + backed up), and both recovery-bundle formats reverse-engineered with no signature enforcement found anywhere in the real boot chain (three independent sources, incl. real third-party USB-boot tooling); Track 3 item 1 (insmod) resume point unchanged
 
 `ke-next`'s M600 fixes were confirmed working on real hardware and `v1.5.0-OpenKE` shipped
 (2026-07-18/19) - the "paused until ke-next real-device testing is done" condition below is now

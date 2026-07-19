@@ -1769,3 +1769,68 @@ happens with our own custom image.
 **Still not done, and still needs the user present**: actually writing our image to `p6`/`p8` and
 flipping the `ota` marker. Do this only after `06-verify.sh`'s build is considered final - and only
 with the factory backup above confirmed present first.
+
+## 20. Both recovery bundle formats reverse-engineered, and the "could our own build ever go through the USB/cloner path" question finally closed
+
+§19 resolved the ota-marker mechanism but left the USB/mask-ROM recovery path's real applicability
+to a custom build open - unclear whether the `.ingenic` bundle format was signed/verified, or
+whether we'd even know how to build one. Downloaded Creality's own official firmware release
+(`CrealityOfficial/Ender-3_V3_KE_Klipper`, tag `V1.1.0.12`) to find out directly.
+
+**Both real bundle formats, now fully reverse-engineered:**
+
+- **The network-OTA `.img` file is a password-protected 7z archive.** The password isn't a fixed
+  secret - it's derived per-board: `mkpasswd -m md5 "${BOARD_SHORT_NAME}C3_7e_bz" -S cxswfile`
+  (documented publicly by the community, traced to pellcorp's own `creality/firmware/create.sh`).
+  Our board's short name is `F005` (confirmed via `/etc/ota_info` and the `.img` filename itself) -
+  computing the derived password and extracting it worked on the first try. Inside:
+  `ota_update.in`, a plain-text manifest listing exactly three payloads (`kernel`/`xImage`,
+  `rootfs`/`rootfs.squashfs`, `rtos`/`zero.bin`) each with **only an MD5 checksum** - no signature,
+  no crypto authentication of any kind, confirming what reading `ota_local_method.sh` already
+  suggested in §19.
+- **The `.ingenic` recovery bundle is a plain, unencrypted ZIP** - no password at all, opens with any
+  standard tool. Contains per-chip-family burn configs (`configs/x2000/*.cfg`, `configs/jz4775/*.cfg`
+  for older Ingenic silicon also supported by the same generic cloner tool) plus, for this exact
+  firmware version, the real payload: `images/xImage`, `images/rootfs.squashfs`,
+  `images/u-boot-with-spl-mbr-gpt.bin`, `images/zero.bin`. A `security/x2000/key.bin` is also present
+  - structurally a real RSA-2048 public key blob (`01 00 01` exponent visible right after a 256-byte
+  modulus) - real evidence the X2000 silicon's secure-boot capability is a genuine feature Ingenic
+  ships tooling for, not fabricated.
+
+**Whether that capability is actually fused on for this consumer product - now well-evidenced,
+though not 100% silicon-certain:**
+
+1. `X2000_PM_20220909.pdf` chapter 42.5 (already fetched, §4b) documents the exact eMMC/MSC boot
+   procedure this device uses (`boot_sel[2:0]=001`, confirmed earlier): "load 24KB code... branches
+   to execute the code" - **no signature-check step described at all**. (The signature-adjacent
+   table names in §42's SPI-NOR/NAND sections turned out, on actually reading them, to describe a
+   16-byte magic+length+CRC7 boot-mode-detection header, not cryptographic verification - and don't
+   even apply to this device's boot mode regardless.)
+2. The live `kernel`/`kernel2` partitions are plain legacy `uImage` format (confirmed via magic bytes
+   in §19) - a format with no capacity to carry a signature at all (that requires FIT images).
+   Whatever `security/x2000/key.bin` is for, it isn't gating the format actually in use here.
+3. **Real, independent, third-party confirmation found via web search**: a community member built
+   and published [`ballaswag/ingenic-usbboot`](https://github.com/ballaswag/ingenic-usbboot) - a
+   working open-source tool that loads arbitrary, unsigned SPL/U-Boot payloads directly via this
+   exact chip family's mask-ROM USB download mode (same `a108:eaef` VID:PID documented in §4b,
+   same staging addresses `0xb2401000`/`0x80100000`), on real K1 (X2000E - the closely related
+   sibling of our X2000) hardware. Its own `--swap-ota` feature is independently the same
+   `ota:kernel`/`ota:kernel2` toggle mechanism found in §19 - real corroboration that finding was
+   read correctly. No secure-boot rejection is mentioned anywhere in real, ongoing community use of
+   this tool. A second, separate repo
+   ([`zerg32/k1-firmware-scripts`](https://github.com/zerg32/k1-firmware-scripts)) documents a
+   whole custom-Debian-kernel repackaging workflow for the `.ingenic` format with zero signing
+   infrastructure anywhere in it - further, independent corroboration.
+
+**Net conclusion**: no enforced signature verification exists anywhere in this device's real boot
+chain, as far as three independent sources (vendor manual, our own live device's image formats, and
+real third-party tooling already exercising this exact path) can show. The residual gap - an actual
+EFUSE secure-boot-fuse register readout - was deliberately not pursued further; real people already
+doing exactly this on the same silicon family is stronger, more practical evidence than one more
+register read would add, and manufacturing a test to nail down the last bit of certainty would be
+a real, unnecessary device risk for no practical gain.
+
+**Bundles extracted for this investigation** (`Ender-3_V3_KE_1.1.0.12.ingenic`,
+`Ender-3_V3_KE_F005_ota_img_V1.1.0.12.img`, and their extracted contents) are kept in the session
+scratchpad, not this repo - Creality's proprietary firmware, not project code, same principle as
+§19's factory-partition backups and the WiFi-credentials decision.

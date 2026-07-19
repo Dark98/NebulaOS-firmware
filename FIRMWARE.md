@@ -596,6 +596,58 @@ search turns up a different picture entirely:
   Kconfig/Makefile/device-tree), not driver authorship. Corrects §6's "highest risk, real driver
   work" call to **LOW risk**.
 
+**Update - actually done and build-verified (2026-07-19, same day), not just identified.** Ported
+Icenowy Zheng's driver into `vendor/buildroot-x2000`'s 6.1.28 kernel tree and got a real,
+correctly cross-compiled `.ko` out of it - zero device writes, pure local Docker cross-compile,
+same toolchain Phase 2 already proved. Concretely, on top of the base patch:
+
+1. Applied the driver + `Kconfig`/`Makefile` wiring cleanly (`patch -p1`, minor line-offset fuzz
+   from the 5.4-to-6.1 version gap, no conflicts).
+2. **Added a real `of_match_table`** (`compatible = "nsiway,ns2009"`) - the original patch only
+   registered a legacy `i2c_device_id`, relying on i2c-core's older name-matching fallback; an
+   explicit DT compatible string is the modern, more robust way to bind this on a real device-tree
+   system.
+3. **Ported the polling mechanism off `input_polldev`** - that whole framework (`devm_input_allocate_polled_device`/`input_register_polled_device`) was removed from mainline
+   Linux between 5.4 (when this driver was written) and our 6.1 target; discovered this the honest
+   way, via a real compile error (`fatal error: linux/input-polldev.h: No such file or directory`),
+   not by inspection alone. Rewrote to the real modern replacement API
+   (`input_setup_polling()`/`input_set_poll_interval()` on a plain `devm_input_allocate_device()`
+   device), following the exact pattern this kernel's own `tps6507x-ts.c` driver already uses for
+   the same kind of simple periodic-poll touchscreen.
+4. **Added the missing `MODULE_LICENSE("GPL")`/`MODULE_AUTHOR`/`MODULE_DESCRIPTION`** - the original
+   patch never had one at all (confirmed by grep - genuinely absent, not just unfamiliar
+   convention), which `modpost` correctly refused to link without.
+5. Hit and fixed two purely environmental build issues along the way, neither specific to this
+   driver: `objtool` needing `libelf-dev`/`libelf1` (a host build dependency, not previously needed
+   because the earlier Phase 1/2 builds happened to not exercise that code path), and one
+   incremental-build invocation accidentally compiling for the host x86_64 instead of MIPS because
+   `ARCH`/`CROSS_COMPILE` weren't re-exported in that particular `docker run` (container env vars
+   don't persist between separate invocations, same class of gotcha as the missing-apt-packages
+   issue Phase 1 already documented) - fixed by driving the rebuild through Buildroot's own
+   `make linux-rebuild` (which supplies the correct, exact flags itself) rather than hand-invoking
+   `make M=drivers/... modules` directly.
+
+**Verified output**: `strings ns2009.ko` reads `vermagic=6.1.28 SMP preempt MIPS32_R1 32BIT`,
+`license=GPL`, `name=ns2009`; `readelf -h` confirms a real MIPS object (`Machine: MIPS R3000`, the
+standard ELF machine type for all MIPS variants). A separate, unrelated incremental-rebuild issue
+(stale `vmlinux`-level SMP symbols - `ingenic_smp_init`/`jz4780_smp_wait_irqoff` - from mixing
+build state across container instances) blocked linking a *complete* kernel image in the same
+pass, but does not affect this module's own build correctness, confirmed independently via the
+module's own successful `CC [M]`/`LD [M]` build steps and the vermagic/license/machine-type checks
+above. A future clean one-shot rebuild (like Phase 2's original) would very likely not hit this.
+
+**Saved durably** at `artifacts/ns2009-driver/`: `ns2009.c` (the final ported driver, all changes
+above applied), `ns2009.ko` (the built module), `upstream-base-patch-lmahmutov-SGW-Openwrt.patch`
+(the original 2017 patch this was based on, for provenance).
+
+**Still needed before this is real on the actual printer** (none of this attempted - real hardware,
+needs the user present): a device-tree node binding `compatible = "nsiway,ns2009"` at the confirmed
+live I2C address (`i2c bus 4, address 0x48` - read via `/sys/bus/i2c/devices/4-0048/name` on the
+live device, §6) with appropriate `touchscreen-*` properties (swapped-axes/inverted-axes/min-max,
+following `Documentation/devicetree/bindings/input/touchscreen/touchscreen.yaml`'s standard
+properties - this board's exact orientation/calibration not yet determined), and then a real
+`insmod`+touch-event test on real hardware.
+
 ### Display/LCD - MEDIUM risk, corrects §6's overly-optimistic framing (the DRM driver found there doesn't actually cover this chip)
 
 §6 above pointed at `drivers/gpu/drm/ingenic/` in the 6.1 `Ingenic-community/linux` tree as "a real,

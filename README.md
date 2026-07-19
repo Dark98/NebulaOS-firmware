@@ -57,6 +57,34 @@ is shared with `ke-next` testing and where a bad flash has no one present to hel
 The code above is untested against real firmware. **Real-hardware validation is the actual next
 step for Track 1** - see the Todo below.
 
+### Readiness comparison: Track 3 item 1 vs. Track 1 - NOT the same level of "done", read before assuming either is close
+
+Asked and answered explicitly 2026-07-19 - recorded here so it never needs re-deriving:
+
+- **Track 3 item 1 (ethernet driver)**: build + **vermagic verification** done - the four `.ko`
+  files report the exact same `vermagic` string as the real device's own existing modules. That's
+  strong, concrete evidence the build is correct; the *only* remaining step is physically running
+  `insmod` on the real device and checking `dmesg`/`ip link`. Genuinely "just needs testing" -
+  low-risk, session-only, one clear pass/fail check.
+- **Track 1 (`klippy_extras/` prtouch_v2 + z_compensate)**: all six files have real, complete
+  logic, and the pure-math half (`prtouch_calibration.py`) has 17 passing unit tests against
+  synthetic data - that part is genuinely verified. But the MCU protocol layer, probe
+  orchestration, and nozzle-wipe code have **never executed against anything real at all** - not
+  just "untested on hardware." There is no mocked/simulated Klipper printer object standing in
+  for a real one anywhere in this codebase or in Klipper itself, so this code has never even been
+  smoke-tested inside an actual `klippy` process, real MCU or otherwise. Calling this "just needs
+  testing" like the driver would overstate its readiness - it's closer to "first real exercise of
+  carefully-read-but-never-run code." There's also a smaller unresolved item: only the *file
+  layout* was confirmed to match SimpleAF's conventions (`klippy/extras/<module>.py`, both
+  `pellcorp/klipper` and `pellcorp/kalico`) - whether anything else about SimpleAF's specific fork
+  needs adjustment (config parsing quirks, module-load order, etc.) is unverified, not just
+  untested.
+
+**Practical takeaway**: if picking one to test first, the ethernet driver is the safer, faster
+win - verifying a build already strongly likely to work. The load-cell module needs more careful,
+attended testing (raw MCU step pulses during `touch_probe()`, no `trsync` safety net if something
+goes wrong mid-probe - ANALYSIS.md §6).
+
 ## Todo (as of 2026-07-19)
 
 1. **[Track 3, IN PROGRESS - resume here] Phase 1 - build + test the ethernet driver.**

@@ -1,0 +1,52 @@
+#!/bin/sh
+#
+# OpenKE addition: starts pellcorp/k1-ustreamer against the real UVC webcam,
+# mirroring Creality's own S50webcam pattern (see FIRMWARE.md sec 6/11) but
+# using an open replacement instead of their closed cam_app + proprietary
+# Helix/Felix encoder. "-c HW" means the webcam's own onboard ISP does the
+# MJPEG compression - this never touches Ingenic's hardware encoder at all,
+# the same approach any generic USB-UVC-webcam Klipper printer uses.
+#
+# /dev/video0 is assumed since this build only enables uvcvideo (no
+# competing internal M2M encoder /dev/videoN nodes exist here, unlike the
+# stock device's /dev/video4) - unconfirmed against real hardware, adjust if
+# the real device enumerates differently.
+
+DEVICE=/dev/video0
+PIDFILE=/var/run/ustreamer.pid
+
+start() {
+	if [ ! -e "$DEVICE" ]; then
+		echo "S50webcam: $DEVICE not present, skipping"
+		return 0
+	fi
+	echo "Starting ustreamer on $DEVICE"
+	start-stop-daemon -S -b -m -p "$PIDFILE" \
+		-x /usr/bin/ustreamer -- \
+		--device="$DEVICE" --format=MJPEG --encoder=HW \
+		--host=0.0.0.0 --port=8080
+}
+
+stop() {
+	echo "Stopping ustreamer"
+	start-stop-daemon -K -p "$PIDFILE"
+}
+
+case "$1" in
+	start)
+		start
+		;;
+	stop)
+		stop
+		;;
+	restart)
+		stop
+		start
+		;;
+	*)
+		echo "Usage: $0 {start|stop|restart}"
+		exit 1
+		;;
+esac
+
+exit 0

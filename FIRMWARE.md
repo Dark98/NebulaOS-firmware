@@ -1228,3 +1228,65 @@ guessed) answers baked into the image - display timing is extracted from the rea
 driver, and Bluetooth has a genuine, from-scratch open-source fix rather than a documented
 limitation. Neither has been verified on real silicon yet - that remains the single biggest
 remaining gap across this entire track.
+
+## 12. Camera rootfs integration + a real Core SoC infra audit (2026-07-19, later still)
+
+User asked to close out the two remaining "not yet done" items from the overview table: camera
+integration and Core SoC infra verification.
+
+### Camera - `ustreamer` now actually in the image, not just a saved artifact
+
+Confirmed first that the kernel side was already solid: `CONFIG_MEDIA_SUPPORT`,
+`CONFIG_MEDIA_CAMERA_SUPPORT`, `CONFIG_MEDIA_USB_SUPPORT`, `CONFIG_VIDEO_DEV`, and
+`CONFIG_USB_VIDEO_CLASS` are all `=y` (built-in, not modules) in the current kernel `.config` -
+`uvcvideo` needs nothing further.
+
+Used Buildroot's `BR2_ROOTFS_OVERLAY` mechanism (simpler than writing a full custom package `.mk`
+for a single prebuilt binary) - created `board/halley5-openke-overlay/` with the `ustreamer` binary,
+its 7 shared library dependencies (with real SONAME symlinks created for each, e.g.
+`libjpeg.so.9 -> libjpeg.so.9.4.0` - confirmed the exact SONAMEs actually needed via `readelf -d
+ustreamer | grep NEEDED`, not guessed), and a new `S50webcam` init script. Rather than guess the
+real CLI flags, read `pellcorp/k1-ustreamer`'s own `options.c` source directly - confirmed real,
+working flags: `--device`/`-d`, `--format`/`-m` (accepts literal `MJPEG`), `--encoder`/`-c` (accepts
+literal `HW`, `CPU`, `M2M-VIDEO`, `M2M-IMAGE`), `--host`/`-s`, `--port`/`-p`. The init script assumes
+`/dev/video0` (this build only enables `uvcvideo`, no competing internal M2M encoder `/dev/videoN`
+nodes exist unlike the stock device's `/dev/video4`) - flagged as unconfirmed against real hardware
+enumeration order.
+
+Set `BR2_ROOTFS_OVERLAY="board/halley5-openke-overlay"` in the top-level Buildroot `.config` (this
+one, unlike the kernel's own `output/build/linux-custom/.config`, is the real persistent
+configuration file - editing it directly is correct, not the anti-pattern from §10's Buildroot
+stamp-tracking bug). Rebuilt with a full `make`, confirmed via `debugfs` that `ustreamer`, all 7
+libraries (symlinks included), and `S50webcam` all landed correctly in the fresh `rootfs.ext2`.
+
+### Core SoC infra - the earlier "believed to just work" claim needed a real check, and turned up one real, fixed gap
+
+Went back to verify the Kconfig symbol names actually referenced in §6/§9's "already has in-tree
+X2000 drivers" claim - and found that claim used **stale symbol names for an unrelated older SoC
+generation** (`jz4740_mmc`/`i2c-jz4780`/`dma-jz4780`, all belonging to the much older first-generation
+JZ SoC family, not X2000/XBurst II at all). Checked the real X2000 SoC-level device tree
+(`x2000.dtsi`) for the actual `compatible` strings this board uses, then traced each to its real
+driver source and Kconfig symbol:
+
+| Function | Real DT compatible | Real driver source | Real Kconfig symbol | Enabled in our `.config`? |
+|---|---|---|---|---|
+| I2C | `ingenic,x2000-i2c` | `module_drivers/drivers/i2c/busses/i2c-ingenic.c` | `CONFIG_I2C_INGENIC` | **Yes** |
+| MMC | `ingenic,sdhci` | `module_drivers/drivers/mmc/host/sdhci-ingenic.c` | `CONFIG_MMC_SDHCI_INGENIC` | **Yes** |
+| DMA | `ingenic,x2000-pdma` | `module_drivers/drivers/dma/ingenic/ingenic_dma.c` | `CONFIG_INGENIC_PDMAC` | **Yes** |
+| RNG/TRNG | `ingenic,dtrng` | `module_drivers/drivers/char/hw_random/ingenic-rng.c` | `CONFIG_INGENIC_HW_RANDOM` | **No - real gap, found and fixed** |
+
+All four real drivers live under this SDK's own `module_drivers/` staging tree (same convention as
+the display/camera drivers already worked with this session), not mainline `drivers/` - the earlier
+claim wasn't wrong about "drivers exist," just imprecise about where and under what names. I2C/MMC/
+DMA were already correctly enabled by the vendor's own `x2000_halley5_v30_linux` defconfig - genuine
+good news, no work needed there. The RNG was the one real gap: driver source present, correctly
+wired into its parent Makefile (`obj-$(CONFIG_INGENIC_HW_RANDOM) += hw_random/ingenic-rng.o`), DT
+node already enabled by the board file (`&dtrng { status = "okay"; }`, matching the live device's
+confirmed `soc_dtrng` module) - but the Kconfig symbol itself simply wasn't turned on. Added
+`CONFIG_INGENIC_HW_RANDOM=m` to the fragment config, rebuilt, confirmed `ingenic-rng.ko` compiles
+clean and lands in `rootfs.ext2`.
+
+**Net effect**: Core SoC infra readiness is now genuinely verified against the real symbol names,
+not assumed from a wrong earlier guess - 3 of 4 pieces were already fine, the 4th (RNG) is now
+fixed too. Camera has real code in the image, not just a saved cross-compiled artifact. Both closed
+out with zero real-device writes - Docker builds plus `debugfs` inspection throughout.

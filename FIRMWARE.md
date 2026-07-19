@@ -710,10 +710,72 @@ family, built on Ingenic's real open framework, not a from-scratch closed thing 
 (other real defconfigs in this same vendor tree) confirm this driver family is used with multiple
 real panel sizes in production Ingenic reference designs, not a one-off.
 
-**Verdict: real work, but a well-understood category of it, not from-scratch authorship or
-reverse-engineering.** The task is **backporting Ingenic's own real, complete, GPLv2
-`CONFIG_FB_INGENIC` driver from the 4.4.94 vendor tree forward to the 6.1 kernel** (a real,
-nontrivial kernel-engineering task - APIs move between major kernel versions - but a well-trodden
-category: "port an existing real driver across a version gap," not "invent one"), then add/confirm
-the exact 480x272 panel timing following the existing example-panel pattern already in hand.
-**MEDIUM risk** - more real work than touch, less uncertain than "hope a driver exists somewhere."
+**Verdict at the time: real work, but a well-understood category of it** - backport Ingenic's real
+GPLv2 `CONFIG_FB_INGENIC` driver from the 4.4.94 vendor tree forward to the 6.1 kernel, a real but
+well-trodden "port across a version gap" task. **Superseded below - a much better base exists.**
+
+### Update (2026-07-19, same day): user found a complete, newer (6.6) X2000 SDK with native display support - verified directly, real, changes the plan
+
+User found and verified (not just described - actually read the source) a public mirror of a much
+newer, more complete Ingenic X2000 SDK:
+[`Llixuma/ingenic-linux-kernel6.6-x2000-v1.0-20250221`](https://github.com/Llixuma/ingenic-linux-kernel6.6-x2000-v1.0-20250221).
+Independently re-verified every claim directly against the actual repo (not taking the write-up on
+faith) - all confirmed real:
+
+- **Real repo** (`reupload from gittea/baidu cloud` - same honest provenance pattern already
+  documented for `Jubian540/x2000_kernel` and friends, not a red flag, just how these vendor SDK
+  drops circulate), 684 MB, pushed 2025-12-21.
+- **A genuinely complete SDK in one place** - top level has `kernel/`, `buildroot/`, `u-boot/`,
+  `device/`, `packages/`, `tools/`, `docs/`, `external/`, `frameworks/`, `prebuilts/` - unlike our
+  current setup (`vendor/x2000_kernel` + `vendor/buildroot-x2000` as two separately-sourced,
+  separately-matched repos), this is one coherent vendor drop.
+- **Real, complete, GPLv2 X2000 display driver, confirmed by reading the actual file**:
+  `kernel/kernel-6.6/module_drivers/drivers/video/fbdev/ingenic/fb_stage/ingenicfb.c` -
+  `Copyright (c) 2020 Ingenic Semiconductor Co., Ltd.`, `MODULE_LICENSE("GPL")`, registers via
+  `of_device_id ingenicfb_of_match[] = { { .compatible = "ingenic,dpu" } }` - **not**
+  `ingenic,x2000-lcd` as might be guessed (this is exactly why earlier compatible-string-based
+  searches for this driver came up empty - the real string is generic across the whole "DPU"
+  display-controller family, not X2000-specific naming). Kconfig symbol `FB_INGENIC_STAGE`
+  ("Version 12 DPU SoC" - same "v12" driver lineage already found in the 4.4.94 tree, now carried
+  forward to a modern kernel).
+- **Real X2000 device-tree node, confirmed by reading `kernel/kernel-6.6/module_drivers/dts/x2000/x2000.dtsi`**:
+  `dpu: dpu@13050000 { compatible = "ingenic,dpu"; reg = <0x13050000 0x10000>; interrupts =
+  <IRQ_LCD>, <IRQ_MIPI_DSI>; dsi-host-reg = <0x10075000>; dsi-phy-reg = <0x10077000>; ... }` - real
+  hardware addresses for this exact SoC's display controller and MIPI-DSI host/PHY blocks.
+- **Real panel driver library** at `.../ingenic/displays/` - dozens of real `panel-*.c` files.
+  Most (`panel-jd9365*.c`, `panel-st7701s*.c`, etc.) are MIPI-DSI panel-controller-chip drivers,
+  but several (`panel-kd035hvfbd037.c`, `panel-kd050hdfia019.c`/`020.c`, etc.) are the same simple
+  parallel-RGB-style panel entries already seen in the older 4.4.94 tree - `panel-kd035hvfbd037.c`
+  specifically appears in **both** trees, confirming real continuity/lineage, not a different
+  unrelated driver family. This board's actual 480x272 panel is almost certainly this simpler
+  parallel/RGB style (cheap small printer displays essentially never use MIPI-DSI), not one of the
+  MIPI examples - so the relevant reference pattern is the simple panel files, not the MIPI-DSI
+  subsystem (`jz_mipi_dsi/`) also present in this tree.
+- **Real Halley5-specific panel device-tree examples exist**: `HALLEY5_MIPI_LCD_FW050.dtsi`,
+  `HALLEY5_MIPI_LCD_ZC50289HSHD02.dtsi` (both MIPI panels, not this board's exact 480x272 panel,
+  but real proof this exact SDK has been used with real Halley5-family hardware).
+- **Also has real `brcmfmac` (WiFi) driver source present** at the same path structure already
+  used successfully in Phase 2 - this SDK isn't just "the display piece," it looks like a complete,
+  internally-consistent replacement for the display-less 6.1 base Phase 2 built against.
+
+**Why this wasn't found earlier**: the compatible string (`ingenic,dpu`) is generic across the
+whole Ingenic DPU-family display controller line, not X2000-specific - none of the earlier
+searches (which reasonably guessed at `ingenic,x2000-lcd`-style naming) would have surfaced it.
+The directory is also named `fb_stage` now, not `x2000_v12` as in the older tree, another reason
+straightforward name-based searching missed it initially.
+
+**This changes the plan materially.** Instead of backporting a driver across a ~7-year kernel gap
+(4.4.94 to 6.1, real, error-prone work spanning many API generations), the real options now are:
+1. **Port just the display driver from this 6.6 tree into the existing 6.1 tree** Phase 2 already
+   built against - a 5-minor-version gap instead of a ~20-version one, far more tractable.
+2. **Rebase Phase 2 onto this newer, more complete 6.6 SDK entirely** - since it already has native
+   X2000 display support plus WiFi, and is a single coherent SDK rather than two separately-sourced
+   repos, this may be the better foundation going forward, not just for display. Real cost: some of
+   Phase 2's already-completed build work (the `artifacts/buildroot-halley5-image/` kernel+rootfs)
+   would need redoing against this new base, and the ported NS2009 touch driver (§7 above) would
+   need re-verifying/re-building against it too.
+
+**Not yet decided which of these two to pursue - a real strategic choice, not a research gap
+anymore.** Both are viable; option 2 is probably the better long-term foundation given how much
+more complete this SDK is, but carries real redo cost for already-completed work. Flagged for an
+explicit decision before more build time is spent, rather than silently picking one.

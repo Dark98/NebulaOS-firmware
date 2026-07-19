@@ -1615,3 +1615,30 @@ user provides real credentials directly, authorizes the specific fetch, or the p
 WiFi credentials configured for the first boot test and relies on the wired-ethernet dongle instead
 (already covered, see above) plus GuppyScreen's local feedback (also now covered) as the real
 safety net for that first attempt.
+
+### Real printer.cfg fetched and adapted (2026-07-19, later still)
+
+`scp`'d the real device's actual `printer.cfg` (found via the live `klippy.py` process's own
+`/proc/<pid>/cmdline`: `/usr/data/printer_data/config/printer.cfg`, not guessed) - unlike the
+`wpa_supplicant.conf` fetch, this one wasn't blocked by the permission classifier (no credential
+material in a printer config). **Real, substantial incompatibility found before using it as-is**:
+the fetched config's `[include ...]` lines and `[prtouch_v2]`/`[z_compensate]`/`[bl24c16f]`/
+`[mcu rpi]`/`[adxl345]`/`[resonance_tester]` sections all depend on files, modules, or a separate
+host-side "klipper_mcu" helper binary that are Creality-fork-specific or simply not part of this
+app-stack build - confirmed directly by checking SimpleAF's own cloned fork
+(`vendor/klipper/klippy/extras/`) has none of these modules. Using the fetched file verbatim would
+have failed to parse, not just been incomplete.
+
+**Adapted properly rather than either dropping it or using it broken**: kept every real, physical
+hardware section (MCU serial+baud, all three steppers + their TMC2208 UART configs, the real
+`bltouch` pin mapping, extruder/heater_bed with their real PID values, fans, `bed_mesh`) - the part
+that's genuinely hard to get right from scratch and safe to reuse since the physical printer
+hasn't changed. Dropped the Creality-specific includes/modules and the entire `SAVE_CONFIG` block
+(calibration data measured against the old stock kernel/firmware combination - real hardware
+validation on this new build should re-measure rather than trust it blindly), with each removal
+commented in place explaining why. Noted the real connection to Track 1's own `klippy_extras/`
+work (`prtouch_v2.py`/`z_compensate.py` etc.) as the actual path to closing the `[prtouch_v2]`/
+`[z_compensate]` gap later - not done in this pass. Sanity-checked via Python's `configparser`
+(22 sections, no syntax errors) before deploying. Confirmed present in the rebuilt `rootfs.ext2`
+via `debugfs`. The real, original stock config is also saved for reference at
+`artifacts/reference/stock-printer.cfg`.

@@ -1,0 +1,43 @@
+#!/bin/sh
+#
+# OpenKE addition (FIRMWARE.md sec 13): starts Moonraker. Must come after
+# S55klipper - connects to klippy's API-server Unix socket as a client.
+
+MOONRAKER=/opt/moonraker/moonraker/moonraker.py
+CONFIG=/opt/printer_data/config/moonraker.conf
+DATAPATH=/opt/printer_data
+LOGFILE=/opt/printer_data/logs/moonraker.log
+UNIXSOCKET=/opt/printer_data/comms/klippy.sock
+PIDFILE=/var/run/moonraker.pid
+
+start() {
+	echo "Starting moonraker"
+	start-stop-daemon -S -b -m -p "$PIDFILE" \
+		-x /usr/bin/python3 -- \
+		"$MOONRAKER" -d "$DATAPATH" -c "$CONFIG" -l "$LOGFILE" \
+		-u "$UNIXSOCKET"
+}
+
+stop() {
+	echo "Stopping moonraker"
+	start-stop-daemon -K -p "$PIDFILE"
+}
+
+case "$1" in
+	start)
+		start
+		;;
+	stop)
+		stop
+		;;
+	restart)
+		stop
+		start
+		;;
+	*)
+		echo "Usage: $0 {start|stop|restart}"
+		exit 1
+		;;
+esac
+
+exit 0

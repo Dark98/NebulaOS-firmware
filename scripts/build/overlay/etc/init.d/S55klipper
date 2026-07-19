@@ -1,0 +1,42 @@
+#!/bin/sh
+#
+# OpenKE addition (FIRMWARE.md sec 13): starts Klipper's host-side "klippy"
+# process. Must come before S56moonraker, since Moonraker connects to
+# klippy's own API-server Unix socket, not the other way around.
+
+KLIPPY=/opt/klipper/klippy/klippy.py
+CONFIG=/opt/printer_data/config/printer.cfg
+APISOCK=/opt/printer_data/comms/klippy.sock
+LOGFILE=/opt/printer_data/logs/klippy.log
+PIDFILE=/var/run/klippy.pid
+
+start() {
+	echo "Starting klippy"
+	start-stop-daemon -S -b -m -p "$PIDFILE" \
+		-x /usr/bin/python3 -- \
+		"$KLIPPY" "$CONFIG" -a "$APISOCK" -l "$LOGFILE"
+}
+
+stop() {
+	echo "Stopping klippy"
+	start-stop-daemon -K -p "$PIDFILE"
+}
+
+case "$1" in
+	start)
+		start
+		;;
+	stop)
+		stop
+		;;
+	restart)
+		stop
+		start
+		;;
+	*)
+		echo "Usage: $0 {start|stop|restart}"
+		exit 1
+		;;
+esac
+
+exit 0

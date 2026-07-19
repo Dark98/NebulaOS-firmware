@@ -325,6 +325,15 @@ except this probe layer, with no SWD required.
 
 ## Layout
 
+- `scripts/build/` - **real, tested, runnable scripts that reproduce the entire Track 3 custom
+  firmware/OS build from scratch** (`FIRMWARE.md` §8-15) - fetching every pinned vendor source,
+  applying `patches/x2000_kernel_6.6-openke.patch`, configuring Buildroot, building the kernel +
+  rootfs, cross-compiling the app-stack extras, and verifying the result, all Docker-only with zero
+  real-device writes. See `scripts/build/README.md` for prerequisites and how to run them - this is
+  the actual way to reproduce this project's build, not just a description of what was done.
+- `patches/x2000_kernel_6.6-openke.patch` - the single real diff covering every kernel-source change
+  this project made (touch/display/WiFi/Bluetooth/the NS2009 port), verified to apply cleanly
+  against a genuinely fresh clone of the pinned kernel SDK commit.
 - `reference/` - real source Creality published for this exact subsystem (a different printer
   line, K1, but confirmed byte-for-byte matching command signatures against our own KE's compiled
   binary via `strings`). GPLv3-licensed, copyright Creality. Fetched from

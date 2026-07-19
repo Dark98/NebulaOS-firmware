@@ -1463,3 +1463,44 @@ SimpleAF's author only got "mixed success" with MIPS QEMU). Step 8 (the real boo
 will actually prove: Klipper reaches a ready/error state without crashing, Moonraker's API
 responds, Mainsail loads in a browser, and the webcam panel streams - still needs the user present,
 unchanged from §13's plan.
+
+## 15. Real, runnable build scripts checked into the repo (2026-07-19, later still)
+
+Everything in §8-14 had only ever existed as commands run interactively against a gitignored
+`vendor/` tree - real work (most notably the Bluetooth `hci_h5.c` patch and every hand-written
+overlay file: init scripts, `nginx.conf`, `printer.cfg`, `moonraker.conf`) had no durable home in
+this repo at all, and would have been lost if `vendor/` were ever wiped. Fixed properly rather than
+just re-documented in prose:
+
+- **`patches/x2000_kernel_6.6-openke.patch`** - a single real `git diff` (using `git add -N` on the
+  two new files so they're captured as part of the same patch, then reset before saving) covering
+  every kernel-source change from §8-11: touch DT wiring, the new display panel driver, the new
+  Bluetooth H5 Broadcom vendor extension, the WiFi/BT/display Kconfig additions, the ported NS2009
+  driver, and the upstream `binder.h` fix. **Verified for real** against a genuinely fresh clone of
+  the pinned kernel SDK commit (not this workspace's already-patched working tree) - applies clean.
+- **`scripts/build/overlay/`** - this project's own small set of hand-written files (three `init.d`
+  scripts, `nginx.conf`, `printer.cfg`, `moonraker.conf`) - not the third-party source/binaries
+  those scripts launch, which the build scripts fetch/cross-compile fresh instead of duplicating as
+  committed binary blobs.
+- **`scripts/build/00` through `06`** - seven numbered scripts reproducing every stage: fetching
+  every pinned vendor source, applying the kernel patch, configuring Buildroot (reusing the
+  already-verified `.config`/fragment/`local.mk` from `artifacts/` rather than re-deriving every
+  option from scratch - deliberately sidesteps the whole class of duplicate-Kconfig-line bug found
+  in §14), the main kernel+rootfs build, cross-compiling the app-stack extras (`chelper`,
+  `streaming-form-data`, `ustreamer`) and assembling the full overlay, the final rootfs build, and
+  `debugfs`/`readelf` verification.
+
+**Two real bugs found and fixed while testing these scripts against real state** (not just written
+and assumed correct):
+1. Two `docker run` invocations in `06-verify.sh` were missing `--user root` - `apt-get install`
+   silently failed under the base image's non-root default user (confirmed directly:
+   `whoami` → `developer`, `apt-get install` → "Permission denied... are you root?"). One of the
+   two happened to "work" anyway only because `debugfs` ships pre-installed in the base image -
+   relying on that would have been fragile, fixed both for real robustness.
+2. `01-apply-kernel-patches.sh`'s "already applied" detection used `git diff --quiet` backwards -
+   it was checking that a file had *no* uncommitted changes, which can never be true for a file
+   that's supposed to already contain our patch. Fixed to just check for our own marker string.
+
+Both fixes were found by actually running the scripts against real state (the existing patched
+tree, the existing built image), not by inspection alone - consistent with this whole project's
+standing practice of verifying rather than assuming.

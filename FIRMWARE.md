@@ -1997,3 +1997,83 @@ the physical boot/reset buttons and MicroUSB port genuinely behave on *this* ind
 documented for the model - a hardware fact, not a software one, only resolvable by the dry run itself.
 That residual gap is the reason the dry run was always the recommended precondition, not an
 afterthought - and it's now the *only* meaningfully unclosed piece, rather than one of several.
+
+## 24. Fixed every non-physical open item - a real rebuild-pipeline bug and a major, previously-unnoticed writable-storage gap, both found and closed
+
+User: fix everything flagged as open besides the physical checks, and verify whether GuppyScreen's
+WiFi panel actually works with this build.
+
+**Real rebuild-pipeline bug found and fixed first.** Forced a full `linux-dirclean` + rebuild to
+guarantee the uart4 fix actually compiled in (confirmed: `uImage` size changed from 6,386,403 to
+6,386,421 bytes). But the very first rebuild **silently did not include any of today's new init
+scripts** - `debugfs` confirmed `S00revert-safety`/`S99confirm-good`/`ota_marker.sh` were all
+`MISS`. Root cause: this repo has two separate overlay locations - the git-tracked template
+(`scripts/build/overlay/`) and the actual directory Buildroot reads from
+(`vendor/buildroot-x2000/board/halley5-openke-overlay/`, gitignored) - and only
+`02-configure-buildroot.sh` syncs one into the other. Adding files to the template alone, without
+re-running that sync, means Buildroot silently keeps using whatever it last saw. Re-ran the sync,
+rebuilt, and this time `debugfs` confirmed every one of today's files present.
+
+**GuppyScreen WiFi panel investigated properly - three real gaps found, all fixed:**
+
+1. **`wpa_supplicant` was built with `CTRL_IFACE`, `CLI`, and both D-Bus options all disabled.**
+   Read GuppyScreen's actual source (`wifi_panel.cpp`/`wpa_event.cpp` in the sibling `guppyscreen`
+   project) to get ground truth rather than guess: `WifiPanel` talks to wpa_supplicant exclusively
+   via the `wpa_ctrl` protocol over a UNIX socket under `/var/run/wpa_supplicant/<iface>` - without
+   `CTRL_IFACE` compiled into wpa_supplicant itself, that socket would never exist, and the entire
+   panel (scan/connect/list networks) would have nothing to talk to. Fixed:
+   `BR2_PACKAGE_WPA_SUPPLICANT_CTRL_IFACE=y` and `BR2_PACKAGE_WPA_SUPPLICANT_CLI=y` (the latter
+   needed by `static_ip.py`'s own `wpa_cli status` call). Verified both survived `make olddefconfig`
+   with exactly one match each (this project's recurring "duplicate line" Kconfig bug class), and
+   confirmed post-rebuild via `strings` on the actual rebuilt `wpa_supplicant` binary that
+   `ctrl_interface` support really compiled in, not just that the `.config` bit was set.
+2. **`static_ip.py` itself - the Static IP panel's entire backend - was missing from the overlay
+   completely.** GuppyScreen hardcodes its path as
+   `/usr/data/printer_data/config/GuppyScreen/scripts/static_ip.py` (`static_ip_panel.cpp:12`, not
+   configurable) - a stock-Creality-style absolute path, not this build's own `/opt/...` convention.
+   Copied the real script from the `guppyscreen` project into the overlay at that exact path
+   (confirmed pure Python3 stdlib, no missing dependencies) rather than relocating GuppyScreen's own
+   hardcoded expectation.
+3. **All required BusyBox applets it shells out to** (`ifconfig`, `ip`, `route`, `udhcpc`,
+   `killall`) **were already present** - checked, not assumed, nothing to fix there.
+
+**A much bigger, previously-unnoticed gap surfaced while checking whether `static_ip.py` could even
+write its own state files**: this build has **no writable storage mechanism at all** when booted
+from `rootfs.squashfs`. `CONFIG_OVERLAY_FS` isn't even built into the kernel, and nothing in any init
+script mounts a persistent writable layer anywhere - meaning `/opt/printer_data`, `/usr/data`, and
+everything else outside of `/tmp`/`/run`/`/dev/shm` would be strictly read-only. Not just the WiFi
+static-IP state - `printer.cfg` edits, Klipper's `SAVE_CONFIG`, Moonraker's own database, and gcode
+uploads would all have failed outright.
+
+The obvious fix (mount `/dev/mmcblk0p9` "rootfs_data" as a writable overlay layer, matching exactly
+what the real device's own stock OS does) was checked and deliberately rejected: `p9` (and `p10`,
+userdata) are **not duplicated per A/B slot** - both are confirmed live-mounted and actively used by
+the *currently-running stock OS* right now. Writing to either from this untested custom image risks
+corrupting the stock environment's own persistent state, for no good reason given this is a first
+smoke test, not a production deployment.
+
+**Fix: `S01tmpfs-datastore`**, a new very-early init script that mounts plain `tmpfs` over
+`/opt/printer_data` and `/usr/data` - after first snapshotting whatever static content the squashfs
+already had there (baked-in `printer.cfg`/`moonraker.conf`, the newly-added `static_ip.py`) into
+`/tmp`, then copying it back in after the tmpfs mount shadows the original content. Verified this
+exact seed/restore logic locally first (simulated the tmpfs-shadow effect by moving the directory
+aside rather than mounting real tmpfs, since that step needs root) - confirmed nested files and
+content survive the round-trip intact. Deliberately ephemeral: nothing here persists across a
+reboot, which is the correct, safe tradeoff for this test - a real, properly isolated persistent
+storage design (a dedicated partition, or a clearly-separated subdirectory of `p10`) is real,
+separate follow-up work, not attempted here. `CONFIG_TMPFS` was already enabled, so no kernel change
+was needed for this fix specifically.
+
+**Rebuilt three times in sequence** (kernel+base rootfs after the uart4/overlay-sync fix,
+`wpa_supplicant` after the CTRL_IFACE/CLI fix, final rootfs after adding `S01tmpfs-datastore`) -
+each verified via `debugfs` before moving on, exactly the discipline this project has used
+throughout rather than trusting a build "probably worked." Final artifacts copied to
+`artifacts/buildroot-halley5-v30-image/` and committed.
+
+**What's still open, and genuinely can't be closed without physical hardware**: whether GuppyScreen's
+WiFi panel and the `ax88179` USB-Ethernet path actually *work*, not just whether their dependencies
+are now correctly present - both need a real boot to answer. The `flash-spare-slot.sh` dry-run
+against the live device was attempted this session and deferred - the printer wasn't reachable at
+its last-known IP, and a full subnet scan found no host answering SSH anywhere, not just an IP
+change - worth a fresh check once the device is confirmed back online, separately from anything
+above.

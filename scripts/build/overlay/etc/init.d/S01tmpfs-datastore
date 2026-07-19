@@ -1,0 +1,47 @@
+#!/bin/sh
+#
+# Ephemeral, tmpfs-backed writable storage for this test image
+# (FIRMWARE.md sec 24). Real gap found while checking whether GuppyScreen's
+# WiFi panel could actually work here: this build has no writable overlay at
+# all when booted from rootfs.squashfs - CONFIG_OVERLAY_FS isn't even built
+# into the kernel, and nothing mounts a persistent writable layer anywhere.
+# Without this, /opt/printer_data and /usr/data would be fully read-only
+# (part of the squashfs), meaning printer.cfg edits, WiFi static-ip state,
+# logs, and gcode uploads would all fail outright.
+#
+# Deliberately NOT using /dev/mmcblk0p9 (rootfs_data) or p10 (userdata) for
+# this - both are confirmed live-mounted and actively used by the
+# *currently-running stock OS* (shared across both A/B slots, not
+# duplicated), so writing to either from this untested custom image risks
+# corrupting the stock environment's own state. tmpfs is the safe choice for
+# a first boot/peripheral smoke test: zero risk to any real partition, at
+# the cost of nothing here surviving a reboot - acceptable and deliberate
+# for what this test is trying to validate. A real, persistent, properly
+# isolated storage scheme (a dedicated partition, or a clearly-separated
+# subdirectory of p10) is real follow-up work, not done here.
+#
+# Runs after S00revert-safety (marker already flipped back to stock) but
+# before anything that needs to read/write these paths - webcam/klipper/
+# moonraker/guppyscreen (S50+) all come later.
+
+seed_tmpfs() {
+	dir="$1"
+	snapshot="/tmp/.seed-snapshot-$$"
+	mkdir -p "$dir"
+	mkdir -p "$snapshot"
+	cp -a "$dir/." "$snapshot/" 2>/dev/null
+	mount -t tmpfs tmpfs "$dir"
+	cp -a "$snapshot/." "$dir/" 2>/dev/null
+	rm -rf "$snapshot"
+}
+
+case "$1" in
+	start)
+		mkdir -p /usr/data/printer_data/config/GuppyScreen/scripts
+		seed_tmpfs /opt/printer_data
+		seed_tmpfs /usr/data
+		;;
+	*)
+		;;
+esac
+exit 0

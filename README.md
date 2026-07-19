@@ -30,7 +30,7 @@ All three tracks share the same workspace and a lot of platform-level groundwork
 kernel source, etc.) - that shared material lives in track 3's files/memory, not duplicated across
 all three.
 
-## Status: IN PROGRESS (2026-07-19) - Track 3 Phase 2 now has touch/display/WiFi/BT/camera all built and wired into the rootfs; Track 3 item 1 (insmod) resume point unchanged
+## Status: IN PROGRESS (2026-07-19) - Track 3 Phase 2 now has touch/display/WiFi/BT/camera all built and wired into the rootfs, SSH/password/console access-path audited and fixed, one real U-Boot slot-selection gap left open; Track 3 item 1 (insmod) resume point unchanged
 
 `ke-next`'s M600 fixes were confirmed working on real hardware and `v1.5.0-OpenKE` shipped
 (2026-07-18/19) - the "paused until ke-next real-device testing is done" condition below is now
@@ -224,10 +224,21 @@ real package-selection/squashfs work first before it's even worth attempting.
    local visual feedback during the first boot test** (`FIRMWARE.md` §17) - not the full
    environment-adaptation project (item 7 below), just a real, working binary + config given the
    risk that losing WiFi on first boot with no local UI means no way back into the device at all.
-   Remaining: the app stack (see item 8 below), WiFi credentials for the first boot (pending a user
-   decision, see `FIRMWARE.md` §17), and the actual real-hardware boot test. **Still uses the spare
-   `rootfs2`/`kernel2` partition slots as the eventual target once a real flash is ever attempted**
-   (confirmed unused, `FIRMWARE.md` §4b) - nothing about that plan changed.
+   Remaining: the app stack (see item 8 below), WiFi credentials for the first boot (decided - kept
+   out of any committed image, see `FIRMWARE.md` §17), and the actual real-hardware boot test.
+   **Still uses the spare `rootfs2`/`kernel2` partition slots as the eventual target once a real
+   flash is ever attempted** (confirmed unused, `FIRMWARE.md` §4b) - nothing about that plan
+   changed. **Access-path audit done 2026-07-19 (`FIRMWARE.md` §18)**: checked SSH/password/console
+   readiness against the real device rather than assuming. Found and fixed three real gaps - no SSH
+   server was enabled (added dropbear), root's password was completely empty (set to a fresh,
+   documented `openke` via Buildroot's own mechanism - deliberately not a copy of the real device's
+   unverified password), and the console getty was on the wrong tty (`ttyS3` configured vs. the real
+   device's own `ttyS4`, confirmed via a fresh `/proc/cmdline` check) - any of these alone would have
+   meant no way back into the device after a first boot with no WiFi. **One real gap found and left
+   open, arguably the most important one**: the real device's cmdline shows `root=/dev/mmcblk0p7` -
+   U-Boot's own environment picks the root partition, not this build. Booting our image from the
+   spare `p8` slot as planned requires U-Boot's environment to be told to use `p8` instead - real,
+   unexplored bootloader-side work, not something Buildroot touches at all.
 7. **[New since last session] Adapt GuppyScreen for this environment** - the three-option question
    in "GuppyScreen/OpenKE also needs adapting" above (point at pellcorp's `grumpyscreen`, port
    OpenKE's own UI, or a hybrid) is unresearched and will eventually need answering, but isn't
@@ -257,6 +268,13 @@ also needs the user present), **then item 8's step 8** (the real app-stack boot 
 the user present, and is now the single most valuable next real-hardware session for Track 3, since
 everything up to that point is built and waiting). Squashfs conversion and item 7's GuppyScreen
 question can wait, both substantial enough to warrant their own dedicated session.
+
+**Before item 8's boot test can actually be attempted**: the real, open U-Boot slot-selection gap
+flagged in item 6 above (`FIRMWARE.md` §18) needs resolving first - U-Boot's environment currently
+points at `root=/dev/mmcblk0p7`, and nothing in this Buildroot build touches that. Investigate the
+real U-Boot environment/bootargs mechanism on this device (likely needs live-device forensics,
+possibly the user's own knowledge of this device's A/B convention) before assuming the boot test
+can even reach our image.
 
 ## Scope corrected 2026-07-18 - read this before anything else
 

@@ -1670,3 +1670,43 @@ configured out of the box. This is fine given this session's own safety-net work
 both real, already-built alternatives for that first attempt. Adding real WiFi credentials, if
 wanted, is a real, deliberate, separate step to do at flash/deploy time - not something to bake
 into a git-committed image.
+
+## 18. Real access-path audit before the boot test - three real gaps found and fixed, one real gap left genuinely open
+
+User asked directly: is SSH enabled, does it share the real device's root password, and what else
+should be compared before attempting a boot. Checked rather than assumed - found real, concrete
+problems:
+
+1. **No SSH server at all was enabled** - neither `dropbear` nor `openssh` was in the config. Fixed:
+   `BR2_PACKAGE_DROPBEAR=y` (matches the real device's own choice of SSH server).
+2. **Root's password field was completely empty** (`root::::::::`) - not a copy of the real
+   device's password, just unset. Confirmed the real device authenticates via *password*, not a
+   key (checked via `ssh -v`'s own negotiation log) - but reading the real password hash to compare
+   was correctly blocked by the permission classifier, same class of protection as the
+   `wpa_supplicant.conf` fetch. **Real decision, matching that same principle**: don't try to
+   replicate an unverified real secret - set a fresh, known, documented test password instead via
+   Buildroot's own `BR2_TARGET_GENERIC_ROOT_PASSWD` mechanism (not a hand-edited `/etc/shadow` -
+   this Kconfig option handles proper hash generation during the build). **Root password for this
+   test image: `openke`.**
+3. **Serial console getty was on the wrong tty** - `BR2_TARGET_GENERIC_GETTY_PORT` was `ttyS3`, but
+   the real device's own `/proc/cmdline` (checked fresh) confirms `console=ttyS4,115200n8` - meaning
+   even if U-Boot passes through the same console argument to our kernel, there would have been
+   *no login prompt at all* on the tty the kernel is actually using, only kernel boot messages.
+   Fixed: `BR2_TARGET_GENERIC_GETTY_PORT="ttyS4"`.
+
+All three verified present in the rebuilt image via `debugfs` (dropbear binary + its own
+`S50dropbear` init script, a real non-empty password hash, `ttyS4` in `/etc/inittab`).
+
+**Also checked and confirmed fine**: `init=/linuxrc` (the real device's cmdline) - our rootfs does
+have a real `/linuxrc` symlink (standard Buildroot convention), so this wouldn't have caused a
+kernel panic regardless.
+
+**One real gap found and left genuinely open, arguably the most safety-critical of all**: the real
+device's full cmdline is `root=/dev/mmcblk0p7 rootfstype=squashfs ro` - meaning U-Boot's own
+environment is what tells the kernel which partition to root from, not anything in our build. If
+our kernel/rootfs get written to the spare `rootfs2`/`kernel2` slots as planned, **U-Boot's own
+environment needs to be told to boot from `p8` instead of `p7`** for the actual boot test to even
+attempt loading our image at all - this is real, unexplored bootloader-side work this track hasn't
+investigated (§9 already flagged "how normal A/B slot selection works" as "only partially
+resolved" - this is the same open question, now confirmed to matter concretely for the boot test
+itself, not just as a background curiosity).

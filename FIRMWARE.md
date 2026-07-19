@@ -552,11 +552,88 @@ suggest. Several pieces that looked like they'd need porting Creality's own clos
 have real, existing, fully-open mainline equivalents already sitting in the kernel source this
 workspace is already using - WiFi (`brcmfmac`) and Bluetooth (`hci_uart` H5) most concretely, with
 the existing firmware files on the device directly reusable in both cases; camera bypasses the
-proprietary encoder entirely via the user's own `k1-ustreamer` suggestion; display has a real
-architecturally-better option available, just unconfirmed for this exact panel. **The touch
-controller (NS2009) is now the single clearest remaining "real new driver work" item** - everything
-else resolves to "enable the right kernel config options and confirm via device-tree work," which
-is a fundamentally different (and more tractable) category of task than "reverse-engineer or port a
-closed driver." None of this has been attempted yet - this section is the reconnaissance that makes
-the next real step (enabling these configs, doing a real build, and testing on real hardware with
-the user present) concrete rather than speculative.
+proprietary encoder entirely via the user's own `k1-ustreamer` suggestion. **Touch and display were
+both looked at in much more depth in §7 below - the touch assessment above turned out too
+pessimistic (a real open driver exists) and the display assessment above turned out based on a
+wrong assumption (the DRM driver found here doesn't actually cover X2000 at all) - §7 supersedes
+both bullet points for these two peripherals specifically, read that section, not this paragraph,
+for the current state of either.** None of this has been attempted yet - this section (and §7) is
+reconnaissance that makes the next real step (enabling configs, doing real backport/integration
+work, and testing on real hardware with the user present) concrete rather than speculative.
+
+## 7. Touch panel + display, looked at in depth (2026-07-19) - is either Creality-specific, or does an open equivalent exist?
+
+User asked specifically, before starting work on either: is the touch driver and the display
+driver genuinely Creality-specific, or is there an open-source equivalent already available? Real
+answer for both, found by checking actual driver source (not just guessing from module names) -
+**neither is a Creality-invented, un-reusable black box, but the two are in meaningfully different
+states.**
+
+### Touch panel (NS2009) - LOW risk, corrects §6's earlier "highest risk" call
+
+§6 above concluded no NS2009 driver existed anywhere and this would likely need real new-driver
+work. That was checked only against this workspace's own two kernel trees
+(`vendor/x2000_kernel`, `vendor/buildroot-x2000`'s `Ingenic-community/linux`) - a broader GitHub
+search turns up a different picture entirely:
+
+- **NS2009 is a real, known chip** (vendor: Nsiway Technology, a genuine resistive touch
+  controller IC), and **a complete, real, GPLv2 Linux driver for it already exists** - written by
+  [Icenowy Zheng](https://github.com/icenowy) (a credible, real upstream Linux kernel contributor,
+  well known for Allwinner SoC work), used across multiple independent embedded-Linux projects for
+  the Allwinner V3S / Lichee Pi Zero / Lichee Pi Nano boards and derivatives (`suda-morris/SUDA_V3S`,
+  `Dean-Chu/linux-v3s`, `EchoHeim/Allwinner-H616`, an OpenWrt sunxi patch series, and others - real,
+  independent, working copies, not one-off toy code).
+- **The driver (212 lines, `drivers/input/touchscreen/ns2009.c`) uses entirely generic Linux APIs**
+  - `i2c_smbus_read_i2c_block_data`, the standard `input_dev`/`touchscreen_properties` framework,
+  `input-polldev` for polling. Nothing Allwinner-specific in it at all - it only needs I2C + the
+  input subsystem, both of which are architecture-agnostic. This means it's genuinely,
+  straightforwardly portable to our Ingenic X2000 6.1 kernel: drop the file into
+  `drivers/input/touchscreen/`, add a `Kconfig`/`Makefile` entry, add an I2C device-tree node
+  matching what's already confirmed live on this printer (`i2cdetect`/`/sys/bus/i2c/devices/*/name`
+  showing `ns2009` present, §6). Not yet merged into real upstream `torvalds/linux` (checked -
+  zero hits), but real, working, and already proven across several other real SoCs.
+- **Verdict: reuse this existing open driver.** This is integration work (get the file in, wire up
+  Kconfig/Makefile/device-tree), not driver authorship. Corrects §6's "highest risk, real driver
+  work" call to **LOW risk**.
+
+### Display/LCD - MEDIUM risk, corrects §6's overly-optimistic framing (the DRM driver found there doesn't actually cover this chip)
+
+§6 above pointed at `drivers/gpu/drm/ingenic/` in the 6.1 `Ingenic-community/linux` tree as "a real,
+modern DRM driver for Ingenic display hardware" and called this "architecturally better, just
+unconfirmed for this exact panel." **That undersold a real gap, found on closer inspection**:
+checking `ingenic-drm-drv.c`'s actual supported-SoC table shows it only covers the **older JZ47xx
+generation** - `jz4740`, `jz4725b`, `jz4760`/`jz4760b`, `jz4770`, `jz4780`. **X2000 (XBurst II) is
+not in this driver's supported chip list at all.** Confirmed further: the X2000 SoC-level device
+tree in this same 6.1 kernel tree (`arch/mips/boot/dts/ingenic/x2000.dtsi`) has **zero**
+LCD/panel/display-controller node of any kind, and the `halley5` defconfig this workspace has been
+building against has no `CONFIG_FB`/`CONFIG_DRM` lines at all. **This specific community kernel
+fork genuinely has no X2000 display support whatsoever** - not disabled, not "needs a device-tree
+tweak," absent.
+
+**The real, better path forward, found in the vendor SDK this workspace already has**
+(`vendor/x2000_kernel`, the exact-kernel-version-matching 4.4.94 tree from Phase 0): real, complete,
+**genuinely open-source (GPLv2, "Copyright (c) 2012 Ingenic Semiconductor Co., Ltd.", confirmed by
+reading the actual file header) X2000 display driver source exists** -
+`drivers/video/fbdev/ingenic/fb_v12/ingenicfb.c` (whose own top-of-file path comment literally
+reads `drivers/video/fbdev/ingenic/x2000_v12/ingenicfb.c` - confirming this is specifically the
+X2000-generation version of Ingenic's fbdev driver, not a generic/unrelated one), enabled via
+`CONFIG_FB_INGENIC=y`. **Confirmed this is exactly the config already proven to match this real
+device**: `halley5_v20_linux_msc_defconfig` (the same defconfig Phase 0 already confirmed matches
+this printer's kernel manual/build) has `CONFIG_FB_INGENIC=y` and a full display config block (11
+lines: `CONFIG_FB`, `CONFIG_FB_CFB_*`, `CONFIG_BACKLIGHT_*`, `CONFIG_LCD_CLASS_DEVICE`, etc.) - this
+driver is real, working, vendor-shipped, on this exact hardware family, not experimental. The
+`fb_v12/displays/` directory (checked in §6) holds real example panel definitions
+(`panel-kd035hvfbd037.c` and others) following a small, consistent pattern - strong evidence
+Creality's own `lcd_general_480x272.ko` is nothing more than one more panel definition in this same
+family, built on Ingenic's real open framework, not a from-scratch closed thing of their own.
+`x2000_fullcolor_24inch_linux_sfc_nand_defconfig` and `x2000_fullcolor_7inch_linux_sfc_nand_defconfig`
+(other real defconfigs in this same vendor tree) confirm this driver family is used with multiple
+real panel sizes in production Ingenic reference designs, not a one-off.
+
+**Verdict: real work, but a well-understood category of it, not from-scratch authorship or
+reverse-engineering.** The task is **backporting Ingenic's own real, complete, GPLv2
+`CONFIG_FB_INGENIC` driver from the 4.4.94 vendor tree forward to the 6.1 kernel** (a real,
+nontrivial kernel-engineering task - APIs move between major kernel versions - but a well-trodden
+category: "port an existing real driver across a version gap," not "invent one"), then add/confirm
+the exact 480x272 panel timing following the existing example-panel pattern already in hand.
+**MEDIUM risk** - more real work than touch, less uncertain than "hope a driver exists somewhere."

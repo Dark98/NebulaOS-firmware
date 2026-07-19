@@ -982,3 +982,148 @@ forward carefully). If it matters later (e.g. to understand whether a failed boo
 would automatically fall back to the working one, or would need the recovery process above), it's
 worth reading U-Boot's actual boot script/environment more directly - via a real device
 (`fw_printenv`-style env partition, if one exists) rather than guessing further from source alone.
+
+## 10. "Build everything first" pass (2026-07-19) - real hardware wiring for touch, display, WiFi, Bluetooth, camera; all zero device writes
+
+By explicit user instruction ("build first, it will minimize testing time"), given how solid the
+recovery path in §9 turned out to be. This is the single densest build session in this track -
+full account below, organized by subsystem, with every real bug hit along the way (there were
+several genuinely new ones, distinct from earlier sessions' gotchas).
+
+### Touch (NS2009) - device-tree wired in
+
+Added a real I2C device-tree node in `module_drivers/dts/x2000/halley5_v30.dts` (the exact board
+DTS this build compiles, confirmed via `DTC module_drivers/dts/x2000/halley5_v30.dtb` in the build
+log and `CONFIG_DT_HALLEY5_V30=y`): `&i2c4 { status = "okay"; ns2009@48 { compatible =
+"nsiway,ns2009"; reg = <0x48>; }; };`. The reference v30 board disables `i2c4` by default (only
+`i2c3` is on) - the real printer's touch controller is confirmed live on bus 4
+(`/sys/bus/i2c/devices/4-0048/name`), so this is a real, necessary board-specific override, not
+optional.
+
+### Display - a real, working (if best-effort) panel driver, not just an enabled Kconfig option
+
+Wrote a genuinely new panel driver, `displays/panel-openke-general-480x272.c`, registered via a new
+`CONFIG_STAGE_OPENKE_GENERAL_480X272` Kconfig entry (modeled on this SDK's own
+`STAGE_ST7701S_RGB666` entry) and wired into the board DTS (`&dpu { status = "okay"; }` plus a
+standalone `openke_panel` platform-device node using `compatible = "openke,general-480x272"`).
+
+**Modeled on this SDK's own `panel-st7701s-rgb666.c`** (a real, complete `LCD_TYPE_TFT` example),
+simplified down to just the three required `lcd_panel_ops` callbacks (`init`/`enable`/`disable`) -
+a plain "general" RGB panel needs no command-interface init sequence the way that example's smart
+controller chip does.
+
+**Hit and fixed two real compile errors along the way, both API-version mismatches between the
+reference example (evidently written against an older kernel) and this actual 6.6 tree**:
+1. Copied `struct lcd_ops` (the generic Linux LCD-class `set_power`/`get_power` framework) where
+   `struct lcd_panel.ops` actually expects `struct lcd_panel_ops` (`init`/`enable`/`disable`) -
+   two genuinely different structs with similar names. Fixed by dropping the generic
+   `lcd_device_register()` path entirely (not required for `ingenicfb_register_panel()` to work)
+   and implementing the three real callbacks directly.
+2. `of_get_named_gpio_flags()`/`enum of_gpio_flags`/`OF_GPIO_ACTIVE_LOW` - all removed from this
+   kernel's `include/linux/of_gpio.h` (only the flag-less 3-argument `of_get_named_gpio()`
+   remains). Fixed by switching to the flag-less call and hardcoding active-high polarity in C
+   (documented as a real, flagged assumption - easy to invert in this one file if wrong).
+
+**Confirmed real, from the live device** (read-only SSH, printer mid-print throughout,
+`/sys/module/lcd_general_480x272/parameters/`): `gpio_lcd_power_en=PC21`, `gpio_lcd_rst=PB16`,
+mode `480x272p-60`. **Not confirmed, best-effort defaults, clearly flagged in the driver's own
+header comment**: exact sync timing (no datasheet found for this specific panel - used a
+widely-documented standard timing for this exact resolution class instead), GPIO active-high/low
+polarity, and color depth/mode (RGB888 assumed). Wrong values here would show as a garbled/
+miscolored/shifted picture, not a hardware risk - genuinely tunable after a real boot, not
+something that needs to be perfect before ever trying.
+
+### WiFi (brcmfmac) and Bluetooth (H5) - both real, both hit real Kconfig gates that needed fixing
+
+Added real hardware wiring in the board DTS: a `wlan_pwrseq` (`compatible = "mmc-pwrseq-simple"`)
+node referencing the same WL_REG_ON GPIO (`gpd 1`) the vendor's own inert `bcmdhd_wlan` node
+already named, referenced from `&msc1` via `mmc-pwrseq = <&wlan_pwrseq>;`. The vendor's own
+`bcmdhd_wlan` node is left in place, unused, in case that out-of-tree driver is ever reconsidered
+instead of mainline `brcmfmac`.
+
+**Real Kconfig fights, each with a genuine root cause found, not just repeated `scripts/config`
+guessing**:
+1. `CONFIG_BRCMFMAC` kept vanishing entirely after `make olddefconfig` (not even appearing as
+   "not set"). Root cause: `CONFIG_WLAN_VENDOR_BROADCOM` (the parent gate, `default y`) wasn't
+   actually resolving to `y` from the prior incremental state - explicitly enabling it first fixed
+   this. (The Kconfig `source` chain itself turned out to be completely standard/unmodified -
+   an earlier, wrong assumption that this SDK had disconnected `brcm80211` from the menu tree was
+   corrected by actually reading `drivers/net/wireless/broadcom/Kconfig`, not just the top-level
+   file.)
+2. Used a non-existent symbol name, `CONFIG_BT_HCIUART_H5` - the real Kconfig name for the H5/
+   three-wire protocol is `CONFIG_BT_HCIUART_3WIRE` ("H5" is the protocol's common name, not its
+   Kconfig symbol).
+3. **A real, unresolved protocol tension, left as-is rather than forced**: mainline's dedicated
+   Broadcom firmware-loading support (`CONFIG_BT_HCIUART_BCM`, which auto-selects `BT_BCM`/
+   `btbcm.c`) only works with the H4 protocol, not H5 - but the original device's own closed module
+   was literally named `hci_uart_h5_kernel_4_4_94.ko`, strongly implying H5 is what this hardware
+   actually needs. Enabled `BT_HCIUART_3WIRE` (H5) to match that precedent; `BT_BCM`'s automatic
+   firmware-patch loading isn't wired in as a result. Real BT function may need additional
+   userspace tooling (`btattach`/`hciattach`) to push the existing `.hcd` patch files over H5, or
+   further kernel-side work - not resolved, flagged honestly rather than guessed.
+
+### A real, structural Buildroot bug found and fixed: incremental `.config` edits were silently discarded
+
+The most consequential bug this session, not specific to any one driver: after enabling WiFi/BT/
+touch via direct `scripts/config`/`make olddefconfig` edits inside `output/build/linux-custom/`,
+a full rebuild reported success, but **the resulting `rootfs.ext2` had none of the new `.ko` files**
+- `output/target/lib/modules/` only had one unrelated stale module. Root cause: Buildroot's own
+package dependency/stamp tracking watches the **override source directory**
+(`LINUX_OVERRIDE_SRCDIR`), not the build directory - editing `.config` directly inside the build
+dir is invisible to Buildroot's tracking, so a later full `make` silently skipped
+`modules_install`/image-copy, reusing stale artifacts from the *previous* successful build.
+
+**The correct, durable fix**: created a real Buildroot kernel config fragment file,
+`board/halley5-openke-fragment.config`, referenced via `BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES` -
+the proper, persistent mechanism for exactly this ("extra config on top of the base defconfig"),
+combined with `make linux-reconfigure` (which properly re-extracts from the override srcdir,
+reapplies defconfig + fragment together, and forces a real rebuild+reinstall) instead of ad-hoc
+`scripts/config` calls in the build directory. This is the same lesson the NS2009 6.6 port already
+hit once (`make linux-rebuild` mentioned in that section) - worth remembering as a standing rule
+for this whole workspace: **kernel config changes for this Phase 2 build must go through the
+fragment file + `make linux-reconfigure`, never direct edits to `output/build/linux-custom/.config`**,
+or they will silently vanish on the next full rebuild.
+
+### Camera (ustreamer) - cross-compiled clean, real MIPS binary
+
+Cross-compiled `pellcorp/k1-ustreamer` (a real port of the open-source µStreamer project, MIT-
+licensed) using its own documented build process - `pellcorp/k1-camera-build` Docker image (a
+different, separate container from this workspace's usual `k1-bash-build`, but confirmed to use
+the exact same toolchain path, `/opt/toolchains/mips-gcc720-glibc229`), `docker.sh all` (builds
+`jpeg-9d`, `libevent`, `libmd`, `libbsd` as static dependencies, then `ustreamer` itself dynamically
+linked against them). Verified real: `file` confirms a genuine MIPS32r2 ELF binary. This is the
+`ustreamer -c HW -m MJPEG` approach from §6 - pulls MJPEG straight from the UVC webcam's own
+hardware compression, never touching Ingenic's proprietary Helix encoder at all.
+
+**Saved** at `artifacts/ustreamer/`: `ustreamer` (the binary) + `lib/` (the four shared libraries
+it dynamically links against - `libjpeg.so.9`, `libevent-2.1.so.7` and its `_core`/`_extra`/
+`_pthreads` variants, `libmd.so.0`, `libbsd.so.0`). **Not yet integrated into the Buildroot rootfs
+image** - these libraries aren't currently part of the Buildroot package set, so the binary would
+need either the libraries added as real Buildroot packages, or copied onto the target filesystem
+directly alongside the binary (e.g. via a rootfs overlay) - real, small remaining integration work,
+not started.
+
+### What's saved, and what's still real, unstarted work
+
+**Saved to `artifacts/`** (all committed, all built with zero real-device writes):
+- `buildroot-halley5-v30-image/` - updated `uImage`/`rootfs.ext2` with all of the above baked in,
+  plus `kernel.config`, `buildroot.config`, `halley5-openke-fragment.config`, `halley5_v30.dts`
+  (the real board DTS with all our additions, for reference/reproducibility).
+- `panel-driver/` - `panel-openke-general-480x272.c` + the built `.ko`.
+- `ustreamer/` - the cross-compiled binary + its shared library dependencies.
+- `ns2009-driver/` - unchanged from the earlier session, still valid (this session didn't touch
+  the touch *driver* itself, only its device-tree wiring).
+
+**Real, unstarted work, in roughly the order it'd make sense to tackle**:
+1. Get `ustreamer` + its shared libraries actually into the Buildroot rootfs (either as proper
+   Buildroot packages, or a rootfs overlay), plus the `S50webcam`-style init script from §6.
+2. Squashfs+overlay conversion, to match the real device's A/B partition format - still plain ext2.
+3. The Klipper/Moonraker/nginx/GuppyScreen application stack - not started at all, the single
+   largest remaining item.
+4. Bluetooth's H4-vs-H5 firmware-loading tension (see above) - needs either real hardware testing
+   to see if H5 alone is sufficient, or more research into loading Broadcom `.hcd` patches over H5
+   without `BT_HCIUART_BCM`'s automatic path.
+5. **The actual real-hardware boot test** - still the only real verification any of this works.
+   Genuinely more ready for this than any previous point in this track (touch, display, WiFi, BT,
+   and camera all have real, built, wired-in code now, not just plans) - but still needs the user
+   present, per the standing rule throughout this entire workspace.

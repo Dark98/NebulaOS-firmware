@@ -30,7 +30,7 @@ All three tracks share the same workspace and a lot of platform-level groundwork
 kernel source, etc.) - that shared material lives in track 3's files/memory, not duplicated across
 all three.
 
-## Status: IN PROGRESS (2026-07-19) - Track 1 (items 2-4) AND Track 3 Phase 2 build both done while user was away; Track 3 item 1 (insmod) resume point unchanged
+## Status: IN PROGRESS (2026-07-19) - Track 3 Phase 2 now has touch/display/WiFi/BT/camera all built and wired into the rootfs; Track 3 item 1 (insmod) resume point unchanged
 
 `ke-next`'s M600 fixes were confirmed working on real hardware and `v1.5.0-OpenKE` shipped
 (2026-07-18/19) - the "paused until ke-next real-device testing is done" condition below is now
@@ -73,6 +73,41 @@ squashfs conversion, device-tree fit, and the real-hardware boot test itself), i
 `FIRMWARE.md`'s "Phase 2 results" section. **Also deliberately not done**: no real hardware
 touched for this either - the build is 100% local Docker compute, and the eventual real-hardware
 boot test is explicitly left for when the user is present.
+
+**Later the same day (2026-07-19), user's explicit call: "build everything first" to minimize
+real-hardware testing time later**, given how solid the recovery-path finding above turned out
+(real physical BOOT/RESET buttons on the Nebula Pad's own PCB, documented Ingenic USB BOOT DEVICE
+recovery mode - confirmed from Creality's own official "Brick Rescue and Wire Brushing" PDF, not
+just inference). Result: touch, display, WiFi, Bluetooth, and camera are now all real, built, and
+(for touch/display/WiFi/BT) actually wired into the `rootfs.ext2`/`uImage` image - not just plans:
+
+- **Touch**: real device-tree wiring (`&i2c4` enabled + `ns2009@48` node) added directly to the
+  compiled board DTS, alongside the already-ported NS2009 driver.
+- **Display**: a genuinely new panel driver (`panel-openke-general-480x272.c`) written from scratch
+  for the ingenicfb "fb_stage" framework, using the real, live-confirmed GPIO pins (PC21 power,
+  PB16 reset) and a best-effort standard 480x272 timing (no datasheet found for the exact part -
+  wrong values would show a bad picture, not damage hardware). Two real compile-time API mismatches
+  found and fixed (wrong ops-struct type; a GPIO-flags API removed from this kernel version).
+- **WiFi/Bluetooth**: real `mmc-pwrseq-simple` DT wiring to the confirmed WL_REG_ON GPIO,
+  `brcmfmac`/`BT_HCIUART_3WIRE` enabled. Found and fixed two real Kconfig gate/naming bugs. One
+  real, honestly-unresolved tension left open: mainline's automatic Broadcom firmware-loading only
+  works with H4, but this device's own module naming implies H5 - left as H5-only for now.
+- **A real, structural Buildroot bug found and fixed**: direct kernel-config edits inside the build
+  directory were silently discarded on the next full rebuild, because Buildroot's package tracking
+  watches the source-override directory, not the build directory - `rootfs.ext2` kept missing new
+  modules despite "successful" builds. Fixed with a real, persistent Buildroot config fragment file
+  (`board/halley5-openke-fragment.config`) + `make linux-reconfigure`. **New standing rule for this
+  workspace: kernel config changes must go through that fragment file, never direct in-place
+  `.config` edits** - the latter are invisible to Buildroot's own tracking and get silently
+  discarded on the next full rebuild.
+- **Camera**: cross-compiled `pellcorp/k1-ustreamer` (real MIT-licensed µStreamer port) cleanly to a
+  confirmed real MIPS32r2 binary - saved as an artifact, not yet integrated into the rootfs image
+  itself (needs its shared libs added as a Buildroot package or rootfs overlay - real, smallish
+  remaining work).
+
+Full subsystem-by-subsystem write-up, including both real compile errors and all three Kconfig
+bugs, is in `FIRMWARE.md` §10. **Deliberately not done, same as always**: no real hardware touched -
+this was 100% local Docker cross-compilation plus documentation reading (the recovery-path PDF).
 
 ### Readiness comparison: all three "done, needs testing" items - NOT the same level of done, read before assuming any of them is close
 
@@ -169,11 +204,15 @@ real package-selection/squashfs work first before it's even worth attempting.
    rebuilt against this new kernel** (two more real, kernel-version-specific fixes found: the
    `i2c_driver.probe` callback signature change, and `CONFIG_INPUT_TOUCHSCREEN`'s own menu gate not
    being enabled by default) - saved at `artifacts/ns2009-driver/`, vermagic-consistent with the
-   new kernel. Full account, including what's still needed for real parity (WiFi/BT config,
-   squashfs conversion, a real panel device-tree entry, and the actual real-hardware boot test) is
-   in `FIRMWARE.md` §8 - read that before picking this back up. **Still uses the spare
-   `rootfs2`/`kernel2` partition slots as the eventual target once a real flash is ever attempted**
-   (confirmed unused, `FIRMWARE.md` §4b) - nothing about that plan changed.
+   new kernel. **WiFi/BT config, a real panel device-tree entry + driver, and touch's own DT
+   wiring were all completed in the 2026-07-19 "build everything first" pass** (see the Status
+   section above and `FIRMWARE.md` §10) - all now built and present in `rootfs.ext2`/`uImage`.
+   Still remaining for real parity: ustreamer rootfs integration (binary cross-compiled and saved
+   as an artifact, not yet added to the image), squashfs+overlay conversion (still plain ext2), the
+   BT H4-vs-H5 firmware-loading tension (left unresolved, H5-only for now), and the actual
+   real-hardware boot test. **Still uses the spare `rootfs2`/`kernel2` partition slots as the
+   eventual target once a real flash is ever attempted** (confirmed unused, `FIRMWARE.md` §4b) -
+   nothing about that plan changed.
 7. **[New since last session] Adapt GuppyScreen for this environment** - the three-option question
    in "GuppyScreen/OpenKE also needs adapting" above (point at pellcorp's `grumpyscreen`, port
    OpenKE's own UI, or a hybrid) is unresearched and will eventually need answering, but isn't
@@ -315,10 +354,22 @@ except this probe layer, with no SWD required.
   **6.6.18-rt23**) + `rootfs.ext2` (Buildroot 2023.11.1) + `buildroot.config`/`kernel.config`
   (exact configs used) + `local.mk` (the source-override mechanism) + `binder-h-fix-note.txt`,
   built against `Llixuma/ingenic-linux-kernel6.6-x2000-v1.0-20250221` (rebased here 2026-07-19 by
-  explicit user instruction - see `FIRMWARE.md` §8). **Not gitignored on purpose**, same reasoning
-  as the ax88179 artifacts above. See `FIRMWARE.md` §8 for the build recipe, the three real build
-  errors hit and fixed, what was verified (cross-compile + `debugfs` inspection) vs. not (no real
-  hardware not attempted), and what's still needed for production parity.
+  explicit user instruction - see `FIRMWARE.md` §8), **updated again the same day (2026-07-19,
+  "build everything first" pass) to include touch/display/WiFi/BT** - now also has
+  `halley5-openke-fragment.config` (the Buildroot kernel-config fragment) alongside the existing
+  configs. **Not gitignored on purpose**, same reasoning as the ax88179 artifacts above. See
+  `FIRMWARE.md` §8 for the original build recipe/errors and §10 for this session's additions, what
+  was verified (cross-compile + `debugfs` inspection) vs. not (no real hardware attempted), and
+  what's still needed for production parity.
+- `artifacts/panel-driver/` - the new best-effort 480x272 display panel driver
+  (`panel-openke-general-480x272.c` + built `.ko`), written from scratch this session for the
+  ingenicfb "fb_stage" framework. See the driver's own header comment for what's confirmed
+  (GPIO pins, resolution/refresh) vs. best-effort (exact timing, polarity, color depth), and
+  `FIRMWARE.md` §10 for the two real compile-error fixes along the way.
+- `artifacts/ustreamer/` - cross-compiled `pellcorp/k1-ustreamer` binary + its shared library
+  dependencies (real MIPS32r2 ELF, confirmed via `file`) - built this session for the camera
+  pipeline, not yet integrated into the Buildroot rootfs image itself (real remaining work, see
+  `FIRMWARE.md` §10's closing list).
 
 ## License note
 

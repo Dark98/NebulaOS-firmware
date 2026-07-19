@@ -1290,3 +1290,63 @@ clean and lands in `rootfs.ext2`.
 not assumed from a wrong earlier guess - 3 of 4 pieces were already fine, the 4th (RNG) is now
 fixed too. Camera has real code in the image, not just a saved cross-compiled artifact. Both closed
 out with zero real-device writes - Docker builds plus `debugfs` inspection throughout.
+
+## 13. App stack plan (2026-07-19, later still) - Klipper/Moonraker/nginx/Mainsail, GuppyScreen deliberately deferred
+
+Planning only - none of this built yet, this section exists so the next session doesn't have to
+re-derive it. Discussed and agreed with the user: prove the OS/kernel/peripheral foundation works
+via Klipper+Moonraker+nginx+**Mainsail** first (verifiable entirely through a browser, no
+GuppyScreen involved), and treat GuppyScreen as a separate, later integration step - it's the one
+component in this stack with real environment coupling (assumes Creality's stock init system and
+file layout), unlike the other three which are just Python/config-driven or already self-built.
+
+**Why Mainsail specifically, and why it closes the camera-verification loop for free**: Mainsail's
+own webcam panel just needs a stream URL - since `ustreamer` (§12) already serves standard MJPEG
+over HTTP via `S50webcam`, pointing Mainsail's webcam config at that stream gives a real, visual,
+end-to-end check of the whole pipeline (kernel, `uvcvideo`, `ustreamer`, networking, UI) without
+needing GuppyScreen's binary, config, or service-integration work at all. Mainsail is also already
+proven in the main OpenKE project (real-world use, no new integration risk), unlike introducing an
+unfamiliar UI.
+
+**Checked before writing this plan** (not assumed): current Buildroot `.config` has **no Python3 and
+no nginx package selected at all** - `BR2_PACKAGE_PYTHON3` is absent, and there's no existing nginx
+binary in `output/target`. Both are real, need-to-add pieces, not something already half-done.
+
+**The plan, in build order**:
+1. **Python3**: add `BR2_PACKAGE_PYTHON3` as a real Buildroot package selection (with pip enabled) -
+   Klipper and Moonraker are both Python projects and need a real interpreter + venv capability on
+   the target, which doesn't exist on this rootfs yet.
+2. **Klipper**: SimpleAF's fork, matching Track 1's already-decided "SimpleAF + the probe" plan (see
+   `project_mainline_klipper_ke_separate.md`) - not vendor Creality's frozen fork. Needs a real
+   `printer.cfg` with this hardware's actual MCU serial path/pin mapping.
+3. **Moonraker**: official `arksine/moonraker`, reusing the already-built, already-ABI-verified MIPS
+   wheels for its two tricky compiled dependencies (`Pillow`, `streaming-form-data`) from the main
+   OpenKE project (`project_moonraker_pillow_wheel.md`) - real prior work, not starting from
+   scratch.
+4. **nginx**: reuse the OpenKE project's own proven `scripts/build-nginx-mipsel.sh` build (real,
+   reproducible, already institutionalized - `project_nginx_selfbuild_proof.md`) rather than
+   re-deriving a fresh Buildroot package config. Configured to serve Mainsail's static build and
+   reverse-proxy `/websocket`+`/server` (the API) to Moonraker.
+5. **Mainsail**: static web build, added via a Buildroot rootfs overlay (same
+   `BR2_ROOTFS_OVERLAY` mechanism already used for `ustreamer` in §12) - no compilation needed, just
+   the built static assets.
+6. **Camera verification**: configure Mainsail's webcam panel (via Moonraker's webcam
+   database/config) to point at `http://<device-ip>:8080/?action=stream` - already live via §12's
+   `S50webcam` script, no new work needed on the camera side itself.
+7. **Init scripts**: new `S`-numbered scripts for Klipper and Moonraker (matching the `S50webcam`
+   pattern), ordered so Klipper starts before Moonraker connects to its Unix socket, and nginx starts
+   independent of both (only needs Moonraker's HTTP port at request time, not at its own startup).
+8. **End-to-end verification** (once built): boot test, confirm Klipper starts (even without a real
+   MCU attached, it should at least reach its own ready/error state cleanly), Moonraker's API
+   responds, Mainsail loads in a browser, and the webcam panel shows a live stream. This is the real
+   "does the whole custom OS work" milestone for this track - explicitly does not require GuppyScreen
+   to be integrated first.
+9. **GuppyScreen** (deliberately last, separate effort): first a minimal manual smoke test (binary +
+   its own shared-library dependencies dropped in via another overlay, config pointed at the local
+   framebuffer/touch device paths and Moonraker's socket, launched by hand over SSH the same way
+   `ustreamer` was smoke-tested) - not the full merge. The real "merge the GuppyScreen project into
+   ke-mainline-klipper's environment" effort (adapting its install/deploy assumptions, described in
+   the README's "GuppyScreen/OpenKE also needs adapting" section) stays a distinct, later, bigger
+   piece of work, not bundled into proving the rest of the stack.
+
+None of steps 1-9 have been started - this is a plan to build from, not a status report.

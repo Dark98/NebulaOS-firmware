@@ -207,23 +207,38 @@ real package-selection/squashfs work first before it's even worth attempting.
    new kernel. **WiFi/BT config, a real panel device-tree entry + driver, and touch's own DT
    wiring were all completed in the 2026-07-19 "build everything first" pass** (see the Status
    section above and `FIRMWARE.md` §10) - all now built and present in `rootfs.ext2`/`uImage`.
-   Still remaining for real parity: ustreamer rootfs integration (binary cross-compiled and saved
-   as an artifact, not yet added to the image), squashfs+overlay conversion (still plain ext2), the
-   BT H4-vs-H5 firmware-loading tension (left unresolved, H5-only for now), and the actual
-   real-hardware boot test. **Still uses the spare `rootfs2`/`kernel2` partition slots as the
-   eventual target once a real flash is ever attempted** (confirmed unused, `FIRMWARE.md` §4b) -
-   nothing about that plan changed.
+   **Display timing was later corrected via real disassembly of the live device's own driver, and a
+   new Broadcom H5 Bluetooth vendor extension was written from scratch (`FIRMWARE.md` §11) -
+   resolving the BT H4-vs-H5 tension architecturally, though still untested on real hardware.**
+   **Camera (`ustreamer` + libs) and the Core SoC infra RNG gap were also closed (`FIRMWARE.md`
+   §12)** - every peripheral now has real code built and present in the image. Still remaining for
+   real parity: squashfs+overlay conversion (still plain ext2), the app stack (see item 8 below),
+   and the actual real-hardware boot test. **Still uses the spare `rootfs2`/`kernel2` partition
+   slots as the eventual target once a real flash is ever attempted** (confirmed unused,
+   `FIRMWARE.md` §4b) - nothing about that plan changed.
 7. **[New since last session] Adapt GuppyScreen for this environment** - the three-option question
    in "GuppyScreen/OpenKE also needs adapting" above (point at pellcorp's `grumpyscreen`, port
    OpenKE's own UI, or a hybrid) is unresearched and will eventually need answering, but isn't
    blocking anything above yet - it's downstream of tracks 1 and 3 actually working.
+8. **[New, 2026-07-19] App stack plan - Klipper/Moonraker/nginx/Mainsail, GuppyScreen deliberately
+   deferred** - planned in `FIRMWARE.md` §13, nothing built yet. Sequencing agreed with the user:
+   prove the whole OS/kernel/peripheral foundation via Klipper (SimpleAF's fork) + official
+   Moonraker (reusing the already-built MIPS `Pillow`/`streaming-form-data` wheels from the main
+   OpenKE project) + nginx (reusing OpenKE's own proven `scripts/build-nginx-mipsel.sh` build) +
+   **Mainsail** first - entirely browser-verifiable, including the camera (Mainsail's webcam panel
+   pointed at `ustreamer`'s already-live MJPEG stream), with **no GuppyScreen dependency at all**.
+   GuppyScreen only gets a minimal manual smoke test after that (binary + its own shared libs via
+   another overlay, launched by hand over SSH) - the real "merge GuppyScreen's install/deploy
+   assumptions into this environment" effort (item 7 above) stays separate and later. Confirmed
+   before writing the plan: this Buildroot config currently has **no Python3 and no nginx package at
+   all** - both are real, not-yet-done pieces.
 
 **Recommended order now that items 2-4 and 6 are done**: Track 3 item 1 first (concrete, ready,
 low-risk, unblocks track 2 entirely as a byproduct - real device/insmod work, do with the user
 present), **then Track 1 item 5** (real-hardware validation of `klippy_extras/` - also needs the
-user present). Both remaining Track 3 work (package selection/squashfs conversion for item 6,
-plus its own eventual real-hardware boot test) and item 7 can wait - neither is blocking, and both
-are substantial enough to warrant their own dedicated session rather than being squeezed in.
+user present). Item 8 (the app stack) is the next real Track 3 build work and doesn't need the user
+present (same Docker-only pattern as everything else in this track) - squashfs conversion and items
+7's GuppyScreen question can wait, both substantial enough to warrant their own dedicated session.
 
 ## Scope corrected 2026-07-18 - read this before anything else
 

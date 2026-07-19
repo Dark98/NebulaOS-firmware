@@ -636,6 +636,19 @@ pass, but does not affect this module's own build correctness, confirmed indepen
 module's own successful `CC [M]`/`LD [M]` build steps and the vermagic/license/machine-type checks
 above. A future clean one-shot rebuild (like Phase 2's original) would very likely not hit this.
 
+**Independently double-checked one detail in this (2026-07-19, separate pass)**: the reported
+vermagic says `MIPS32_R1`, worth verifying since this SoC is documented everywhere else as XBurst
+II/MIPS32**R2**. Traced this to the actual kernel `.config` (not just the module) -
+**`CONFIG_CPU_MIPS32_R1=y`** is genuinely what Phase 2's kernel build used, inherited as-is from
+the `halley5_x2000_defconfig` community config. Compared directly against the real device: both
+the vendor SDK's own matching defconfig (`vendor/x2000_kernel`'s `halley5_v20_linux_msc_defconfig`)
+and the live printer's own currently-loaded modules (`strings /module_driver/*.ko`) confirm
+`CONFIG_CPU_MIPS32_R2` is what this exact chip actually ships with. **Not a functional blocker** -
+R1-compiled code runs correctly on R2-capable silicon (R2 is a superset), so this won't stop
+anything from working - but it means this build isn't using the full instruction set the chip
+actually supports. Worth flipping to `CONFIG_CPU_MIPS32_R2=y` in a future clean rebuild; flagged
+now rather than left silently in.
+
 **Saved durably** at `artifacts/ns2009-driver/`: `ns2009.c` (the final ported driver, all changes
 above applied), `ns2009.ko` (the built module), `upstream-base-patch-lmahmutov-SGW-Openwrt.patch`
 (the original 2017 patch this was based on, for provenance).

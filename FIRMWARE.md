@@ -610,6 +610,21 @@ building against has no `CONFIG_FB`/`CONFIG_DRM` lines at all. **This specific c
 fork genuinely has no X2000 display support whatsoever** - not disabled, not "needs a device-tree
 tweak," absent.
 
+**User pushed back on this ("sounds implausible, did you search online?") - fair, and correct: the
+check above was GitHub code search + two local kernel trees only, not a live web search. Redone
+properly**: web search plus, most importantly, fetching the **actual current mainline
+`torvalds/linux`** device-tree binding directly (not a fork, not a search-engine summary) -
+`Documentation/devicetree/bindings/display/ingenic,lcd.yaml`'s `compatible` enum lists exactly the
+same 6 chips (`jz4740`/`jz4725b`/`jz4760`/`jz4760b`/`jz4770`/`jz4780`) and no X2000 entry, confirmed
+by reading the real file content, not a summary of it. One search engine's AI-generated summary
+claimed "X2000 LCD bindings exist in kernel.org documentation" - checked directly and that claim
+was **not supported by the actual file** (a real example of why synthesized search summaries need
+verifying against source, not trusting at face value). Web search separately confirmed X2000 itself
+(core SoC bits - pinctrl, clocks) landed in mainline starting around Linux 5.10 (Phoronix), but
+nothing turned up for X2000 *display* support anywhere, mainline or community. **Conclusion
+unchanged, now confirmed from three independent sources** (this workspace's kernel tree, live
+upstream kernel.org fetch, web search) rather than two local trees alone.
+
 **The real, better path forward, found in the vendor SDK this workspace already has**
 (`vendor/x2000_kernel`, the exact-kernel-version-matching 4.4.94 tree from Phase 0): real, complete,
 **genuinely open-source (GPLv2, "Copyright (c) 2012 Ingenic Semiconductor Co., Ltd.", confirmed by

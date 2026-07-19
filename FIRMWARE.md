@@ -1120,10 +1120,111 @@ not started.
 2. Squashfs+overlay conversion, to match the real device's A/B partition format - still plain ext2.
 3. The Klipper/Moonraker/nginx/GuppyScreen application stack - not started at all, the single
    largest remaining item.
-4. Bluetooth's H4-vs-H5 firmware-loading tension (see above) - needs either real hardware testing
-   to see if H5 alone is sufficient, or more research into loading Broadcom `.hcd` patches over H5
-   without `BT_HCIUART_BCM`'s automatic path.
-5. **The actual real-hardware boot test** - still the only real verification any of this works.
+4. **The actual real-hardware boot test** - still the only real verification any of this works.
    Genuinely more ready for this than any previous point in this track (touch, display, WiFi, BT,
    and camera all have real, built, wired-in code now, not just plans) - but still needs the user
    present, per the standing rule throughout this entire workspace.
+
+## 11. Closing the two flagged §10 unknowns (2026-07-19, later still) - real disassembly for display timing, real driver code for Bluetooth firmware loading
+
+User pushed on whether everything in §10 was "100% correct," specifically the two flagged weak
+spots (display timing, BT H4/H5). Rather than reason further from memory, went back to real
+sources for both - the live device (read-only, confirmed idle via a fresh `print_stats` check
+first) and the actual kernel source - and closed both out with real changes, not just better
+documentation of the uncertainty.
+
+### Display timing - extracted from the real device's own closed driver via disassembly, not guessed
+
+Host `objdump` has no MIPS backend at all (`can't disassemble for architecture UNKNOWN`) - reused
+the `pellcorp/k1-bash-build` Docker image's own bundled toolchain
+(`/opt/toolchains/mips-gcc720-glibc229/bin/mips-linux-gnu-objdump`) to actually disassemble the
+live device's `lcd_general_480x272.ko` and `soc_fb.ko` (pulled via read-only `scp`, kept in the
+session scratchpad only - proprietary Creality binaries, never committed to this repo).
+
+**Real findings**: `xres=480`/`yres=272` live at struct offsets `+8`/`+12`, confirmed via
+`jzfb_register_lcd`'s own range-check code (`(x-32) < 2016`) - matches the already-known live mode,
+a good sanity check the offset tracking was right. More importantly: **six adjacent struct fields
+(offsets 0x14/0x18/0x1c/0x20/0x24/0x28) all hold the literal value 20**, summed in two groups of
+three in a pattern matching `htotal`/`vtotal` computation from margins+sync widths - strong,
+disassembly-grounded evidence the real panel's left/right/upper/lower margins and hsync/vsync pulse
+widths are uniformly **20**, not the asymmetric generic-reference guess this driver shipped with
+before (margins=2, hsync=41, vsync=10). Field order among the six couldn't be pinned down without
+the real header, but since all six are identical, that ambiguity doesn't matter for correctness.
+`pixclock` isn't a static constant in the .ko at all - it's computed at registration time - so it
+was derived the same way (`htotal(540) * vtotal(332) * refresh(60)` = 10753 in this driver's KHz
+convention) rather than read as a fixed value. A physical-size field pair (53mm, 95mm) was also
+found, closely matching (within 1mm) this driver's already-guessed 54x95mm - reassuring, left
+unchanged. GPIO polarity and color depth/mode remain genuinely unconfirmed - the disassembly didn't
+shed light on those, and both stay cosmetic-risk-only if wrong.
+
+**`panel-openke-general-480x272.c` updated** with these real values (both the vendor-tree copy and
+`artifacts/panel-driver/`), rebuilt clean via `make linux-reconfigure`, and the full image chain
+regenerated (`uImage` + `rootfs.ext2`) to actually bake the corrected module in - confirmed via
+`debugfs`-extracting the module from the fresh `rootfs.ext2` and `sha256sum`-matching it against
+the standalone build output.
+
+**One real build-environment bug hit and fixed along the way**: a full `make` (needed to regenerate
+`rootfs.ext2`, not just the kernel via `make linux-rebuild`) failed with
+`glib-compile-schemas: error while loading shared libraries: libgio-2.0.so.0: cannot open shared
+object file`. Root cause, confirmed via `readelf -d`: that host tool's `RUNPATH` is hardcoded to
+`/src/output/host/lib` from whichever mount path built it originally - this session had been
+mounting the repo at `/br` inside the container, not `/src`. Fixed by mounting at `/src` instead
+(matching the baked-in path) rather than patching `LD_LIBRARY_PATH` (which was tried first and
+broke `fakeroot` instead - `LD_LIBRARY_PATH` overrides are the wrong tool when the real issue is a
+mismatched bind-mount path). **Any future full `make` in this pipeline should mount the
+`buildroot-x2000` directory at `/src`, not `/br` or any other path**, or host tools built in a
+mismatched-path container will fail the same way.
+
+### Bluetooth H4/H5 - a real, new `h5_vnd` for Broadcom, following the pattern already in mainline
+
+Checked the real board DTS to resolve the one genuinely open fork from §10: does this UART have
+hardware flow control at all? **`halley5_v30.dts` wires UART3 (Bluetooth) to `uart3_pc`**
+(`x2000-v12-pinctrl.dtsi`: `<&gpc 25 26>`, a 2-pin TX/RX-only group) - **not** `uart3_pd` (`<&gpd 0
+3>`, the 4-pin group that would carry RTS/CTS). This board genuinely has no hardware flow control on
+this UART, confirmed from the real vendor board file, not inferred. This settles it: H4 was never
+actually viable here, and Creality's own H5 choice was the correct one for this hardware, not an
+arbitrary pick.
+
+Also confirmed via live-device forensics (read-only SSH, printer idle) that Creality's own stock
+firmware doesn't use the kernel `hci_uart`/BlueZ path at all: `/etc/init.d/
+S41bt_bsa_download_firmware` -> `/usr/bin/bt_enable_bsa.sh` runs Broadcom's own proprietary
+userspace "BSA" stack (`bsa_server -d /dev/ttyS3 -p .../BCM4343A1_...hcd`) directly against the raw
+UART, bypassing BlueZ entirely - and BT isn't even running on the idle stock device right now (no
+`bsa_server` process, `hciconfig hci0` reports no such device). Decided **not** to copy that
+approach (still a closed proprietary stack) - instead went for the real open fix.
+
+**Checked `hci_h5.c` directly**: it already has a vendor-extension mechanism (`struct h5_vnd`,
+`open`/`close`/`setup`/`suspend`/`resume` callbacks) used today only for Realtek (`rtl_vnd`) - no
+Broadcom equivalent exists upstream. But `btbcm_initialize()`/`btbcm_finalize()` (`btbcm.c`) are
+themselves transport-agnostic - they only exchange ordinary HCI commands through whatever
+`hci_uart` protocol is active underneath, confirmed by reading `bcm_setup()` in `hci_bcm.c` (the
+existing H4-only path), which calls the exact same two functions. **So the real gap was purely that
+nobody had wired that call into `hci_h5.c`'s vendor-extension mechanism - not a transport-level
+incompatibility.**
+
+**Wrote a real `bcm_vnd` for `hci_h5.c`**, mirroring `rtl_vnd`'s structure exactly:
+`h5_btbcm_setup()` calls `btbcm_initialize()`/`btbcm_finalize()`; `h5_btbcm_open()`/`_close()` mirror
+`h5_btrtl_open()`/`_close()`'s reset-pulse pattern using the generic `enable-gpios` DT property
+(confirmed via `h5_serdev_probe()` that this is optional - `gpiod_set_value_cansleep()` on a NULL
+GPIO is a documented safe no-op, so the code works fine even without a confirmed dedicated BT
+enable/reset pin, which this session did not find - only the shared WiFi-side regulator/reset GPIO
+in `wlan_pwrseq` is confirmed live). New Kconfig symbol `CONFIG_BT_HCIUART_BCM_H5` (selects
+`BT_HCIUART_3WIRE` + `BT_BCM`, same pattern as `BT_HCIUART_RTL`), new `of_match_table` entry
+(`compatible = "openke,bcm4343x-bt"`), and a matching `bluetooth` child node added under `&uart3` in
+`halley5_v30.dts` (no `enable-gpios` property - genuinely unconfirmed, left absent rather than
+guessed).
+
+**Built and verified real**: compiled clean via `make linux-reconfigure`, `btbcm.ko` pulled in
+automatically as a separate module, and `depmod`'s own generated `modules.dep` confirms the real
+dependency (`hci_uart.ko: btbcm.ko`) - proof the symbol linkage between our new code and
+`btbcm_initialize()`/`btbcm_finalize()` resolved correctly. Both `hci_uart.ko` and `btbcm.ko`
+confirmed present in the regenerated `rootfs.ext2` via `debugfs`. **Completely untested against
+real hardware** - no MIPS/X2000 boot test has been possible in this workspace, same caveat as
+everything else here. The actual behavior (does the real firmware-download handshake succeed over
+H5 the way it does over H4) is genuinely unknown until a real boot test.
+
+**Net effect**: both of the two flagged unknowns from §10 now have real, built, evidence-based (not
+guessed) answers baked into the image - display timing is extracted from the real hardware's own
+driver, and Bluetooth has a genuine, from-scratch open-source fix rather than a documented
+limitation. Neither has been verified on real silicon yet - that remains the single biggest
+remaining gap across this entire track.

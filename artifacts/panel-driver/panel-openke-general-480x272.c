@@ -18,17 +18,40 @@
  *   gpio_lcd_rst      = PB16
  *   mode              = 480x272p-60 (confirmed via /sys/class/graphics/fb0/modes)
  *
- * NOT CONFIRMED, best-effort defaults pending real-hardware verification:
- *   - Exact sync timing (porches/pulse widths/pixel clock) - no datasheet for this
- *     specific panel was found; the values below are a widely-documented standard
- *     timing seen across many vendor reference designs for this exact resolution
- *     class (480x272 4.3" RGB TFT), not a value read off this specific panel.
+ * CONFIRMED, later, by pulling the real device's own closed lcd_general_480x272.ko
+ * and soc_fb.ko off the live printer (read-only scp) and disassembling them with a
+ * real MIPS-capable objdump (host objdump has no MIPS backend; used the
+ * pellcorp/k1-bash-build Docker image's toolchain instead) - not a datasheet, but
+ * real bytes/code from the actual working driver for this exact panel:
+ *   - xres=480, yres=272 at struct offsets +8/+12 - confirmed via jzfb_register_lcd's
+ *     own range-check code (`(x-32) < 2016`), matching the live fb0 mode exactly.
+ *   - Six adjacent struct fields (offsets 0x14/0x18/0x1c/0x20/0x24/0x28) all hold the
+ *     literal value 20, and are summed in pairs inside jzfb_register_lcd in a pattern
+ *     consistent with computing htotal/vtotal from margins+sync widths - strong
+ *     circumstantial evidence the real left/right/upper/lower margins and hsync/vsync
+ *     pulse widths are uniformly 20, not the asymmetric generic-reference values this
+ *     driver used before (margins=2, hsync=41, vsync=10). Field order among the six
+ *     couldn't be fully pinned down without the real header, but since all six are
+ *     identical, that ambiguity doesn't actually matter here.
+ *   - pixclock below is DERIVED from htotal=480+3*20=540, vtotal=272+3*20=332, and the
+ *     confirmed 60Hz refresh (`htotal*vtotal*refresh`), not read directly as a static
+ *     constant - the real driver computes this same value at registration time rather
+ *     than storing it, per the disassembly.
+ *   - Struct offset 0x34 (lcd "mode"/type selector) reads as 0, consistent with this
+ *     driver's own LCD_TYPE_TFT=0 assumption.
+ *   - A physical-size field pair (53mm, 95mm) was also found nearby, closely matching
+ *     (within 1mm) this driver's already-guessed 54x95mm - left unchanged.
+ *
+ * STILL NOT CONFIRMED:
  *   - GPIO active-high/low polarity - hardcoded active-high here (this kernel's
  *     of_get_named_gpio() doesn't return the DT flags cell), easy to invert in
  *     this file if the panel powers up backwards.
  *   - Color depth/mode (RGB888 assumed here - could be RGB565/RGB666 on the real
  *     panel; wrong here would show as color-channel banding/miscoloring, not
  *     hardware risk).
+ *   - The exact semantic identity of each of the six offset-20 fields (which is
+ *     left_margin vs. hsync_len, etc.) - moot for correctness since all six carry
+ *     the same value, but means this mapping is evidence-based, not header-verified.
  *
  * This file may be distributed under the terms of the GNU GPLv2 license.
  */
@@ -88,8 +111,10 @@ static struct lcd_panel_ops panel_ops = {
 	.disable = panel_disable,
 };
 
-/* Best-effort standard timing for a 480x272 4.3" RGB TFT panel - see the
- * module header comment. pixclock is in KHz, matching this driver's own
+/* Timing derived from disassembling the real device's own lcd_general_480x272.ko/
+ * soc_fb.ko (see the module header comment) - margins/sync widths are the real
+ * device's own values (uniformly 20), pixclock is computed from those via the
+ * standard htotal*vtotal*refresh relationship, matching this driver's own KHz
  * convention (confirmed against panel-st7701s-rgb666.c), not the picosecond
  * convention plain Linux fb.h normally uses. */
 static struct fb_videomode panel_modes[] = {
@@ -98,13 +123,13 @@ static struct fb_videomode panel_modes[] = {
 		.refresh        = 60,
 		.xres           = 480,
 		.yres           = 272,
-		.pixclock       = 9200,
-		.left_margin    = 2,
-		.right_margin   = 2,
-		.upper_margin   = 2,
-		.lower_margin   = 2,
-		.hsync_len      = 41,
-		.vsync_len      = 10,
+		.pixclock       = 10753,
+		.left_margin    = 20,
+		.right_margin   = 20,
+		.upper_margin   = 20,
+		.lower_margin   = 20,
+		.hsync_len      = 20,
+		.vsync_len      = 20,
 		.vmode          = FB_VMODE_NONINTERLACED,
 		.flag           = 0,
 	},

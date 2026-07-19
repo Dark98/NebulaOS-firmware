@@ -96,6 +96,22 @@
 	status = "okay";
 	pinctrl-names = "default";
 	pinctrl-0 = <&uart3_pc>;
+
+	/* Real Ender 3 V3 KE hardware: BCM4343A1 WiFi+BT combo chip's BT side,
+	 * confirmed live on /dev/ttyS3 via Creality's own bt_enable_bsa.sh
+	 * (see FIRMWARE.md). uart3_pc is a 2-pin (TX/RX only) pinmux group -
+	 * this board has no hardware RTS/CTS wired for this UART, confirmed
+	 * against x2000-v12-pinctrl.dtsi's uart3_pd (4-pin) alternative not
+	 * being used here - the real reason Creality used H5 instead of H4,
+	 * and why this node uses our own openke,bcm4343x-bt H5 vendor glue
+	 * (drivers/bluetooth/hci_h5.c) rather than the H4-only upstream
+	 * Broadcom path. No enable-gpios property: no dedicated BT reset/
+	 * enable pin has been confirmed live (only the shared WiFi-side
+	 * regulator/reset in &msc1's wlan_pwrseq below is confirmed) - the
+	 * driver treats this as optional and skips GPIO toggling if absent. */
+	bluetooth {
+		compatible = "openke,bcm4343x-bt";
+	};
 };
 
 &cpufreq {

@@ -2589,3 +2589,91 @@ hardware or real vendor build-system source, none guessed. Boot now gets further
 kernel loads, decompresses, mounts real root filesystem, hands off to init. The remaining problem is
 narrower than everything before it - an early userspace crash, not a kernel/hardware issue. Device
 safely back on stock.
+
+## 33. The init crash traced to a real, well-understood cause - kernel module-loading exhaustion, not a mystery hardware reset
+
+**First real lead: comparing against our own earlier panic behavior.** `CONFIG_PANIC_TIMEOUT=10` is
+set, and a genuine software `panic()` earlier this session (§32's `VFS: Unable to mount root fs`)
+printed its message clearly and waited the full 10 seconds before rebooting, exactly as configured.
+The §32 `/linuxrc` crash showed neither - zero text, zero delay, straight to a fresh SPL banner. That
+comparison is conclusive: a real `panic()` call always goes through the same code path and would
+print *something*; this didn't, meaning it never went through the kernel's own panic handling at
+all - a genuine hardware-level reset, not a software crash.
+
+**First real fix attempt: explicitly disable the watchdog at driver-probe time.** This board's stock
+firmware runs `soc_watchdog` (confirmed via `lsmod`), and our own `ingenic_wdt.c` driver never
+touches the hardware enable bit unless something opens `/dev/watchdog` (nothing on our build does) -
+if U-Boot/SPL ever left the counter running from an earlier stage, nothing in this kernel would ever
+stop it. Added an unconditional `writeb(0x0, ...COUNTER_ENABLE)` at probe time - the earliest point
+our kernel could possibly disarm it. **Tested for real: the reset still happened, but much later**
+(~29s instead of ~14s) and the boot was clearly still bootlooping through the same driver-probe
+sequence each cycle. Real, honest result: this delayed rather than fixed it, meaning the specific
+`ingenic_wdt` peripheral probably isn't the actual culprit (kept the fix anyway - defensively
+correct regardless of whether it's load-bearing, and free of downside).
+
+**Direct hardware check, at the user's suggestion, rather than continuing to theorize**: read the
+real watchdog counter-enable register directly on the live, healthy, currently-running stock device
+via `devmem 0x10002004` - it reads `0x00000000` (not counting). Combined with stock's own 40+
+`/etc/init.d/` scripts never once mentioning `watchdog`/`wdt`, and SPL being the *identical* binary
+for both stock and custom boots - this meaningfully weakens the idea that SPL arms this specific
+peripheral as a boot-failure safety net at all.
+
+**The real, conclusive diagnostic: force `init=/bin/sh` via the kernel's own command line, bypassing
+U-Boot entirely.** Traced the actual mechanism in `arch/mips/kernel/setup.c` before touching
+anything: with `CONFIG_MIPS_CMDLINE_FROM_DTB=y` kept as-is (preserving the real, U-Boot-injected
+console/mem/root/rootfstype values - confirmed the DTS's own compiled-in `bootargs` block is dead,
+commented-out reference text, so U-Boot must be injecting the *real* command line into the runtime
+DTB directly, a completely standard, common pattern), adding `CONFIG_CMDLINE_BOOL=y` +
+`CONFIG_CMDLINE="init=/bin/sh"` gets unconditionally appended at the end whenever
+`MIPS_CMDLINE_BUILTIN_EXTEND` is unset - and Linux's own `init=` parsing takes the last occurrence,
+so this safely overrides only the init target.
+
+**Real result: a genuine, informative kernel panic, first try.**
+`Kernel panic - not syncing: Requested init /bin/sh failed (error -8)` - printed cleanly, with the
+full 10-second delay, exactly as `CONFIG_PANIC_TIMEOUT` dictates. Immediately before it:
+`request_module: modprobe binfmt-464c cannot be processed, kmod busy with 50 threads for more than 5
+seconds now`. This is the real root cause candidate, not a guess:
+
+- `error -8` is `ENOEXEC`. The kernel's `search_binary_handler()` only falls through to
+  `request_module("binfmt-%04x", ...)` as a last resort, when *every already-registered* format
+  handler - including the built-in ELF one (`CONFIG_BINFMT_ELF=y`, confirmed already set, not a
+  module) - fails to recognize the file.
+- Directly inspected the actual `/bin/sh` binary from our built rootfs (`debugfs` extraction +
+  `readelf`): a completely valid MIPS32r2 o32 ELF, `Type: DYN`, **no `PT_INTERP` segment at all** -
+  a fully static executable needing no runtime dynamic linker. The file itself is not corrupt and
+  not the problem.
+- The real, load-bearing clue is `kmod busy with 50 threads` - a genuine kernel-reported count of
+  concurrently outstanding module-load helper threads, all stuck, *at the exact moment* our own
+  requested exec needed to also use that same infrastructure. This points at a real, mechanistic,
+  fixable class of bug: many of this build's drivers are configured as loadable modules (`=m`) -
+  touchscreen, display panel, WiFi, Bluetooth, RNG, USB-ethernet - and if enough of them attempt
+  `request_module()`-based autoloading via device/hotplug matching right as the kernel finishes
+  enumerating hardware, with no working `modprobe`/hotplug userspace daemon running yet (a genuine
+  chicken-and-egg problem - that daemon itself needs `init` to have started successfully first),
+  those requests can saturate the kernel's own limited kmod worker-thread pool and start blocking
+  *any* further `request_module()`-dependent operation, including - as seen here - resolving how to
+  execute a plain ELF binary that would otherwise load instantly.
+
+**This closes out tonight's real, standing question**: the §32 silent instant-reset was never a
+mysterious hardware fault. It's a genuine kernel module-loading exhaustion at the precise moment
+init tries to start - our real `/linuxrc`/init almost certainly hits the identical `ENOEXEC`
+failure, just via the kernel's default multi-candidate init search path (trying `/sbin/init`,
+`/etc/init`, `/bin/init`, `/bin/sh` in sequence, all aliasing to the same busybox binary, all
+failing the same way) rather than the single, explicit target this diagnostic forced - which is
+also a very plausible reason the real failure produces no visible panic message at all: exhausting
+every candidate before finally panicking with a *different* message (`No working init found.`)
+could itself be starved of the same kmod thread pool needed to even get that far cleanly, or the
+console output itself could be getting starved/delayed by the same thread exhaustion.
+
+**Concrete, well-scoped next step, not yet attempted**: convert some or all of the currently-`=m`
+drivers to built-in (`=y`) - touchscreen (`ns2009`), display panel, and RNG are small, single-purpose
+drivers on a fixed-hardware embedded product with no real benefit to remaining loadable modules;
+WiFi/Bluetooth/USB-ethernet could plausibly follow the same reasoning, or alternatively investigate
+whether the kernel's own module-autoload matching can be tuned/delayed until after `modprobe`
+userspace is actually available. Diagnostic `init=/bin/sh` override removed before committing -
+purely temporary, not part of the real build.
+
+Full boot log: `vendor/device-backups/init-bin-sh-diagnostic-boot-attempt.log`. Device safely
+recovered to stock (`panic_timeout`'s own auto-reboot, no button-press needed this time - the
+marker naturally stayed on `kernel2` since `S00revert-safety` never got a chance to run, requiring
+one more manual mask-ROM recovery cycle to get back to `kernel`).

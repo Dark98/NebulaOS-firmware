@@ -664,7 +664,7 @@ index 000000000..e32ed2657
 +MODULE_LICENSE("GPL");
 +MODULE_DESCRIPTION("OpenKE best-effort panel driver for the Ender 3 V3 KE Nebula Pad's 480x272 panel");
 diff --git a/kernel/kernel-6.6/module_drivers/dts/x2000/halley5_v30.dts b/kernel/kernel-6.6/module_drivers/dts/x2000/halley5_v30.dts
-index 9be859853..035dbbcba 100644
+index 9be859853..47b8343b7 100644
 --- a/kernel/kernel-6.6/module_drivers/dts/x2000/halley5_v30.dts
 +++ b/kernel/kernel-6.6/module_drivers/dts/x2000/halley5_v30.dts
 @@ -96,6 +96,36 @@
@@ -704,7 +704,26 @@ index 9be859853..035dbbcba 100644
  };
  
  &cpufreq {
-@@ -136,7 +166,37 @@
+@@ -127,8 +157,17 @@
+ };
+ */
+ 
++/* Real, safety-relevant fix (found while answering a hardware question about
++ * connecting to the J1 UART header, 2026-07-20): this was GPIO_VOLTAGE_1V8,
++ * but the real device's own live device tree (pulled via /sys/firmware/fdt
++ * earlier this project) shows Port A is actually provisioned for 3.3V
++ * (ingenic,gpa_voltage = <0x02> = GPIO_VOLTAGE_3V3, decoded from the real
++ * enum in ingenic-gpio.h). A voltage-domain mismatch on this bank is a
++ * plausible (not confirmed) contributor to the first real boot attempt's
++ * early failure - independent of that, it's simply wrong for the real
++ * hardware and needed fixing regardless. */
+ &pinctrl {
+-	ingenic,gpa_voltage = <GPIO_VOLTAGE_1V8>;
++	ingenic,gpa_voltage = <GPIO_VOLTAGE_3V3>;
+ };
+ 
+ &i2c3 {
+@@ -136,7 +175,37 @@
  };
  
  &i2c4 {
@@ -743,7 +762,7 @@ index 9be859853..035dbbcba 100644
  };
  
  
-@@ -200,6 +260,17 @@
+@@ -200,6 +269,17 @@
  	keep-power-in-suspend;
  	ingenic,removal-manual;
  
@@ -761,7 +780,7 @@ index 9be859853..035dbbcba 100644
  	bcmdhd_wlan: bcmdhd_wlan {
  		 compatible = "android,bcmdhd_wlan";
  		 gpio_wl_reg_on = <&gpd 1 GPIO_ACTIVE_HIGH INGENIC_GPIO_NOBIAS>;
-@@ -207,6 +278,13 @@
+@@ -207,6 +287,13 @@
  	};
  };
  

@@ -2233,3 +2233,51 @@ distinguish "U-Boot never loaded the kernel" from "the kernel crashed in the fir
 from any number of other early-boot failure causes. The `J1: GND RX TX` header found in §25 is
 sitting there, physically present, unused so far - wiring it up before the next attempt is the
 difference between another blind guess and an actual diagnosis.
+
+## 27. Serial console wired up and proven - a real reference boot log captured, and a real voltage bug fixed along the way
+
+**A real hardware-safety question led to a real bug fix before anything was ever connected.**
+Checking what voltage to use for `J1` (an FTDI232 adapter, 3.3V vs 5V) turned up a genuine
+discrepancy: this project's own custom kernel DTS had Port A (the bank `J1`'s pins live on) set to
+`GPIO_VOLTAGE_1V8`, but the real device's own live device tree (pulled via `/sys/firmware/fdt` back
+in §19) shows the actual hardware runs Port A at `GPIO_VOLTAGE_3V3` (raw value `0x02`, decoded
+against the real enum in `ingenic-gpio.h` - not assumed). Fixed in
+`module_drivers/dts/x2000/halley5_v30.dts`, patch regenerated and reverified against the pristine
+base commit. This may or may not have contributed to §26's boot failure, but it was simply wrong for
+the real hardware regardless and needed fixing.
+
+**First serial attempt: nothing, even on a confirmed-working reboot.** Wired an FTDI232 to `J1`
+(detected instantly on this workstation as a real `0403:6001` FT232 device at `/dev/ttyUSB0`),
+configured 115200 8N1, and captured while rebooting the currently-stock device (known to boot
+successfully - this was deliberately used as a wiring test before ever trying it against anything
+uncertain). Zero bytes captured. Diagnosed correctly from first principles rather than guessed at
+random: zero data (not garbled data) on a *known-good* boot points at the wiring, not voltage - most
+likely RX/TX connected straight instead of crossed, since that leaves both ends listening with
+nothing actually driving the line.
+
+**After crossing RX/TX: complete success.** Captured a full 506-line boot log of the real stock
+4.4.94 kernel, saved permanently at `vendor/device-backups/stock-boot-reference-log.txt` (gitignored
+- the log itself is fine to keep, but it's a real capture of proprietary boot output, same handling
+as everything else device-derived). This is now a genuine reference baseline this project never had
+before, and it's rich with real, useful confirmation:
+
+- `U-Boot SPL 2013.07 (Oct 09 2023 - 16:41:52)` - the real, exact U-Boot version, printed live for
+  the first time (previously only inferred from `ballaswag/ingenic-usbboot`'s own bundled boot log
+  screenshot).
+- `vendonvram sn: ... nvram mac: FCEE11004C14 ... nvram model: F005` - U-Boot itself printing the
+  exact same `sn_mac` partition data independently pulled via the mask-ROM path in §25 (real
+  cross-validation, two completely different access methods agreeing).
+- `Uncompressing Linux...` / `Ok, booting the kernel.` immediately followed by
+  `Linux version 4.4.94 ...` - the precise checkpoint that separates "U-Boot successfully found and
+  jumped to the kernel image" from "it never got that far." This is exactly the missing piece from
+  §26 - the next attempt at the custom kernel will show either this same sequence (meaning the
+  failure is in our own kernel's early boot, past U-Boot's hand-off) or nothing at all past the SPL
+  banner (meaning U-Boot itself never successfully loaded/jumped to `kernel2`).
+- A benign `CPU0 RESET ERROR PC:8001E084` message appears even on this fully successful boot -
+  confirmed non-fatal noise, not a real problem, worth knowing so the same message on the next
+  attempt isn't mistaken for the actual cause of failure.
+
+**Net effect**: the next custom-kernel boot attempt will, for the first time, have real diagnostic
+visibility rather than a blind static-screen guess - and the wiring, voltage, and capture setup have
+already been proven correct against a real, known-good boot, rather than being untested variables on
+top of an already-uncertain custom kernel.

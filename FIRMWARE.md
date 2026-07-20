@@ -2077,3 +2077,96 @@ against the live device was attempted this session and deferred - the printer wa
 its last-known IP, and a full subnet scan found no host answering SSH anywhere, not just an IP
 change - worth a fresh check once the device is confirmed back online, separately from anything
 above.
+
+## 25. The physical USB recovery dry run - real hardware, real result, and a real offset bug caught before it mattered
+
+User physically opened the Nebula Pad, found and photographed a genuine factory-labeled 3-pin
+header (**`J1: GND RX TX`**, right next to the MicroUSB port and the boot/reset buttons) - real,
+first-hand confirmation of a documented UART console header this project had not found any evidence
+of previously (the official recovery PDF's own board photos don't show it - this is presumably an
+undocumented engineering test point, not something Creality expects end users to use). Wiring
+guidance given: adapter GND/RX to board GND/TX (cross them, never TX-to-TX), 115200 8N1, no power
+line connected.
+
+**The boot+reset button combo and USB recovery path - now verified on real hardware, not just
+documentation.** First attempt showed zero USB activity at all (checked via `lsusb`, raw
+`/sys/bus/usb/devices`, and `journalctl -k` - nothing, not even a failed enumeration), in both normal
+boot and after the button sequence - strong evidence of a charge-only MicroUSB cable, exactly the
+failure mode the official PDF itself warns about. After swapping cables/retrying, `lsusb` showed
+`a108:eaef Ingenic Semiconductor Co.,Ltd Ingenic USB BOOT DEVICE` - the exact VID:PID and device
+string this track predicted from the X2000 boot ROM chapter and the PDF's own Device Manager
+screenshot, months of documentation-based confidence now backed by a real device actually entering
+mask-ROM recovery mode.
+
+**The dry-run read (`ballaswag/ingenic-usbboot --dump-partition`) worked, but not as expected - and
+found a real bug in this project's own partition-offset math.** Verified from source, line by line,
+before running anything: `--uboot` only loads code into volatile RAM (`0xb2401000`/`0x80100000`,
+confirmed via `run_stage1`/`run_stage2`/`start_x2000_uboot`) and `--dump-partition`
+(`mmc_read_partition()`) only calls `mmc_read()` then writes to a **local** file - the codebase's
+separate `mmc_write()` is never invoked by this path. Confirmed safe before running.
+
+The command was meant to read `sn_mac` at offset `0x100000` (computed by summing partition sizes
+from 0) but returned `ota:kernel\n\n` + zero padding instead - **byte-for-byte identical** to the
+`ota` partition's content pulled from the live device over SSH weeks earlier (§19). Root cause: a
+real, previously undocumented `uboot` region occupies raw offset `0x0`-`0x100000`, *before* `ota`
+begins - `ota`'s true offset is `0x100000` (matching `ballaswag/ingenic-usbboot`'s own hardcoded
+`mmc_read(0x100000, ...)` in `swap_ota_partition()`, which was correct all along). Every offset this
+project computed by naively summing partition sizes from 0 was off by exactly one 1 MiB slot - the
+same class of manual-arithmetic mistake as this session's earlier Kconfig-duplicate-line and
+wrong-DTS-file errors, just in a new form.
+
+**Real impact assessed - deliberately not "fixed" by hand-recomputing nine more offsets**: none of
+this project's actual committed recovery infrastructure (`flash-spare-slot.sh`,
+`ota_marker.sh`/`S00revert-safety`/`S99confirm-good`) uses raw byte offsets at all - all of it
+addresses partitions via `/dev/mmcblk0pN` device nodes or `/dev/disk/by-partlabel/` symlinks, resolved
+by the live kernel's own GPT parsing, completely unaffected by this mistake. The error only lived in
+one ad-hoc manual command. Given hand-arithmetic is the demonstrated root cause, the right fix isn't
+retyping eight more corrected numbers - it's a standing rule: **any future raw-offset command must be
+derived by reading the device's own GPT bytes directly and parsing them programmatically** (the same
+approach already used successfully for the device-tree pull in §19), never by hand-summing a
+documented size table.
+
+**Net result**: the dry run's actual purpose - proving the USB/mask-ROM recovery path can
+communicate with and correctly read data from this specific physical unit, not just enter download
+mode - is fully achieved, and more convincingly than a routine `sn_mac` read would have been: an
+independent, byte-for-byte cross-validation against previously-verified known-good data, via a
+completely different access path (raw USB, no OS involved at all) than the one used to originally
+capture that reference data (SSH through the running OS). This closes the one remaining physical
+unknown flagged in §23/§24 as unresolvable by investigation alone.
+
+**Real hardware limit found - the recovery protocol cannot address the whole device.** Following up
+on "could we back up everything", checked the wire protocol's own `ReadCmd`/`WriteCmd` structs
+(`offset`/`length` fields are both plain `uint32_t`) and confirmed the units are raw bytes, not
+sectors (the working `ota` read used byte offset `0x100000` directly). **This is a hard 4 GiB ceiling
+built into the actual USB recovery protocol itself, not a tool limitation** - nothing at or beyond
+offset `0x100000000` is reachable this way, on any tool, ever. This device's eMMC is 7.28 GiB total
+(`7636800 * 1024` bytes, from `/proc/partitions`), so roughly the last 3.28 GiB is permanently out of
+reach of this recovery path. Mapped out where that boundary actually falls: every system-critical
+partition (`uboot` through `rootfs_data`) sits within the first ~1.30 GiB - fully reachable. Only
+`userdata` (the user's own gcode/print files, starting at ~1.30 GiB and extending to the end of the
+device) crosses the wall - about the last 3.28 GiB of it is unreachable via this tool. User
+confirmed userdata isn't a concern for this track's purposes (real user files, unrelated to system
+recoverability) - if it's ever wanted, plain SSH+`dd` from the running stock OS has no such limit and
+already works (used for the `kernel2`/`rootfs2` backup in §19).
+
+**A real, complete, verified backup of every system-critical partition now exists.** Backed up the
+first 1.5 GiB (`0x60000000` bytes from offset 0 - comfortable margin past `rootfs_data`'s real end,
+deliberately not attempting to capture userdata) via
+`ballaswag/ingenic-usbboot --dump-partition`. Verified byte-for-byte against known expectations at
+every partition boundary, not just trusted the file size: `uboot` (real header), `ota`
+(`ota:kernel\n\n`, exact match to every prior read of this partition), `sn_mac` (**real data read for
+the first time this whole project** - two MAC-address-shaped strings plus `F005`, matching the board
+name already known from `/etc/ota_info` - genuine per-unit provisioning data), `rtos`/`rtos2`
+(identical real RTOS firmware in both slots), `kernel`/`kernel2` (both valid `uImage` magic), and
+`rootfs` (valid squashfs magic). Every single check passed - a complete, real, independently-verified
+recovery point, kept at `vendor/device-backups/nebula_system_backup.bin` (gitignored - proprietary
+firmware plus this unit's own real MAC addresses, never committed, same principle as every other
+device-derived artifact this project has produced).
+
+**Honest state of the "flash back" half**: this backup can be *read* right now, verified as
+complete and correct - but the tool has no ready-made "write this file back to this raw offset"
+command. `mmc_write()` exists and is proven (it's exactly what `swap_ota_partition()` already uses),
+but nothing exposes it generically the way `--dump-partition` exposes `mmc_read()`. Building and
+carefully reviewing that addition - mirroring `mmc_read_partition()`'s exact chunking approach - is
+real, deliberate, not-yet-done follow-up work before "restore from this backup" is actually a button
+we can press, rather than just a real capability we've confirmed the pieces exist for.

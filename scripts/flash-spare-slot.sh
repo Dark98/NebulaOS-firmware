@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# Writes the custom uImage/rootfs.squashfs to the spare kernel2/rootfs2 slot
+# Writes the custom xImage/rootfs.squashfs to the spare kernel2/rootfs2 slot
 # (FIRMWARE.md sec 19/23) and verifies every write against a checksum before
 # reporting success - deliberately never touches p5/p7 (the currently active,
 # currently-booted stock slot) and never flips the ota marker itself (that's
@@ -9,7 +9,7 @@
 #
 # Run this ON the device, from the currently-running stock OS, e.g.:
 #   scp flash-spare-slot.sh root@<printer-ip>:/tmp/
-#   ssh root@<printer-ip> 'sh /tmp/flash-spare-slot.sh /path/to/uImage /path/to/rootfs.squashfs'
+#   ssh root@<printer-ip> 'sh /tmp/flash-spare-slot.sh /path/to/xImage /path/to/rootfs.squashfs'
 #
 # Every check below aborts loudly rather than guessing or proceeding on a
 # mismatch - this script is the one place where a silent mistake could
@@ -38,7 +38,7 @@ die() {
 }
 
 [ -n "$KERNEL_IMG" ] && [ -n "$ROOTFS_IMG" ] || \
-	die "usage: $0 <uImage> <rootfs.squashfs>"
+	die "usage: $0 <xImage> <rootfs.squashfs>"
 [ -f "$KERNEL_IMG" ] || die "$KERNEL_IMG does not exist"
 [ -f "$ROOTFS_IMG" ] || die "$ROOTFS_IMG does not exist"
 
@@ -63,11 +63,11 @@ ROOTFS_SIZE=$(wc -c < "$ROOTFS_IMG")
 [ "$KERNEL_SIZE" -gt 0 ] || die "$KERNEL_IMG is empty"
 [ "$ROOTFS_SIZE" -gt 0 ] || die "$ROOTFS_IMG is empty"
 [ "$KERNEL_SIZE" -le "$KERNEL_PART_BYTES" ] || \
-	die "uImage is $KERNEL_SIZE bytes, exceeds kernel2 partition capacity of $KERNEL_PART_BYTES bytes"
+	die "xImage is $KERNEL_SIZE bytes, exceeds kernel2 partition capacity of $KERNEL_PART_BYTES bytes"
 [ "$ROOTFS_SIZE" -le "$ROOTFS_PART_BYTES" ] || \
 	die "rootfs.squashfs is $ROOTFS_SIZE bytes, exceeds rootfs2 partition capacity of $ROOTFS_PART_BYTES bytes"
 
-echo "uImage:          $KERNEL_SIZE / $KERNEL_PART_BYTES bytes ($(( KERNEL_SIZE * 100 / KERNEL_PART_BYTES ))% full)"
+echo "xImage:          $KERNEL_SIZE / $KERNEL_PART_BYTES bytes ($(( KERNEL_SIZE * 100 / KERNEL_PART_BYTES ))% full)"
 echo "rootfs.squashfs: $ROOTFS_SIZE / $ROOTFS_PART_BYTES bytes ($(( ROOTFS_SIZE * 100 / ROOTFS_PART_BYTES ))% full)"
 
 write_and_verify() {
@@ -93,7 +93,7 @@ write_and_verify() {
 	echo "$name write verified OK (md5 $src_sum)"
 }
 
-write_and_verify "$KERNEL_IMG" "$KERNEL_DEV" "$KERNEL_SIZE" "uImage"
+write_and_verify "$KERNEL_IMG" "$KERNEL_DEV" "$KERNEL_SIZE" "xImage"
 write_and_verify "$ROOTFS_IMG" "$ROOTFS_DEV" "$ROOTFS_SIZE" "rootfs.squashfs"
 
 echo

@@ -30,7 +30,7 @@ HOST_UID=$(id -u)
 HOST_GID=$(id -g)
 docker run --rm --user root -v "$REPO_ROOT:/repo" pellcorp/k1-bash-build bash -c "
 set -e
-cp '/repo/vendor/buildroot-x2000/output/images/uImage' '/repo/artifacts/buildroot-halley5-v30-image/uImage'
+cp '/repo/vendor/buildroot-x2000/output/images/xImage' '/repo/artifacts/buildroot-halley5-v30-image/xImage'
 cp '/repo/vendor/buildroot-x2000/output/images/rootfs.ext2' '/repo/artifacts/buildroot-halley5-v30-image/rootfs.ext2'
 cp '/repo/vendor/buildroot-x2000/output/images/rootfs.squashfs' '/repo/artifacts/buildroot-halley5-v30-image/rootfs.squashfs'
 cp '/repo/vendor/buildroot-x2000/.config' '/repo/artifacts/buildroot-halley5-v30-image/buildroot.config'
@@ -38,4 +38,4 @@ cp '/repo/vendor/buildroot-x2000/output/build/linux-custom/.config' '/repo/artif
 chown $HOST_UID:$HOST_GID /repo/artifacts/buildroot-halley5-v30-image/*
 "
 
-echo "== final build complete, artifacts copied to artifacts/buildroot-halley5-v30-image/ (uImage, rootfs.ext2, rootfs.squashfs) =="
+echo "== final build complete, artifacts copied to artifacts/buildroot-halley5-v30-image/ (xImage, rootfs.ext2, rootfs.squashfs) =="

@@ -2448,3 +2448,77 @@ partition capacity. `06-verify.sh` passes every check clean.
 
 **Still genuinely unknown**: whether this SPL actually supports LZO decompression at all - that's
 the real, open question for the next boot attempt, not yet tested against real hardware.
+
+## 31. REAL BOOT SUCCESS - the custom kernel actually boots. Wrong image format the whole time, not a compression problem at all
+
+**LZO failed identically to gzip on real hardware** - both hung at the exact same point (right after
+nvram, zero further output, no "Uncompressing Linux..." line at all). Two different compression
+formats producing an identical silent hang was the real signal this was never actually about
+compression *support* - both rely on U-Boot's own generic decompression logic understanding the
+uImage header's `comp` field, and apparently neither format is understood by it.
+
+**The real mechanism, found by actually reading this vendor SDK's own custom build system rather
+than assuming mainline Linux's.** `arch/mips/boot/zcompressed/Makefile` (a completely separate,
+vendor-specific build path this project had never looked at before) defines three distinct kernel
+image targets:
+- `uImage` - what Buildroot has been building this whole time: raw `vmlinux.bin`, gzip'd, loaded at
+  `CONFIG_LOADADDR` (`0x80010000`).
+- `zImage` - a **self-decompressing** binary: the vendor's own `head.S`/`misc.o` bootstrap stub is
+  compiled in alongside an internally-gzip'd `vmlinux.bin.gz` payload, so the binary decompresses
+  *itself* once executed - no dependency on U-Boot/SPL understanding any compression at all.
+- `xImage` - takes that self-decompressing `zImage` and wraps it in an mkimage header with
+  `-C none`, loaded **and entered** at `CONFIG_XIMAGE_LDADDR` (`0x80F00000` - the exact real load
+  address stock's own kernel/kernel2 partitions use).
+
+`arch/mips/Makefile:481` documents this literally: `'xImage - U-Boot-spl xImage (ingenic spl boot)'`.
+This is the actual, real, intended format for this board's SPL - not a plain uncompressed
+`vmlinux.bin`, and not a standard mainline-style compressed uImage. Explains every single silent
+hang this whole investigation hit: U-Boot/SPL was never being asked to decompress our images
+because that was never the mechanism at all - it just loads raw bytes and jumps, and the *jumped-to
+code* (present in a real xImage, absent from anything built via the standard `uImage` target) does
+the actual self-decompression.
+
+**Fix**: switched Buildroot's kernel image target from `BR2_LINUX_KERNEL_UIMAGE` to
+`BR2_LINUX_KERNEL_IMAGE_TARGET_CUSTOM` with `BR2_LINUX_KERNEL_IMAGE_TARGET_NAME="xImage"` and
+`BR2_LINUX_KERNEL_IMAGE_NAME="compressed/xImage"` (the real final path, confirmed by reading
+`arch/mips/Makefile`'s own `xImage:` rule: it builds via the `zcompressed` subdir then copies the
+result to `arch/mips/boot/compressed/xImage`). The generic "Kernel compression mode" Kconfig choice
+(§29/§30's whole `CONFIG_KERNEL_XZ`/`_LZO` saga) turned out to be entirely irrelevant to this real
+fix - `xImage` bypasses that mechanism completely, hardcoding its own internal gzip via the
+`zcompressed` Makefile regardless of that setting. Renamed `05-final-build.sh`'s copied artifact
+from `uImage` to `xImage` to match reality rather than continuing to call it the wrong thing.
+
+**Rebuilt and decoded**: the new `xImage` header shows `load=0x80f00000`, `ep=0x80f00000` (`load==ep`,
+matching stock exactly), `compression=0`, size 6,406,144 bytes (fits the 8MB partition easily).
+`06-verify.sh` clean.
+
+**Real, live test - with the user present, full recovery procedure re-confirmed working throughout**:
+flashed the new `xImage`/`rootfs.squashfs` to the spare slot via `flash-spare-slot.sh` (from the
+currently-booted stock OS, `print_stats` freshly checked idle first), flipped the ota marker to
+`kernel2` using the device's *own* official mechanism (`. /etc/ota_bin/ota_utils.sh; . /etc/ota_bin/
+ota_local_method.sh; local_set_next_boot_device` - confirmed via reading the real vendor script that
+this does the exact same toggle our own recovery tool does), rebooted with serial capture active.
+
+**Real result: it booted.** `Uncompressing Linux...` / `Ok, booting the kernel.` /
+`Linux version 6.6.18-rt23 ... #2 SMP PREEMPT Mon Jul 20 21:35:44 UTC 2026` - our actual kernel,
+our actual build, genuinely executing on real hardware for the first time this entire project.
+`root=/dev/mmcblk0p8` confirms it's using the custom rootfs2, not stock. Progressed deep into normal
+Linux init (WiFi driver probing, etc.) before getting stuck at `Waiting for root device
+/dev/mmcblk0p8...` - a real, different, much narrower problem than anything hit before.
+
+**New lead for next session, not yet investigated**: `msc1` (the WiFi SDIO controller, confirmed via
+the DTS - has `mmc-pwrseq`/`bcmdhd_wlan` child node) fails with `Failed to initialize a non-removable
+card`, but that exactly matches the already-known, harmless vendor `dhd` WiFi driver failure
+(`[dhd] failed to power up DHD generic adapter, max retry reached`) seen right alongside it in the
+same log - expected, unrelated to storage. `msc2` (the real eMMC, confirmed via DTS: `msc0` is
+`status = "disable"`, `msc1` is WiFi, `msc2` is the only remaining candidate) registers its SDHCI
+controller cleanly (`mmc2: SDHCI controller on ingenic-sdhci [13490000.msc] using ADMA`, no error) -
+but no `mmcblk0:` card-attach success message ever appears in the log before boot gets stuck waiting
+for it. `CONFIG_MMC_BLOCK`/`CONFIG_EFI_PARTITION`/`CONFIG_MSDOS_PARTITION` are all confirmed enabled
+already, ruling out the obvious Kconfig-gap explanation. Real, scoped, well-defined next question:
+why doesn't the eMMC card itself ever finish attaching on `msc2`, despite its controller registering
+without error. Full boot log saved at
+`vendor/device-backups/ximage-custom-kernel-boot-attempt.log`.
+
+**Device safely recovered to stock afterward**, full recovery procedure (re-enter download mode,
+fresh marker re-check, flip, reset) worked cleanly on the first try this time.

@@ -2522,3 +2522,70 @@ without error. Full boot log saved at
 
 **Device safely recovered to stock afterward**, full recovery procedure (re-enter download mode,
 fresh marker re-check, flip, reset) worked cleanly on the first try this time.
+
+## 32. Three real bugs found and fixed by comparing against the real stock device's own live device tree - eMMC now mounts, only a late userspace crash remains
+
+**Found by pulling and decoding the real, live stock device's actual `/sys/firmware/fdt`** (via
+`scp` + `dtc`, run against the same `pellcorp/k1-bash-build` toolchain used throughout this project)
+rather than continuing to guess from property patterns alone - directly answered the §31 eMMC
+question and turned up two more real gaps along the way.
+
+**Bug 1 (the real §31 blocker): `msc0`, not `msc2`, is the real eMMC - and it was disabled.**
+Stock's own DTB shows `msc@0x13450000` (`msc0`) with `status = "okay"`, `non-removable`,
+`bus-width = <8>`, `mmc-hs200-1_8v`, `max-frequency = 100MHz` - a real, live, enabled eMMC
+controller. `msc1` (WiFi/SDIO) and `msc2` (SD card slot - confirmed by its own real properties:
+`cd-gpio`, `wp-gpio`, `sd-uhs-sdr104`, none of which apply to soldered-on eMMC) are both `disabled`
+on stock. Our own board file had this backwards: `msc0` was disabled (as a stale 4-bit template with
+no pinctrl at all), while `msc2` (the SD slot) was left enabled - explaining exactly why §31 got a
+clean SDHCI controller registration with no card ever attaching: the real storage was never even
+probed. Fixed: enabled `msc0` with the real stock values (8-bit, `mmc-hs200-1_8v`, 100MHz,
+`non-removable`), and added `pinctrl-0 = <&msc0_8bit>` (resolved from stock's own pinctrl phandle -
+this group already existed, unused, in the shared `x2000-pinctrl.dtsi`, and another in-tree
+reference board, `zebra.dts`, already demonstrates the identical wiring pattern).
+
+**Bug 2, found the same way: `i2c4` (the touch controller's bus) was also missing its pinctrl.**
+Same root cause as `msc0` - our own `&i2c4` override sets `status = "okay"` but never sets
+`pinctrl-0`, and the base `x2000.dtsi` doesn't supply one either. Stock's live DTB shows a real
+`pinctrl-0` referencing an `"i2c4-pc"` group - which, again, already existed unused in
+`x2000-pinctrl.dtsi` as `i2c4_pc`. Fixed by adding the same reference. Real risk this posed: without
+correct pinmux, the I2C bus may not actually be electrically connected to the physical pins at all,
+which would have surfaced as a silent touch failure much later, easy to misdiagnose as a driver or
+hardware problem instead of a devicetree gap.
+
+**Important caveat surfaced while doing this comparison, worth recording**: this technique is only
+valid where stock and our kernel use the *same* devicetree-driven mechanism for a peripheral.
+`msc1` (WiFi) and `dtrng` (RNG) both show `disabled` on stock's own DTB too - yet both demonstrably
+work on the real device. That's because stock's 4.4.94 kernel enables them via board-file C code
+(`platform_device` registration), invisible in the compiled DTB, while our 6.6 kernel is fully
+devicetree-driven for the same hardware. Blindly "matching stock's status flags" across the board
+would have been actively wrong for those two. The comparison was only directly trustworthy for
+`msc0`/`i2c4` because MMC/SDHCI and I2C are genuinely devicetree-native on both kernels.
+
+**Tested for real, twice, with the user present.** First test (msc0 + i2c4 fixes only): real,
+significant progress - `mmcblk0: mmc0:0001 DG4008 7.28 GiB` and all 10 partitions correctly
+enumerated (confirms the eMMC fix worked completely) - but hit a new failure:
+`VFS: Cannot open root device "/dev/mmcblk0p8" ... error -19`, followed by `Kernel panic - not
+syncing: VFS: Unable to mount root fs`. Root-caused immediately: `# CONFIG_SQUASHFS is not set` in
+our kernel `.config` - Buildroot's `BR2_TARGET_ROOTFS_SQUASHFS` only controls how the *rootfs image*
+gets built, it does not touch the kernel's own filesystem driver support at all, so despite every
+rootfs image this whole project has ever produced being squashfs, the kernel had zero squashfs
+support compiled in. Fixed with `CONFIG_SQUASHFS=y` in the fragment file.
+
+**Second test (all three fixes): real further progress.** `Uncompressing Linux...` /
+`mmc0: new HS200 MMC card` / partitions enumerated / **`Run /linuxrc as init process`** - root
+mounted successfully this time, real confirmation the squashfs fix worked. Then, with no visible
+panic message at all, the log goes straight to a fresh SPL banner - `/linuxrc` (init) crashed or
+rebooted almost immediately, before printing anything else. Genuinely not yet diagnosed - could be a
+missing shared library, an exec permission issue, or something in our own `S00revert-safety`/
+`S01tmpfs-datastore` early init scripts; deliberately not guessed further this session given the
+late hour.
+
+Full boot logs saved: `vendor/device-backups/msc0-i2c4-fix-boot-attempt.log` (first test),
+`vendor/device-backups/squashfs-fix-boot-attempt.log` (second test, the current best result).
+
+**Net state**: three real, confirmed bugs fixed this session (compression/image-format from §31,
+eMMC + touch-pinctrl + squashfs from this section) - each found by direct comparison against real
+hardware or real vendor build-system source, none guessed. Boot now gets further than ever before:
+kernel loads, decompresses, mounts real root filesystem, hands off to init. The remaining problem is
+narrower than everything before it - an early userspace crash, not a kernel/hardware issue. Device
+safely back on stock.

@@ -698,7 +698,7 @@ index 000000000..e32ed2657
 +MODULE_LICENSE("GPL");
 +MODULE_DESCRIPTION("OpenKE best-effort panel driver for the Ender 3 V3 KE Nebula Pad's 480x272 panel");
 diff --git a/kernel/kernel-6.6/module_drivers/dts/x2000/halley5_v30.dts b/kernel/kernel-6.6/module_drivers/dts/x2000/halley5_v30.dts
-index 9be859853..47b8343b7 100644
+index 9be859853..d6c0c323f 100644
 --- a/kernel/kernel-6.6/module_drivers/dts/x2000/halley5_v30.dts
 +++ b/kernel/kernel-6.6/module_drivers/dts/x2000/halley5_v30.dts
 @@ -96,6 +96,36 @@
@@ -757,7 +757,7 @@ index 9be859853..47b8343b7 100644
  };
  
  &i2c3 {
-@@ -136,7 +175,37 @@
+@@ -136,7 +175,45 @@
  };
  
  &i2c4 {
@@ -766,6 +766,14 @@ index 9be859853..47b8343b7 100644
 +	 * (confirmed live via /sys/bus/i2c/devices/4-0048/name on the real printer).
 +	 * The reference v30 board disables this bus; our board customization needs it. */
 +	status = "okay";
++	/* OpenKE (2026-07-20, FIRMWARE.md sec 32): pinctrl-0 was missing entirely here - the
++	 * base x2000.dtsi's own i2c4 node has none either, and this override never added one.
++	 * Found by pulling and decoding the real stock device's own live /sys/firmware/fdt: its
++	 * i2c4 node references a real "i2c4-pc" pinmux group - which already exists in our own
++	 * x2000-pinctrl.dtsi as i2c4_pc, just never wired up. Without this, the bus may not
++	 * actually be muxed to the real physical pins at all - same class of bug as msc0 above. */
++	pinctrl-names = "default";
++	pinctrl-0 = <&i2c4_pc>;
 +
 +	ns2009@48 {
 +		compatible = "nsiway,ns2009";
@@ -796,7 +804,46 @@ index 9be859853..47b8343b7 100644
  };
  
  
-@@ -200,6 +269,17 @@
+@@ -170,16 +247,33 @@
+ };
+ 
+ &msc0 {
+-	status = "disable";
+-	/*mmc-hs200-1_8v;*/
++	/* OpenKE (2026-07-20, FIRMWARE.md sec 31/32): this is the real eMMC - confirmed by pulling
++	 * the actual live stock device's own /sys/firmware/fdt and decoding it with dtc. Stock has
++	 * this exact node (0x13450000) status="okay", 8-bit bus, mmc-hs200-1_8v, 100MHz,
++	 * non-removable - while msc1 (WiFi/SDIO) and msc2 (SD slot) are BOTH disabled on stock's own
++	 * DTB. This board file had it backwards: msc0 disabled (as a 4-bit, no-pinctrl template) while
++	 * msc2 (actually the SD card slot - has cd-gpio/wp-gpio/sd-uhs-sdr104, all SD-slot-only
++	 * properties) was left enabled instead. This is why the real xImage boot test (sec 31) got
++	 * all the way into userspace init but then hung forever at "Waiting for root device
++	 * /dev/mmcblk0p8..." - msc2's controller registered fine (it's a real, working SDHCI
++	 * instance) but had no eMMC card to attach, since the actual storage sits on msc0, which was
++	 * never even probed. pinctrl-0 = <&msc0_8bit> (real phandle, resolved from the live DTB's own
++	 * pinctrl-0 = <0x13>) was also completely missing before - msc1/msc2 both had one, msc0 had
++	 * none at all.
++	 */
++	status = "okay";
++	pinctrl-names = "default";
++	pinctrl-0 = <&msc0_8bit>;
++	mmc-hs200-1_8v;
+ 	cap-mmc-highspeed;
+ 	non-removable;
+-	max-frequency = <50000000>;
+-	bus-width = <4>;
+-	non-removable;
++	max-frequency = <100000000>;
++	bus-width = <8>;
+ 	voltage-ranges = <1800 3300>;
+ 
+ 	/* special property */
++	ingenic,wp-gpios = <0>;
++	ingenic,cd-gpios = <0>;
+ 	ingenic,rst-gpios = <0>;
+ };
+ 
+@@ -200,6 +294,17 @@
  	keep-power-in-suspend;
  	ingenic,removal-manual;
  
@@ -814,7 +861,7 @@ index 9be859853..47b8343b7 100644
  	bcmdhd_wlan: bcmdhd_wlan {
  		 compatible = "android,bcmdhd_wlan";
  		 gpio_wl_reg_on = <&gpd 1 GPIO_ACTIVE_HIGH INGENIC_GPIO_NOBIAS>;
-@@ -207,6 +287,13 @@
+@@ -207,6 +312,13 @@
  	};
  };
  

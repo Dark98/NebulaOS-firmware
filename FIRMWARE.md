@@ -2170,3 +2170,63 @@ but nothing exposes it generically the way `--dump-partition` exposes `mmc_read(
 carefully reviewing that addition - mirroring `mmc_read_partition()`'s exact chunking approach - is
 real, deliberate, not-yet-done follow-up work before "restore from this backup" is actually a button
 we can press, rather than just a real capability we've confirmed the pieces exist for.
+
+## 26. Write capability built and proven, then the actual boot test - a real failure, and a real, complete recovery
+
+**Built and verified the missing write half.** Added `mmc_write_partition()`/`--write-partition` to
+`ballaswag/ingenic-usbboot`, mirroring `mmc_read_partition()`'s exact chunking (same 2MB chunk size)
+but adding what a write needs that a read never did: an immediate read-back verification of every
+single chunk right after writing it, refusing to proceed past the first mismatch rather than writing
+the rest blind. Reviewed line-by-line before running anything. Tested with a real, deliberately
+low-stakes round trip on actual hardware: wrote a distinctive test pattern to 512 bytes of confirmed-
+unused zero-padding inside the `ota` partition (fully covered by the existing backup), read it back
+independently to confirm it landed, then wrote the original zero bytes back and read back again to
+confirm an exact restore. All four steps passed. This closes the gap flagged just above - reading
+and writing are now both real and proven on this exact device, not just built.
+
+**Then did the actual boot test - the real point of everything this whole track has built toward.**
+Wrote the freshly-rebuilt `uImage`/`rootfs.squashfs` (containing every fix from today: uart4 console,
+revert-first init, tmpfs writable storage, GuppyScreen WiFi panel deps) to the spare slot via
+`flash-spare-slot.sh` - both writes verified via md5 exactly as designed. Flipped the `ota` marker to
+`ota:kernel2` (confirmed correct byte format via read-back: `ota:kernel2\n\n` + zero padding) and
+issued a soft `reboot` from the still-running stock OS. Proceeded deliberately without the serial
+console connected - a real, explicit tradeoff discussed and agreed beforehand: mask-ROM recovery was
+already proven, so the worst case was covered, at the cost of losing diagnostic detail if the
+attempt only partially failed.
+
+**Result: a real, early failure.** The display showed a static logo (almost certainly U-Boot's own
+splash - this build has no Creality-branded assets anywhere, so what was showing could not have come
+from anything we built) that never progressed for several minutes, and no network activity at all
+came up (checked both automatically and by the user directly, including the wired `ax88179` path).
+No serial console means the exact failure point can't be pinned down from this attempt alone - it's
+consistent with U-Boot failing to successfully load/jump to the custom `kernel2` image, or the kernel
+crashing very early, before ever reaching a point where networking or the framebuffer would come up.
+This is real, useful information despite the lack of detail: **the custom kernel/rootfs did not boot
+successfully on the first real attempt.**
+
+**Then did the actual recovery - for real, not a drill.** Since nothing ever reached userspace,
+`S00revert-safety` never got a chance to run, meaning the `ota` marker was still pointing at
+`kernel2` - a plain reboot would have just retried the same failed boot. Re-entered USB download mode
+(boot+reset buttons, confirmed via `lsusb` showing `a108:eaef` again), used `--force-swap-ota` to
+write `ota:kernel` back unconditionally, verified via a fresh `--dump-partition` read that it now
+reads exactly `ota:kernel\n\n` (matching the original value byte-for-byte), then had the user reset
+the device to exit download mode and do a real boot. **Confirmed fully recovered**: network
+reachable, Moonraker responding normally (`print_stats: standby`), and - the clean, authoritative
+proof - `/proc/cmdline` shows `root=/dev/mmcblk0p7`, the original stock slot. Zero reliance on
+anything the failed attempt might have touched; recovery went entirely through the mask-ROM path that
+was built and tested earlier in this same session.
+
+**Why this matters beyond just "it didn't work yet"**: this is the first genuine, real-world
+end-to-end proof of the entire recovery chain this track has been building - not a controlled test on
+inert padding bytes, an actual real failure followed by an actual real recovery, using exactly the
+tools and procedures documented here, with no surprises and no need for anything beyond what was
+already built. The boot failure itself is a real, unresolved problem - but the ability to fail safely
+and recover completely, which was the harder and more important thing to get right first, held up
+completely under real conditions.
+
+**Next real step, and it's now unambiguous**: serial console is no longer optional for another
+attempt - without it, this exact failure mode (static splash, no network) gives no way to
+distinguish "U-Boot never loaded the kernel" from "the kernel crashed in the first few milliseconds"
+from any number of other early-boot failure causes. The `J1: GND RX TX` header found in §25 is
+sitting there, physically present, unused so far - wiring it up before the next attempt is the
+difference between another blind guess and an actual diagnosis.

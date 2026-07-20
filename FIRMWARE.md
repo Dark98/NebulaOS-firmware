@@ -2182,7 +2182,10 @@ low-stakes round trip on actual hardware: wrote a distinctive test pattern to 51
 unused zero-padding inside the `ota` partition (fully covered by the existing backup), read it back
 independently to confirm it landed, then wrote the original zero bytes back and read back again to
 confirm an exact restore. All four steps passed. This closes the gap flagged just above - reading
-and writing are now both real and proven on this exact device, not just built.
+and writing are now both real and proven on this exact device, not just built. Saved as
+`patches/ingenic-usbboot-write-partition.patch` (our own diff only, not the base tool - same
+no-upstream-license reasoning as §23: clone `ballaswag/ingenic-usbboot` fresh, `git apply` this
+patch, then `make`).
 
 **Then did the actual boot test - the real point of everything this whole track has built toward.**
 Wrote the freshly-rebuilt `uImage`/`rootfs.squashfs` (containing every fix from today: uart4 console,

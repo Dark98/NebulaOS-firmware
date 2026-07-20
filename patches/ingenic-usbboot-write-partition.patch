@@ -1,0 +1,125 @@
+diff --git a/usbboot.c b/usbboot.c
+index 8e10188..582df93 100644
+--- a/usbboot.c
++++ b/usbboot.c
+@@ -414,6 +414,76 @@ void mmc_write(uint32_t offset, uint32_t length, unsigned char* in) {
+   bulk_transfer_out(in, length);
+ }
+ 
++// Mirrors mmc_read_partition()'s chunking exactly (same 2mb chunk size), but
++// adds what a write needs that a read never did: an immediate read-back
++// verification of every single chunk, right after writing it - not just a
++// check at the very end. If something goes wrong partway through a large
++// write (a dropped USB transfer, a bad block), this catches it at the exact
++// offset it happened, rather than writing the whole thing blind and finding
++// out only afterward. Refuses to proceed past the first mismatch - a
++// half-written, unverified partition is worse than stopping early with a
++// clear error.
++void mmc_write_partition(uint32_t offset, uint32_t length, const char* fname) {
++  enable_mmc();
++  if(length == 0)
++    die("invalid partition length: %d", length);
++
++  FILE* f = fopen(fname, "rb");
++  if(f == NULL)
++    die("Can't open file '%s' for reading", fname);
++
++  // The file must be exactly the requested length - never write a
++  // truncated or oversized buffer to a fixed device offset/length.
++  fseek(f, 0, SEEK_END);
++  long fsize = ftell(f);
++  fseek(f, 0, SEEK_SET);
++  if (fsize != (long)length) {
++    fclose(f);
++    die("File '%s' is %ld bytes, does not match requested length %u - refusing to write", fname, fsize, length);
++  }
++
++  printf("writing partition at offset 0x%x, size 0x%x (with per-chunk read-back verification)\n", offset, length);
++
++  uint32_t chunk_size = 1024 * 1024 * 2; // 2mb, same as mmc_read_partition
++  unsigned char *write_chunk = malloc(chunk_size);
++  unsigned char *verify_chunk = malloc(chunk_size);
++  if (write_chunk == NULL || verify_chunk == NULL)
++    die("out of memory allocating chunk buffers");
++
++  uint32_t cursor = offset;
++  uint32_t end = offset + length;
++  while (cursor < end) {
++    uint32_t this_size = (end - cursor) >= chunk_size ? chunk_size : (end - cursor);
++
++    size_t got = fread(write_chunk, 1, this_size, f);
++    if (got != this_size)
++      die("Failed to read %u bytes from %s (got %zu)", this_size, fname, got);
++
++    uint32_t start = (uint32_t)time(NULL);
++    mmc_write(cursor, this_size, write_chunk);
++    uint32_t duration = (uint32_t)time(NULL) - start;
++
++    memset(verify_chunk, 0, chunk_size);
++    mmc_read(cursor, this_size, verify_chunk);
++    if (memcmp(write_chunk, verify_chunk, this_size) != 0)
++      die("VERIFICATION FAILED at offset 0x%x: written data does not match "
++          "what was read back immediately after - device may be in an "
++          "inconsistent state at this offset, do not trust this write", cursor);
++
++    cursor += this_size;
++
++    printf("%.2f%% completed (%.2fMB/s), verified OK\n",
++	   (cursor - offset) / (float)length * 100,
++	   (this_size / 1024.0 / 1024.0) / (float)(duration > 0 ? duration : 1));
++  }
++
++  fclose(f);
++  free(write_chunk);
++  free(verify_chunk);
++
++  printf("write complete and verified: all %u bytes at offset 0x%x match source file exactly\n", length, offset);
++}
++
+ void swap_ota_partition(bool force) {
+   ensure_usb();
+   enable_mmc();
+@@ -536,6 +606,10 @@ Advanced options:\n\
+   --flush-caches     Flush device CPU caches\n\
+   --renumerate       Close and re-open the USB device\n\
+   --wait <time>      Wait for <time> seconds\n\
++  --partition-offset <o>, --partition-size <s>   Used with the two options below\n\
++  --dump-partition <file>   Read [offset,offset+size) from MMC into <file>\n\
++  --write-partition <file>  Write <file> to MMC at [offset,offset+size),\n\
++                            with immediate per-chunk read-back verification\n\
+   -v, --verbose      Be verbose\n\
+ \n\
+ Known CPU types and default stage1/stage2 binary settings:\n");
+@@ -574,7 +648,7 @@ int main(int argc, char* argv[])
+         OPT_CPUINFO,
+         OPT_START1, OPT_START2, OPT_FLUSH_CACHES,
+         OPT_RENUMERATE, OPT_WAIT, OPT_SWAP_OTA,
+-	OPT_FORCE_SWAP_OTA, OPT_DUMP_PARITION
++	OPT_FORCE_SWAP_OTA, OPT_DUMP_PARITION, OPT_WRITE_PARITION
+     };
+ 
+     static const struct option long_options[] = {
+@@ -598,7 +672,8 @@ int main(int argc, char* argv[])
+         {"wait", required_argument, 0, OPT_WAIT},
+         {"swap-ota", no_argument, 0, OPT_SWAP_OTA},
+         {"force-swap-ota", no_argument, 0, OPT_FORCE_SWAP_OTA},
+-        {"dump-partition", required_argument, 0, OPT_DUMP_PARITION},	
++        {"dump-partition", required_argument, 0, OPT_DUMP_PARITION},
++        {"write-partition", required_argument, 0, OPT_WRITE_PARITION},
+         {"help", no_argument, 0, 'h'},
+         {"verbose", no_argument, 0, 'v'},
+         {0, 0, 0, 0}
+@@ -712,6 +787,13 @@ int main(int argc, char* argv[])
+             verbose("Dump a partition to file");
+ 	    mmc_read_partition(partition_offset, partition_size, optarg);
+             break;
++        case OPT_WRITE_PARITION:
++	    if (partition_size <= 0)
++	      die("must provide a positive partition length with option --partition-size");
++
++            verbose("Write a file to a partition, with read-back verification");
++	    mmc_write_partition(partition_offset, partition_size, optarg);
++            break;
+ 	case 'o':
+ 	case 's':
+ 	  break;

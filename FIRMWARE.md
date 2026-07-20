@@ -2404,3 +2404,47 @@ without the user physically present. What's ready for that next attempt: a rebui
 `uImage`/`rootfs.ext2`/`rootfs.squashfs` with the compression mismatch closed, plus a serial console
 already proven end-to-end against a real known-good boot (§27), so this next attempt - unlike §26 -
 will have full boot-log visibility from the very first byte U-Boot prints.
+
+## 30. A real spare-slot recovery detour, a stale-assumption dead end, and a second real blocker (uncompressed image too big) found and fixed
+
+**Real hardware recovery, with a real detour.** Attempted the actual boot test from §29's fix. It
+failed differently (hung again, no network) - with the user present and the serial console already
+wired, restored the spare `kernel2`/`rootfs2` slot byte-for-byte from the full system backup via
+`ingenic-usbboot`'s write-partition path, hardened along the way against real, repeated
+`LIBUSB_ERROR_TIMEOUT`/`LIBUSB_ERROR_PIPE` failures hit during sustained multi-chunk writes (retry-
+with-backoff added to both control-transfer code paths - `patches/ingenic-usbboot-write-partition.patch`).
+This was real, useful hardening, but it turned out to be solving the wrong problem: early in this
+session, confirmed the OTA marker read `ota:kernel` (stock), then reasoned from that fact for a long
+stretch without ever re-checking it. A fresh re-check (only after repeated pushback) showed it
+actually read `ota:kernel2` - it had flipped back, unnoticed, at some point. The device's real A/B
+logic (confirmed via strings/hex inspection of the `uboot` region itself: a plain `strncmp` against
+a literal `"ota:kernel2"` string, default-else-`kernel`) was correct and simple the whole time -
+nothing was wrong with the mechanism, only with a stale assumption about the marker's current value.
+Flipping it back and rebooting worked immediately: a full, healthy 217-line stock boot log captured,
+network confirmed up. See [[feedback_check_print_before_restart]] in the durable memory record - this
+became a generalized standing rule from this incident, not just a one-off note.
+
+**A second, real, previously-hidden blocker, found by actually checking instead of assuming
+readiness.** Asked whether the fixed build could finally be tested - before answering yes, checked
+the built `uImage`'s actual size against the real partition capacity: **14,457,392 bytes**, against
+`kernel2`'s fixed **8,388,608-byte** capacity. The uncompressed kernel doesn't fit at all - `flash-
+spare-slot.sh`'s own size check would correctly refuse to write it. This was invisible while gzip-
+compressed (6.4MB, fit fine) and only became visible once §29 turned compression off entirely.
+
+**Fix: switch from the XZ-as-uncompressed trick to real LZO compression.** LZO *is* one of the
+formats `arch/mips/boot/Makefile`'s `suffix-y` logic specially handles (produces a genuinely
+compressed `.lzo` uImage, unlike XZ's deliberate uncompressed fallthrough), and LZO's much simpler
+algorithm (vs. gzip's DEFLATE) makes it plausible this board's minimal SPL supports it even though it
+apparently doesn't support gzip - a real, untested-until-tried hypothesis, not a certainty. Needed
+the same kind of kernel-source fix as XZ did: `arch/mips/Kconfig`'s `MACH_XBURST2` block only ever
+selected `HAVE_KERNEL_GZIP`/`HAVE_KERNEL_XZ` (from the §29 fix) - added `select HAVE_KERNEL_LZO`
+alongside them. Set `BR2_LINUX_KERNEL_LZO=y` (replacing `_XZ`) in the top-level `buildroot.config`,
+and `CONFIG_KERNEL_LZO=y` in the kernel fragment file.
+
+**Rebuilt and verified.** Kernel `.config` correctly shows `CONFIG_KERNEL_LZO=y`,
+`CONFIG_KERNEL_GZIP` unset. Decoded the new `uImage` header: `compression=4` (LZO, matching
+U-Boot's standard `IH_COMP_LZO` enum value), size **7,034,435 bytes** - comfortably under the 8MB
+partition capacity. `06-verify.sh` passes every check clean.
+
+**Still genuinely unknown**: whether this SPL actually supports LZO decompression at all - that's
+the real, open question for the next boot attempt, not yet tested against real hardware.

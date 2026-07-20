@@ -1,8 +1,8 @@
 diff --git a/kernel/kernel-6.6/arch/mips/Kconfig b/kernel/kernel-6.6/arch/mips/Kconfig
-index 066bc5232..fffd28e1d 100644
+index 066bc5232..82a33b260 100644
 --- a/kernel/kernel-6.6/arch/mips/Kconfig
 +++ b/kernel/kernel-6.6/arch/mips/Kconfig
-@@ -480,6 +480,18 @@ config MACH_XBURST2
+@@ -480,6 +480,29 @@ config MACH_XBURST2
      select SYS_SUPPORTS_HIGHMEM
      select XBURST2_CPU_SCACHE
      select HAVE_KERNEL_GZIP
@@ -18,6 +18,17 @@ index 066bc5232..fffd28e1d 100644
 +    # the fragment's CONFIG_KERNEL_XZ=y take effect and fall through to an
 +    # uncompressed uImage.bin, matching the real stock kernel/kernel2 images.
 +    select HAVE_KERNEL_XZ
++    # OpenKE (2026-07-20, FIRMWARE.md sec 30): the XZ-as-uncompressed trick
++    # above solved the "SPL can't gunzip" problem but exposed a second, real
++    # one - our real uncompressed kernel is ~14.5MB, well over the kernel2
++    # partition's fixed 8MB capacity (confirmed: flash-spare-slot.sh's own
++    # size check would refuse to write it). Trying LZO instead - it IS
++    # special-cased by arch/mips/boot/Makefile's suffix-y logic (produces a
++    # real compressed ".lzo" uImage, unlike XZ's uncompressed fallthrough),
++    # and LZO's simplicity (vs. gzip's DEFLATE) makes it plausible this
++    # board's minimal SPL supports it even though it apparently doesn't
++    # support gzip - genuinely untested until tried on real hardware.
++    select HAVE_KERNEL_LZO
      select IRQ_MIPS_CPU
      select USE_OF
      select LIBFDT

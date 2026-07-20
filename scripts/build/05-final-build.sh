@@ -1,9 +1,11 @@
 #!/bin/sh
 # Final rootfs build - bakes everything stage 4 assembled in the overlay
 # (Klipper, Moonraker, ustreamer, Mainsail, the cross-compiled extras) into
-# the actual rootfs.ext2. The kernel itself doesn't need rebuilding here -
-# only the rootfs-assembly steps rerun, since nothing kernel-side changed
-# since stage 3.
+# the actual rootfs.ext2/rootfs.squashfs. Assumes 02 and 03 already ran in
+# this same session (02 for any overlay/config changes, 03 for any kernel
+# source changes with its own forced dirclean) - this script does not
+# re-sync the overlay or force a kernel rebuild itself, so a change to
+# either that hasn't gone through 02/03 first will silently not appear here.
 set -e
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
@@ -21,9 +23,19 @@ make
 '
 
 mkdir -p "$REPO_ROOT/artifacts/buildroot-halley5-v30-image"
-cp "$BUILDROOT_DIR/output/images/uImage" "$REPO_ROOT/artifacts/buildroot-halley5-v30-image/uImage"
-cp "$BUILDROOT_DIR/output/images/rootfs.ext2" "$REPO_ROOT/artifacts/buildroot-halley5-v30-image/rootfs.ext2"
-cp "$BUILDROOT_DIR/.config" "$REPO_ROOT/artifacts/buildroot-halley5-v30-image/buildroot.config"
-cp "$BUILDROOT_DIR/output/build/linux-custom/.config" "$REPO_ROOT/artifacts/buildroot-halley5-v30-image/kernel.config"
+# Copying via a root container, not the host user directly - output/images/*
+# is root-owned from the docker --user root build above, and the chown back
+# to the real host user/group below needs root too.
+HOST_UID=$(id -u)
+HOST_GID=$(id -g)
+docker run --rm --user root -v "$REPO_ROOT:/repo" pellcorp/k1-bash-build bash -c "
+set -e
+cp '/repo/vendor/buildroot-x2000/output/images/uImage' '/repo/artifacts/buildroot-halley5-v30-image/uImage'
+cp '/repo/vendor/buildroot-x2000/output/images/rootfs.ext2' '/repo/artifacts/buildroot-halley5-v30-image/rootfs.ext2'
+cp '/repo/vendor/buildroot-x2000/output/images/rootfs.squashfs' '/repo/artifacts/buildroot-halley5-v30-image/rootfs.squashfs'
+cp '/repo/vendor/buildroot-x2000/.config' '/repo/artifacts/buildroot-halley5-v30-image/buildroot.config'
+cp '/repo/vendor/buildroot-x2000/output/build/linux-custom/.config' '/repo/artifacts/buildroot-halley5-v30-image/kernel.config'
+chown $HOST_UID:$HOST_GID /repo/artifacts/buildroot-halley5-v30-image/*
+"
 
-echo "== final build complete, artifacts copied to artifacts/buildroot-halley5-v30-image/ =="
+echo "== final build complete, artifacts copied to artifacts/buildroot-halley5-v30-image/ (uImage, rootfs.ext2, rootfs.squashfs) =="

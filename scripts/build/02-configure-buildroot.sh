@@ -12,6 +12,15 @@
 # to the file's *other*, unedited copy of the same symbol (see FIRMWARE.md
 # sec 14) - copying the known-good, already-normalized file sidesteps that
 # whole class of mistake rather than risking reintroducing it.
+#
+# IMPORTANT: always re-run this script after ANY change to scripts/build/overlay/
+# or the kernel fragment/buildroot.config artifacts, and before 03/05 - a real
+# bug this session (FIRMWARE.md sec 24): editing the git-tracked overlay
+# template alone does nothing, since Buildroot only ever reads from
+# vendor/buildroot-x2000/board/halley5-openke-overlay/ (gitignored), which
+# this script is what syncs the template into. A rebuild after only touching
+# the template, without re-running this first, silently uses whatever this
+# script last copied there.
 set -e
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
@@ -24,28 +33,29 @@ if [ ! -d "$BUILDROOT_DIR/.git" ]; then
 	exit 1
 fi
 
-cp "$ARTIFACTS/buildroot.config" "$BUILDROOT_DIR/.config"
-mkdir -p "$BUILDROOT_DIR/board"
-cp "$ARTIFACTS/halley5-openke-fragment.config" "$BUILDROOT_DIR/board/halley5-openke-fragment.config"
-
-# LINUX_OVERRIDE_SRCDIR points Buildroot's kernel package at the patched
-# source instead of downloading/re-cloning it - must match the Docker mount
-# path used in every later stage's docker run (/kernel_6_6/kernel/kernel-6.6).
-cat > "$BUILDROOT_DIR/local.mk" <<'EOF'
+# Everything below runs inside a root container, not as the host user - a
+# real bug this session: once any docker --user root build has run (every
+# build does), vendor/buildroot-x2000/ becomes root-owned, and plain host
+# `cp`/`rm` calls here start failing with "Permission denied" on every
+# subsequent run. Doing the file operations here too, not just the make
+# steps, makes this script actually idempotent/re-runnable.
+docker run --rm --user root \
+	-v "$REPO_ROOT:/repo" \
+	pellcorp/k1-bash-build bash -c '
+set -e
+cp "/repo/artifacts/buildroot-halley5-v30-image/buildroot.config" "/repo/vendor/buildroot-x2000/.config"
+mkdir -p "/repo/vendor/buildroot-x2000/board"
+cp "/repo/artifacts/buildroot-halley5-v30-image/halley5-openke-fragment.config" "/repo/vendor/buildroot-x2000/board/halley5-openke-fragment.config"
+cat > "/repo/vendor/buildroot-x2000/local.mk" <<EOF
 LINUX_OVERRIDE_SRCDIR = /kernel_6_6/kernel/kernel-6.6
 EOF
-
-# This repo's own hand-written init scripts/configs (init.d scripts, nginx
-# reverse-proxy config, printer.cfg/moonraker.conf). The rest of the overlay
-# (Klipper/Moonraker source, Mainsail's static build, cross-compiled extras)
-# gets assembled by 04-cross-compile-app-stack.sh - this stage only lays
-# down what this project actually wrote by hand.
-rm -rf "$BUILDROOT_DIR/board/halley5-openke-overlay"
-mkdir -p "$BUILDROOT_DIR/board/halley5-openke-overlay"
-cp -r "$SCRIPT_DIR/overlay/." "$BUILDROOT_DIR/board/halley5-openke-overlay/"
-mkdir -p "$BUILDROOT_DIR/board/halley5-openke-overlay/opt/printer_data/comms" \
-         "$BUILDROOT_DIR/board/halley5-openke-overlay/opt/printer_data/logs" \
-         "$BUILDROOT_DIR/board/halley5-openke-overlay/opt/printer_data/gcodes"
+rm -rf "/repo/vendor/buildroot-x2000/board/halley5-openke-overlay"
+mkdir -p "/repo/vendor/buildroot-x2000/board/halley5-openke-overlay"
+cp -r "/repo/scripts/build/overlay/." "/repo/vendor/buildroot-x2000/board/halley5-openke-overlay/"
+mkdir -p "/repo/vendor/buildroot-x2000/board/halley5-openke-overlay/opt/printer_data/comms" \
+         "/repo/vendor/buildroot-x2000/board/halley5-openke-overlay/opt/printer_data/logs" \
+         "/repo/vendor/buildroot-x2000/board/halley5-openke-overlay/opt/printer_data/gcodes"
+'
 
 echo "== normalizing .config (resolves any derived Kconfig selects) =="
 docker run --rm --user root \

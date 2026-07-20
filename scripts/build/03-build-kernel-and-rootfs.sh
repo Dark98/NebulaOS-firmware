@@ -11,6 +11,34 @@
 # built - a later stage that mounts at a different path will fail with
 # "cannot open shared object file" even though nothing about the build
 # itself changed. Pick one path and never deviate.
+#
+# IMPORTANT: this always force-cleans and rebuilds the kernel from scratch
+# (`make linux-dirclean` before `make`), rather than relying on plain `make`
+# alone. A real, previously-silent bug this session (FIRMWARE.md sec 24):
+# LINUX_OVERRIDE_SRCDIR points Buildroot at this project's own kernel
+# checkout, but Buildroot's own .stamp_built/.stamp_rsynced files don't
+# detect source changes there - a plain `make` after editing a DTS/Kconfig
+# file will silently keep using the last-built kernel binary, reporting
+# success while shipping stale, unpatched code. The dirclean costs a slower,
+# full kernel rebuild every time this script runs, which is a real, deliberate
+# tradeoff in favor of correctness - re-run 02-configure-buildroot.sh first
+# if scripts/build/overlay/ or the config artifacts changed, since this
+# script does not re-sync those itself.
+#
+# IMPORTANT: also force-cleans wpa_supplicant specifically, for the same
+# reason but a different, more general cause (FIRMWARE.md sec 24/27):
+# Buildroot does not automatically rebuild an already-built *package* just
+# because its own Kconfig options (BR2_PACKAGE_WPA_SUPPLICANT_CTRL_IFACE/
+# _CLI in this case) changed after it was first built - only source changes
+# for override-srcdir packages get this same treatment, and even that needs
+# an explicit dirclean as above. This bit us for real: wpa_supplicant was
+# already built once with CTRL_IFACE/CLI disabled, the .config was fixed to
+# enable them, and a later plain `make` silently kept shipping the old,
+# disabled build - passing every check except `06-verify.sh`'s explicit
+# `wpa_cli` presence check. If any other package's Kconfig options get
+# changed after it's already been built once, the same `<pkg>-dirclean`
+# treatment is needed - this project has hit this exact class of bug twice
+# now, for two different packages, for the same underlying reason.
 set -e
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
@@ -32,6 +60,8 @@ apt-get install -y -qq python3 bc cpio rsync unzip bison flex libncurses5-dev fi
 	libexpat1-dev libbz2-dev liblzma-dev libreadline-dev libgdbm-dev uuid-dev \
 	pkg-config autoconf automake libtool gettext texinfo help2man \
 	libjpeg-dev libpng-dev libtiff-dev libwebp-dev libopenjp2-7-dev >/dev/null 2>&1
+make linux-dirclean
+make wpa_supplicant-dirclean
 make
 '
 

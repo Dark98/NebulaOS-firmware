@@ -2281,3 +2281,55 @@ before, and it's rich with real, useful confirmation:
 visibility rather than a blind static-screen guess - and the wiring, voltage, and capture setup have
 already been proven correct against a real, known-good boot, rather than being untested variables on
 top of an already-uncertain custom kernel.
+
+## 28. The checked-in build pipeline itself fixed, not just today's rebuild - two more real Buildroot staleness bugs found
+
+Before rebuilding with the `gpa_voltage` fix, adapted `scripts/build/02/03/05/06` so the *pipeline
+itself* is correct and reproducible, not just this one rebuild done by hand again.
+
+**`02-configure-buildroot.sh` had a real idempotency bug**: it did plain host-user `cp`/`rm` into
+`vendor/buildroot-x2000/`, but after any `docker --user root` build runs (every build), that tree
+becomes root-owned - so any re-run failed with `Permission denied`, exactly what happened earlier
+this session. Fixed by moving all the file operations inside a root container too, not just the
+`make olddefconfig` step.
+
+**`03-build-kernel-and-rootfs.sh` and `05-final-build.sh` both just ran plain `make`** - the exact
+gap that caused §24's silent stale-overlay rebuild. Added `make linux-dirclean` before `make` in 03,
+guaranteeing kernel source changes are always picked up rather than trusting Buildroot's own (correctly
+documented as unreliable for `LINUX_OVERRIDE_SRCDIR`) staleness detection.
+
+**A second, real instance of the same underlying class of bug turned up immediately during today's
+actual rebuild - for a different package.** After running the adapted pipeline, `06-verify.sh`
+reported `wpa_cli` missing, even though the top-level `.config` clearly had
+`BR2_PACKAGE_WPA_SUPPLICANT_CLI=y`. Root cause: Buildroot does not automatically rebuild an
+already-built *package* just because its own Kconfig options changed after that package was already
+built once (a general, documented Buildroot limitation, not specific to `LINUX_OVERRIDE_SRCDIR`) -
+`wpa_supplicant` had been built once before with `CTRL_IFACE`/`CLI` disabled, and a later plain
+`make` silently kept shipping that old build even after the `.config` was fixed. Confirmed directly
+(not assumed): `wpa_supplicant`'s own generated `.config` and `output/target/usr/sbin/wpa_cli`'s
+absence both pointed the same way. Fixed the same way as the kernel - `make wpa_supplicant-dirclean`
+before `make` - and added this permanently to `03-build-kernel-and-rootfs.sh`, with a clear comment
+flagging this as a *general* Buildroot gotcha (any package whose Kconfig options get changed after
+first being built needs the same treatment), not a one-off.
+
+**Along the way, a third "MISS" turned out to be a bug in the verification itself, not the build** -
+`06-verify.sh`'s own new check used `/usr/bin/wpa_cli`, but the real, correct install path (confirmed
+via `find` in the actual build tree) is `/usr/sbin/wpa_cli`, matching `dropbear`'s own convention.
+Fixed the check, not the (already-correct) build - a good reminder to verify which side of a failing
+check is actually wrong before assuming the build regressed.
+
+**Also fixed while touching these scripts**: `05-final-build.sh` never copied `rootfs.squashfs` at
+all - the actual image format used for real flashing (`flash-spare-slot.sh` targets squashfs,
+matching the real device's own partition format) - only `rootfs.ext2`. Added. Also replaced a
+hardcoded `chown 1000:1000` with `$(id -u):$(id -g)` computed at run time, so the script stays
+correct for any user, not just this one.
+
+**A known, separate, not-yet-fixed issue flagged rather than scope-crept into**: `04-cross-compile-
+app-stack.sh` has an inconsistent mix of `docker run` calls, some with `--user root` and some
+without - a real, similar class of risk to what was just fixed in 02, but out of scope for today
+since nothing in this session touched the app-stack cross-compile step.
+
+Final rebuild, this time via the actually-adapted scripts end to end (02 → 03 → 05 → 06), passed
+every single check in `06-verify.sh` - including all of today's new files and the corrected
+`wpa_cli` path. Artifacts in `artifacts/buildroot-halley5-v30-image/` now genuinely reflect the
+`gpa_voltage` fix, ready for the next real boot attempt.

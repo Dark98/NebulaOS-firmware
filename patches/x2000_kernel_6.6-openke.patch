@@ -1,3 +1,26 @@
+diff --git a/kernel/kernel-6.6/arch/mips/Kconfig b/kernel/kernel-6.6/arch/mips/Kconfig
+index 066bc5232..fffd28e1d 100644
+--- a/kernel/kernel-6.6/arch/mips/Kconfig
++++ b/kernel/kernel-6.6/arch/mips/Kconfig
+@@ -480,6 +480,18 @@ config MACH_XBURST2
+     select SYS_SUPPORTS_HIGHMEM
+     select XBURST2_CPU_SCACHE
+     select HAVE_KERNEL_GZIP
++    # OpenKE (2026-07-20, FIRMWARE.md sec 29): HAVE_KERNEL_XZ is only ever
++    # selected by arch/s390 elsewhere in this tree - without it here,
++    # CONFIG_KERNEL_XZ's own "depends on HAVE_KERNEL_XZ" can never be
++    # satisfied, so a Buildroot config fragment forcing CONFIG_KERNEL_XZ=y
++    # gets silently discarded by a later `make olddefconfig` (confirmed by
++    # direct testing: the choice falls back to its default, KERNEL_GZIP,
++    # every time). This board's SPL/U-Boot stage has no gunzip support, and
++    # arch/mips/boot/Makefile's suffix-y logic only special-cases
++    # GZIP/BZIP2/LZMA/LZO, so making XZ selectable here is what actually lets
++    # the fragment's CONFIG_KERNEL_XZ=y take effect and fall through to an
++    # uncompressed uImage.bin, matching the real stock kernel/kernel2 images.
++    select HAVE_KERNEL_XZ
+     select IRQ_MIPS_CPU
+     select USE_OF
+     select LIBFDT
 diff --git a/kernel/kernel-6.6/drivers/bluetooth/Kconfig b/kernel/kernel-6.6/drivers/bluetooth/Kconfig
 index bc211c324..25472a1c4 100644
 --- a/kernel/kernel-6.6/drivers/bluetooth/Kconfig

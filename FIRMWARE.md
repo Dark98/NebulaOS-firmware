@@ -2333,3 +2333,74 @@ Final rebuild, this time via the actually-adapted scripts end to end (02 → 03 
 every single check in `06-verify.sh` - including all of today's new files and the corrected
 `wpa_cli` path. Artifacts in `artifacts/buildroot-halley5-v30-image/` now genuinely reflect the
 `gpa_voltage` fix, ready for the next real boot attempt.
+
+## 29. Root cause of the §26 boot failure found and fixed - a gzip-vs-uncompressed mismatch, and it took two separate fixes to actually stick
+
+**The reference boot log from §27 pinpointed the exact failure point.** Comparing the two uImage
+headers directly (`struct.unpack('>IIIIIIIBBBB', ...)` against the first 32 bytes) showed our
+custom kernel was gzip-compressed (`compression=1`) while both real stock `kernel`/`kernel2`
+partitions are uncompressed (`compression=0`). That matches the actual failure symptom precisely:
+the stock reference log prints `Uncompressing Linux...` immediately before `Linux version
+4.4.94 ...`, and the custom-kernel attempt in §26 never printed that line at all - SPL ran
+identically to a known-good boot right up through DDR init/RTOS/nvram read, then simply stopped.
+The most likely explanation: this board's SPL is a minimal bootstrap stage with no gunzip support,
+so it silently hangs the moment it tries to decompress a gzip-compressed image.
+
+**First fix attempt didn't work, and *looked* like it should have.** Added `CONFIG_KERNEL_XZ=y` to
+`halley5-openke-fragment.config` - MIPS's own `arch/mips/boot/Makefile` only maps
+`CONFIG_KERNEL_{GZIP,BZIP2,LZMA,LZO}` to a compressed uImage suffix, so selecting XZ (a mandatory
+Kconfig choice, satisfying the kernel's "must pick exactly one" requirement) falls through to the
+same uncompressed `.bin` the stock kernel uses, without needing the generic, MIPS-unavailable
+`KERNEL_UNCOMPRESSED` option. Rebuilt, decoded the new header - still `compression=1`. Not a
+tooling mistake this time; a real, two-layer Kconfig gap:
+
+1. **`arch/mips/Kconfig`'s `config MACH_XBURST2` block only ever `select`s `HAVE_KERNEL_GZIP`**,
+   never `HAVE_KERNEL_XZ`. `CONFIG_KERNEL_XZ`'s own `depends on HAVE_KERNEL_XZ` could therefore
+   never be satisfied for this board, so every `make olddefconfig` pass silently dropped the
+   fragment's `CONFIG_KERNEL_XZ=y` line and fell back to the choice's default (`KERNEL_GZIP`) -
+   confirmed directly with an isolated `merge_config.sh` + `olddefconfig` test against the real
+   kernel source, outside the full Buildroot pipeline, to rule out a Buildroot-specific cause
+   before assuming one. Fixed with `select HAVE_KERNEL_XZ` added right next to the existing
+   `HAVE_KERNEL_GZIP` line - a real kernel-source patch, not a config-fragment one.
+2. **Even with (1) fixed, the choice still resolved to GZIP** - a second, independent mechanism.
+   Buildroot has its *own* top-level "Kernel compression format" choice
+   (`BR2_LINUX_KERNEL_GZIP`/`_XZ`/... in `linux/Config.in`), completely separate from the kernel's
+   own `CONFIG_KERNEL_*` symbols, and it force-overrides whatever the kernel's `.config`/fragment
+   says on *every* build via `LINUX_KCONFIG_FIXUP_CMDS`'s
+   `KCONFIG_ENABLE_OPT($(LINUX_COMPRESSION_OPT_y))` (`linux/linux.mk:388`) - traced by reading that
+   fixup step directly after noticing the real build log showed the fragment merge succeeding
+   (`Value of CONFIG_KERNEL_XZ is redefined ... New value: CONFIG_KERNEL_XZ=y`) and an
+   intermediate `oldconfig` pass correctly resolving to XZ, only for a *later*, separate
+   "Updating kernel config with fixups" step to silently flip it straight back to GZIP with no
+   warning at all. Fixed by setting `BR2_LINUX_KERNEL_XZ=y` (and un-setting `_GZIP`) in the
+   top-level `artifacts/buildroot-halley5-v30-image/buildroot.config` - the file that actually
+   determines the final compression choice, independent of the kernel-side fragment.
+
+Both fixes were verified in isolation before the real rebuild: a throwaway `merge_config.sh` +
+`olddefconfig` test confirmed fix (1) alone resolves the *kernel's own* choice correctly
+(`CONFIG_KERNEL_XZ=y`, `CONFIG_KERNEL_GZIP` unset), and the real build log after fix (2) showed the
+kernel's build-tree `.config` correctly landing on `# CONFIG_KERNEL_GZIP is not set` /
+`CONFIG_KERNEL_XZ=y` with no further overrides.
+
+**Final rebuild confirms the fix.** Decoded the resulting `uImage` header:
+`compression=0`, size grew from 6,386,343 bytes (gzip) to 14,457,328 bytes (raw) - exactly the
+direction and rough magnitude expected for dropping compression on a ~14MB kernel.
+`06-verify.sh` still passes every check clean.
+
+**One remaining discrepancy was checked and is not a bug.** The new header's entry point
+(`0x80a4ae1c`) still doesn't equal its load address (`0x80010000`), unlike stock's uncompressed
+image where load and entry are identical. Confirmed via `readelf -h` against the actual built
+`vmlinux` that `0x80a4ae1c` is genuinely that binary's own ELF entry point (the `kernel_entry`
+symbol, placed wherever the linker script put it) - not a stray or miscomputed value. This is
+expected, not a regression: a *compressed* uImage's entry point points at a small decompressor stub
+at the very front of the image (hence `ep == load`), while an *uncompressed* image's entry point is
+simply wherever the real kernel entry symbol lives in the linked binary, which is naturally offset
+from the start of the raw image. Nothing about this needs fixing.
+
+**Still not tested against real hardware.** The device has been unreachable (100% packet loss)
+since the §26 attempt and stays that way until the physical recovery button sequence is pressed
+again - per the explicit agreement for this session, no further live write/flip/reboot attempt runs
+without the user physically present. What's ready for that next attempt: a rebuilt, verified
+`uImage`/`rootfs.ext2`/`rootfs.squashfs` with the compression mismatch closed, plus a serial console
+already proven end-to-end against a real known-good boot (§27), so this next attempt - unlike §26 -
+will have full boot-log visibility from the very first byte U-Boot prints.

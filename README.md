@@ -364,14 +364,16 @@ except this probe layer, with no SWD required.
 ## Layout
 
 - `scripts/build/` - **real, tested, runnable scripts that reproduce the entire Track 3 custom
-  firmware/OS build from scratch** (`FIRMWARE.md` §8-15) - fetching every pinned vendor source,
-  applying `patches/x2000_kernel_6.6-openke.patch`, configuring Buildroot, building the kernel +
+  firmware/OS build from scratch** (`FIRMWARE.md` §8-15, §39) - fetching every pinned vendor source
+  (including this project's own kernel fork, see below), configuring Buildroot, building the kernel +
   rootfs, cross-compiling the app-stack extras, and verifying the result, all Docker-only with zero
   real-device writes. See `scripts/build/README.md` for prerequisites and how to run them - this is
   the actual way to reproduce this project's build, not just a description of what was done.
-- `patches/x2000_kernel_6.6-openke.patch` - the single real diff covering every kernel-source change
-  this project made (touch/display/WiFi/Bluetooth/the NS2009 port), verified to apply cleanly
-  against a genuinely fresh clone of the pinned kernel SDK commit.
+- Every kernel-source change this project made (touch/display/WiFi/Bluetooth/the NS2009 port) lives
+  as real, reviewable commits on the `openke` branch of
+  [`coreflake1/NebulaOS`](https://github.com/coreflake1/NebulaOS) - a real fork of the original
+  upstream kernel SDK (`Llixuma/ingenic-linux-kernel6.6-x2000-v1.0-20250221`), not a patch file
+  applied at build time (`FIRMWARE.md` §39). `main` on the fork tracks upstream unmodified.
 - `reference/` - real source Creality published for this exact subsystem (a different printer
   line, K1, but confirmed byte-for-byte matching command signatures against our own KE's compiled
   binary via `strings`). GPLv3-licensed, copyright Creality. Fetched from

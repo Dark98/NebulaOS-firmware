@@ -24,10 +24,14 @@ rootfs-overlay deletion gotcha) are all documented there with root causes, not j
   add up) and a few hours of build time on a reasonably modern machine.
 - Internet access for the `git clone`/`curl` steps in `00-fetch-vendor-sources.sh` - this project's
   `vendor/` directory is gitignored on purpose (large, mixed-provenance sources, see the main
-  README), so nothing under `vendor/` is checked into this repo. What *is* checked in: the real
-  patch this project's kernel changes are captured as (`patches/x2000_kernel_6.6-openke.patch`) and
-  the small set of files this project actually wrote by hand (`scripts/build/overlay/` - init
-  scripts and configs, not the third-party source/binaries those scripts launch).
+  README), so nothing under `vendor/` is checked into this repo. The kernel is the one exception to
+  "gitignored, nothing checked in": this project's kernel changes live as real commits on the
+  `openke` branch of a real fork, [`coreflake1/NebulaOS`](https://github.com/coreflake1/NebulaOS)
+  (forked from the original upstream, `Llixuma/ingenic-linux-kernel6.6-x2000-v1.0-20250221`) -
+  `00-fetch-vendor-sources.sh` clones that branch directly, so the kernel changes travel with their
+  own real git history instead of a patch file. What else *is* checked into this repo: the small set
+  of files this project actually wrote by hand (`scripts/build/overlay/` - init scripts and configs,
+  not the third-party source/binaries those scripts launch).
 
 ## Running the whole thing
 
@@ -49,14 +53,16 @@ fine as long as its inputs (the previous stages' outputs) are still in place.
 ## What each stage does
 
 1. **`00-fetch-vendor-sources.sh`** - clones/downloads every third-party source this build needs
-   into `vendor/` at the exact refs this project used: the X2000 kernel SDK
-   (`Llixuma/ingenic-linux-kernel6.6-x2000-v1.0-20250221`), the Buildroot config
-   (`lone0/buildroot-x2000`), Klipper (`pellcorp/klipper`, SimpleAF's fork), Moonraker
-   (`Arksine/moonraker`, official), `pellcorp/k1-ustreamer`, and Mainsail's latest prebuilt release.
-2. **`01-apply-kernel-patches.sh`** - applies `patches/x2000_kernel_6.6-openke.patch` (touch DT
-   wiring, the new display panel driver, the new Bluetooth H5 Broadcom vendor extension, WiFi/BT/
-   display Kconfig changes, the real ported NS2009 driver, and the upstream `binder.h` build-fix)
-   to the freshly cloned kernel source.
+   into `vendor/` at the exact refs this project used: the X2000 kernel SDK, this project's own
+   fork's `openke` branch (`coreflake1/NebulaOS`, forked from `Llixuma/ingenic-linux-kernel6.6-
+   x2000-v1.0-20250221`), the Buildroot config (`lone0/buildroot-x2000`), Klipper
+   (`pellcorp/klipper`, SimpleAF's fork), Moonraker (`Arksine/moonraker`, official),
+   `pellcorp/k1-ustreamer`, and Mainsail's latest prebuilt release.
+2. **`01-apply-kernel-patches.sh`** - no longer applies anything (this project's kernel changes -
+   touch DT wiring, the new display panel driver, the new Bluetooth H5 Broadcom vendor extension,
+   WiFi/BT/display Kconfig changes, the real ported NS2009 driver, and the upstream `binder.h`
+   build-fix - are already real commits on the fork's `openke` branch, checked out by stage 0). Just
+   verifies they're actually present, kept as stage "01" so the numbered sequence stays stable.
 3. **`02-configure-buildroot.sh`** - writes the real Buildroot `.config` (base `x2000_halley5_v30_
    linux` defconfig plus every option this project added - WiFi/BT/touch/display/RNG/Python3/
    nginx/etc, using a helper that finds-and-replaces each option's *real* existing line rather than

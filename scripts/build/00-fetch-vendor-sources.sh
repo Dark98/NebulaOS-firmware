@@ -21,15 +21,21 @@ clone_pinned() {
 	git -C "$name" checkout "$ref"
 }
 
-# X2000 kernel SDK (Phase 2's rebase target, FIRMWARE.md sec 7's "Update").
-# Sparse-checked-out to kernel/kernel-6.6 only (the full repo is ~684MB).
+# X2000 kernel SDK, OpenKE fork (FIRMWARE.md sec 39): coreflake1/NebulaOS is a
+# real GitHub fork of the original upstream (Llixuma/ingenic-linux-kernel6.6-
+# x2000-v1.0-20250221 @ a98c2e1, "initial release"), with every OpenKE change
+# (NS2009 touch, the display panel driver, BT H5 vendor ext, watchdog fix, DTS
+# wiring, arch/mips/Kconfig compression selects) as one real, reviewable commit
+# on the `openke` branch, rather than a patch file applied at build time -
+# `main` on the fork tracks upstream unmodified. Sparse-checked-out to
+# kernel/kernel-6.6 only (the full repo is ~684MB).
 if [ ! -d "x2000_kernel_6.6/.git" ]; then
 	echo "== cloning x2000_kernel_6.6 (sparse: kernel/kernel-6.6 only) =="
 	git clone --filter=blob:none --sparse \
-		https://github.com/Llixuma/ingenic-linux-kernel6.6-x2000-v1.0-20250221.git \
+		https://github.com/coreflake1/NebulaOS.git \
 		x2000_kernel_6.6
 	git -C x2000_kernel_6.6 sparse-checkout set kernel/kernel-6.6
-	git -C x2000_kernel_6.6 checkout a98c2e1f22e4263ddd4153a4eca4db4dcfd2777b
+	git -C x2000_kernel_6.6 checkout openke
 else
 	echo "== x2000_kernel_6.6 already present, skipping =="
 fi

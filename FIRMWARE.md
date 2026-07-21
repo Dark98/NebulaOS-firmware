@@ -2718,3 +2718,283 @@ this one. All six killed; a clean, single-reader capture is now in place for the
 whether they actually resolved the boot failure is genuinely unconfirmed, since the one live test
 run against them had compromised data. This needs a fresh, clean test to actually know. Device
 safely back on stock (confirmed via `/proc/cmdline` showing `root=/dev/mmcblk0p7`, kernel 4.4.94).
+
+## 35. A second round of real hardware-vs-defconfig auditing (uncommitted until now), a static-binary isolation test, and the actual `exec.c` mechanism finally read
+
+**This entire round happened after §34's commit and was never written up or committed** - caught
+only because a later session found the working tree still dirty (`kernel.config`,
+`halley5-openke-fragment.config`, rebuilt `xImage`/`rootfs.*` all modified, plus a new untracked
+`scripts/build/diag_init.c`) with no matching commit or FIRMWARE.md entry. Recovered by reading the
+uncommitted diff and the boot logs it referenced directly, in full, rather than trusting any prior
+summary.
+
+**Found via the same "audit vendor base defconfig against real hardware" technique as §34, taken
+further**: the vendor `x2000_halley5_v30_linux_defconfig` ships **`CONFIG_BCMDHD=y` built-in** - a
+proprietary Broadcom driver targeting the *reference board's* own WiFi module
+(`fw_bcm43456c5_ag.bin`/`nvram_ap6256.txt`, a BCM43456/AP6256 chip), not our real, live-confirmed
+chip (Cypress CYW43438). Being built-in, it initialized unconditionally and, per a real captured log
+(`vendor/device-backups/wdt-fix-boot-attempt.log`), power-cycled `WL_REG_ON` in a tight retry loop
+every ~2-3s fighting our own `brcmfmac` driver over the same SDIO/GPIO hardware - never intentional,
+nobody had disabled it when brcmfmac was added. Disabled (`# CONFIG_BCMDHD is not set`).
+
+**Same bug class, two more found**: `CONFIG_TOUCHSCREEN_GT9XX` (Goodix - not our hardware, our real
+touch is NS2009, already correctly enabled; its I2C probe against a NOACK'ing address cost ~0.74s
+per boot) and `CONFIG_HALLEY5_CAMERA_BOARD` (+ `RD_X2000_HALLEY5_CAMERA_4V3` + the `INGENIC_ISP_CAMERA_OV2735A`
+sensor driver it selects) - a vendor reference camera daughterboard we don't have; our real camera is
+a generic USB UVC webcam via ustreamer, not this native ISP/CIM/MSCaler pipeline. Its I2C probe cost
+a full ~10s waiting out an ABRT_7B_ADDR_NOACK timeout - a real, measurable chunk of boot time. Both
+disabled. Note: the board-gate alone did not cascade-clear `OV2735A` (verified against the actual
+built `.config`, not assumed) - the vendor tree selects it from two overlapping Kconfig trees, so it
+needed disabling directly.
+
+**Built a static, dependency-free diagnostic init** (`scripts/build/diag_init.c` - raw syscalls only,
+no libc stdio, no dynamic linker, no `PT_INTERP`) specifically to isolate whether busybox/dynamic
+linking/squashfs reads were implicated in the §33 panic, built with Buildroot's own internal
+toolchain to keep it a single-variable test against busybox's exact ABI.
+
+**The result nobody synthesized until this session**: three follow-up boot tests today
+(`custom-boot-bcmdhd-fix-20260721-140901.log`, `custom-boot-diag-init-20260721-143315.log`,
+`custom-boot-brcmfmac-builtin-20260721-145547.log`) **all still hit the identical panic** -
+`request_module: modprobe binfmt-464c cannot be processed, kmod busy with 50 threads for more than
+5 seconds now` -> `Kernel panic - not syncing: Requested init ... failed (error -8)`. The diag_init
+result is the important one: a trivial static binary with zero dependencies failed exactly the same
+way (`Requested init /diag_init failed (error -8)`), which conclusively rules out busybox, dynamic
+linking, and squashfs reads as the cause. None of today's fixes resolved the panic - they only
+pushed it later (9.4s -> 20-25s), consistent with real boot-time work being removed but the
+underlying trigger untouched.
+
+**Read this kernel's actual `fs/exec.c` `search_binary_handler()` for the first time** (previously
+only reasoned about generically from memory of mainline Linux). Confirmed: `request_module("binfmt-%04x", ...)`
+only fires after *every* already-registered format handler - including the built-in ELF loader
+(`CONFIG_BINFMT_ELF=y`, confirmed `bool`, not `tristate`, can never itself be `=m`) - has returned
+`-ENOEXEC`. That means the kmod-exhaustion message is a *symptom*, not the root cause: something is
+making the built-in ELF loader itself reject a trivially valid, correctly-built MIPS32/O32 static
+ELF binary. This is a narrower and previously-unasked question.
+
+**Read the `initcall_debug`+`loglevel=8` output already captured in the most recent log** (this
+`CONFIG_CMDLINE` was set in today's uncommitted fragment-config diff specifically for this). Every
+initcall before the panic completed cleanly with matched calling/returned pairs - the entire ~12s
+silent gap (`[8.754] Run /linuxrc as init process` -> `[9.962] mmc1: Failed to initialize a
+non-removable card` -> `[21.910]` kmod-busy message) happens entirely inside the `execve()` attempt
+itself, after all kernel initcalls are done. Ruled out stale/missing modprobe dependency data as a
+contributing cause: `/lib/modules/6.6.18-rt23/modules.dep`+`modules.alias` exist and are freshly
+regenerated from today's build (15:09). The actual source of the 50 concurrent `request_module()`
+callers remains unidentified - next step is source-level `printk` instrumentation in
+`search_binary_handler()`/`__request_module()` (`kernel/kmod.c`) rather than further static reading,
+since we have full source control over this vendor tree.
+
+**Compared against the live stock device for the first time on this specific question**: stock's own
+`dmesg` (kernel 4.4.94, been up hours) has **zero** `request_module`/`kmod`/`binfmt` lines at all -
+completely clean, consistent with its `S11module_driver_default`-before-`S12udev` force-insmod
+strategy (§ found earlier this session) never giving the kernel's autoload path a chance to fire in
+the first place. Also confirmed the hardware constraint that makes this dangerous at all: **2 CPU
+cores, ~197MB total RAM**. Fifty concurrent kernel threads is a 25x oversubscription on this specific
+board - reinforcing that structurally avoiding the scenario (stock's approach) is the right target,
+not just fixing whatever triggers it this one time.
+
+**Also found and fixed in this same session (not yet tested)**: `CONFIG_STAGE_ZC50289HSHD02=y` was
+still enabled - a *second*, wrong MIPI-DSI panel driver (Fitipower ZC50289HSHD02, a vendor reference
+panel). Confirmed real and live, not inert: `halley5_v30.dts` conditionally includes a full DT node
+for it (`#ifdef CONFIG_STAGE_ZC50289HSHD02` / `#include ".../HALLEY5_MIPI_LCD_ZC50289HSHD02.dtsi"`),
+so with this symbol set the mipi-dsi driver has a real, matching node to probe against alongside our
+actual plain-RGB panel (`openke_panel`, unconditional, our own addition) - directly explaining a log
+line (`registered panel driver(fitipower_zc50289hshd02-lcd) to mipi-dsi driver`) earlier mistaken for
+serial-capture splice contamination in an older, genuinely-contaminated log. Same bug class as
+BCMDHD/GT9XX/camera above, just missed in the first pass. Checked two other suspicious symbols
+(`CONFIG_BCM_4345C5_RFKILL`, `CONFIG_INGENIC_MAC`) and confirmed both are structurally inert for this
+board - no matching driver source file for the former, no DT node at all for the latter - so left
+alone.
+
+## 36. The real root cause found, for real this time: a MIPS NaN-encoding ABI mismatch rejects every ELF exec unconditionally - kmod exhaustion was never the actual bug
+
+Added `printk` instrumentation directly to this kernel's own `search_binary_handler()` (`fs/exec.c`)
+and `__request_module()` (`kernel/module/kmod.c`) - logging every module-load request (name/comm/pid)
+and which format handler ran for every exec attempt with what result. Verified via
+`LINUX_OVERRIDE_SRCDIR` (`scripts/build/02-configure-buildroot.sh`) that `vendor/x2000_kernel_6.6` is
+genuinely the tree Buildroot compiles from, not a separate reference checkout - confirmed the
+instrumentation strings landed in the built `vmlinux` before ever touching the device. Rebuilt
+(also folding in the `CONFIG_STAGE_ZC50289HSHD02` disable from §35), flashed to the spare slot via
+`flash-spare-slot.sh` (both writes md5-verified), flipped the `ota` marker using the device's own
+real `local_set_next_boot_device()` (`/etc/ota_bin/ota_local_method.sh`) rather than hand-rolling the
+write, and ran a single clean serial capture across the reboot.
+
+**The real chain, read directly from the log, not inferred**:
+```
+search_binary_handler filename=/linuxrc handler=load_elf_binary retval=-8
+search_binary_handler filename=/linuxrc ALL FORMATS EXHAUSTED, requesting binfmt-464c
+__request_module ENTER name=binfmt-464c comm=swapper/0 pid=1
+search_binary_handler filename=/sbin/modprobe handler=load_elf_binary retval=-8
+search_binary_handler filename=/sbin/modprobe ALL FORMATS EXHAUSTED, requesting binfmt-464c
+__request_module ENTER name=binfmt-464c comm=kworker/u5:0 pid=505
+... (repeats ~150 times across ~50 concurrent kworkers)
+Kernel panic - not syncing: Requested init /linuxrc failed (error -8).
+```
+**This is a self-amplifying recursive storm, not 50 independent driver autoloads.** `/linuxrc` fails
+to exec because the built-in ELF loader rejects it. The kernel's fallback - `request_module("binfmt-464c")`
+- spawns `/sbin/modprobe` to try to fix that. But `/sbin/modprobe` (a `busybox` symlink) is *also* an
+ELF binary, and it *also* gets rejected by the same loader for the same reason, so it *also* falls
+back to requesting `binfmt-464c` - spawning another modprobe, which also fails, recursively - burning
+through all 50 `kmod_concurrent_max` semaphore slots in about 5 seconds flat. The "kmod busy with 50
+threads" message that every previous session (including this one, until now) treated as the root
+cause is just where the recursion finally hits its concurrency ceiling - a downstream symptom of a
+completely different, upstream bug: **the built-in ELF loader rejects every single binary on this
+system**, unconditionally, regardless of content, ABI declaration, static/dynamic linking, or which
+file it is (confirmed independently across `busybox`, the from-scratch static `diag_init`, and now
+`modprobe` - same binary as busybox via symlink, but a structurally different code path/exec
+context, and still identical failure).
+
+**Root-caused precisely by reading `arch/mips/kernel/elf.c`'s `arch_check_elf()`** - the
+MIPS-specific ELF arch-check hook, called from the generic ELF loader for *every* exec before any
+FP-ABI/interpreter-matching logic even runs:
+```c
+if (flags & EF_MIPS_NAN2008) {
+    if (mips_use_nan_2008) state->nan_2008 = 1;
+    else return -ENOEXEC;
+} else {
+    if (mips_use_nan_legacy) state->nan_2008 = 0;
+    else return -ENOEXEC;
+}
+```
+Our toolchain builds legacy-NaN binaries (`BR2_MIPS_NAN_LEGACY=y` in `buildroot.config` - confirmed
+this session), so every one of our binaries takes the `else` branch and is unconditionally rejected
+unless the kernel's own `mips_use_nan_legacy` global is true. That global is set once at boot by
+`cpu_set_nan_2008()` (`arch/mips/kernel/fpu-probe.c`), driven by a live FPU/FCSR capability probe of
+this exact XBurst2 core *combined with* the `ieee754=` kernel cmdline parameter (default `strict`,
+which trusts the probe outcome completely rather than being permissive). If this non-strictly-compliant
+Ingenic core's FPU probe doesn't report legacy-NaN support the way the generic MIPS probe code
+expects, `mips_use_nan_legacy` ends up false and every legacy-NaN binary - i.e. everything we ship -
+is rejected before ever reaching userspace, independent of anything about kmod, modules, or driver
+config.
+
+**Next, concrete, low-risk step**: add `ieee754=relaxed` to `CONFIG_CMDLINE` (the mechanism is
+already in place from §35's `initcall_debug loglevel=8` addition) - this unconditionally sets both
+`mips_use_nan_legacy` and `mips_use_nan_2008` true, accepting binaries regardless of declared NaN
+encoding, sidestepping the FPU-probe question entirely rather than needing to fix the probe itself.
+Pure kernel-cmdline change, no rebuild-breaking risk, directly testable.
+
+**Device state**: bootlooping (SPL -> panic -> reboot every ~13s) since `S00revert-safety` can never
+run in this failure mode (panic happens before any init.d script executes) - needs the same manual
+`--force-swap-ota` mask-ROM recovery documented in §26, not automatic self-heal. Recovery is the
+user's own physical action (boot+reset buttons); not something remotely triggerable.
+
+## 37. `ieee754=relaxed` confirmed the fix for real - first ever full custom-kernel boot, live shell, two new small follow-up bugs found
+
+Device recovered to stock via the manual `--force-swap-ota` path (§26/§36), `ieee754=relaxed` added
+to `CONFIG_CMDLINE` alongside the existing `initcall_debug loglevel=8`, rebuilt (`xImage` actually
+got *smaller*, 5.96MB vs 5.96MB - the panel removal in §35 offset the printk additions), flashed to
+the spare slot (both writes md5-verified), marker flipped via the device's own real
+`local_set_next_boot_device()`, clean single serial capture, reboot.
+
+**Result: no panic, anywhere, for the first time ever on this track.** The `openke-diag` instrumentation
+confirms the exact mechanism understood in §36 is now fixed - every `search_binary_handler` call for
+every binary now shows `handler=load_elf_binary retval=0` instead of `retval=-8`. Full init sequence
+ran to completion: `S00revert-safety`, `seedrng`, `syslogd`, `klogd`, `sysctl`, `S39wifi` (wpa_supplicant
+started but `wlan0` never appeared - expected, no wpa_supplicant config supplied, not a bug),
+`S40network` (eth0/wlan0 both time out - expected, no cable/AP), `nginx` (a real but separate bug -
+`open() "/usr/off" failed (30: Read-only file system)`), `ustreamer` (`retval=-2`/ENOENT, likely
+`/dev/video0` not present without a camera attached), **`S55klipper`/`S56moonraker`/`S58guppyscreen`
+all exec'd successfully**, and `S99confirm-good` correctly polled Moonraker's localhost health
+endpoint for 150s (30 retries x 5s, real code read from the script itself:
+`http://127.0.0.1:7125/server/info`), never got a response, and **correctly left the `ota` marker on
+`ota:kernel` (stock)** rather than confirming forward - meaning the *next* reboot self-heals to stock
+automatically, exactly as designed. Reached a real `buildroot login:` prompt.
+
+**Logged in over serial for the first time this track** (root / `openke` - hash-verified offline
+against `/etc/shadow` before ever trying it live) and used a genuine live shell to check two things
+network alone couldn't answer:
+
+- **USB-ethernet dongle plugged in mid-session never enumerated at all** - `/sys/bus/usb/devices/`
+  shows only the internal `usb1`/`1-0:1.0` root hub, nothing else, and `ip link show` has no `eth0`.
+  Not a driver-loading issue (exec works now) - the kernel never saw a device attach event at all.
+  Separate open item - possibly OTG host-mode/DTS `dr_mode`, port wiring, or the dongle itself;
+  unconfirmed which.
+- **GuppyScreen exec's successfully but exits immediately - root cause found by just running it in the
+  foreground**: `terminate called after throwing an instance of 'nlohmann::detail::parse_error'` /
+  `[json.exception.parse_error.101] parse error at line 1, column 1: ... unexpected end of input` -
+  it's trying to parse a JSON file that's empty or missing entirely, not a framebuffer/touch issue
+  (`/dev/fb0` exists, confirmed present). `S58guppyscreen`'s `start-stop-daemon -b` backgrounds with
+  no stdout/stderr capture, which is why this was invisible before - the fix for whichever future
+  session picks this up is to redirect its output to a real log file, not just re-guess at the cause.
+
+**Both are real but clearly separate from tonight's fix** - the actual multi-day boot blocker (kmod
+exhaustion -> recursive modprobe storm -> universal ELF rejection -> MIPS NaN-ABI mismatch) is
+resolved and confirmed via a real, complete, successful boot to a working login shell.
+
+## 38. Build scripts cleaned up for reproducibility now that the real fix is confirmed
+
+The `§35-36` `printk` instrumentation in `search_binary_handler()`/`__request_module()` was
+diagnostic scaffolding for one specific bug hunt, not a real fix - it added ~500 lines of noisy
+`openke-diag:` output to every boot, which would confuse anyone else building this project fresh.
+Removed from `vendor/x2000_kernel_6.6` (both `fs/exec.c` and `kernel/module/kmod.c` are now
+byte-identical to their pre-instrumentation state - confirmed via `git diff --stat` no longer listing
+either file at all), and `patches/x2000_kernel_6.6-openke.patch` regenerated from the cleaned tree
+(903 lines, matching the pre-instrumentation patch size exactly).
+
+`CONFIG_CMDLINE` trimmed from `"initcall_debug loglevel=8 ieee754=relaxed"` down to just
+`"ieee754=relaxed"` - the first two flags were added alongside the (now-removed) instrumentation for
+extra boot-time visibility during the hunt itself; `ieee754=relaxed` is the one line that's an actual,
+permanent, necessary fix. Comment rewritten to describe the final, confirmed-working state rather than
+the diagnostic journey (still explains the *why* - MIPS NaN-ABI mismatch, `arch_check_elf()`,
+`BR2_MIPS_NAN_LEGACY=y` vs the kernel's live FPU probe - just without referencing since-deleted debug
+code). Both fragment config copies (`artifacts/buildroot-halley5-v30-image/` and
+`vendor/buildroot-x2000/board/`) kept byte-identical, same as every other change this track has made.
+
+**Rebuilt clean and verified**: `xImage` still 5.96MB (comfortably under the 8MB partition budget),
+`ieee754=relaxed` confirmed present in the built `vmlinux`'s string table, zero `openke-diag` strings
+anywhere in it, and all four real Kconfig fixes from §35 (`BCMDHD`, `TOUCHSCREEN_GT9XX`,
+`HALLEY5_CAMERA_BOARD`, `STAGE_ZC50289HSHD02` all correctly `is not set`) still present. This is now
+the actual reproducible state of the fix - a fresh `00-fetch-vendor-sources.sh` through
+`05-final-build.sh` run reproduces exactly this, with nothing left over from the investigation itself.
+Not yet re-flashed/re-tested against real hardware since the change is a pure subtraction of
+debug-only code with no behavioral difference from the already-confirmed-working §37 build - worth a
+final confirmation pass before calling this fully done, but low risk.
+
+**Confirmation pass done, same session**: flashed the cleaned build to the spare slot (md5-verified),
+flipped the marker via the device's own `local_set_next_boot_device()`, clean capture, reboot. Result
+identical to §37 in every way that matters - `Run /linuxrc as init process` at 1.86s (noticeably
+faster than the instrumented build, expected with ~500 fewer printks per boot), zero panics, the same
+expected non-fatal timeouts (wlan0/eth0 - no wifi config, no dongle detected), the same
+`S99confirm-good: Moonraker never confirmed healthy after 150s - leaving ota marker on stock`, reached
+`buildroot login:`. The kernel-side fix is confirmed working with the diagnostic instrumentation fully
+removed - this closes out the kernel work; the two remaining open items (USB-ethernet dongle not
+enumerating at all, GuppyScreen's empty-JSON crash) are userspace/runtime, not kernel-boot issues, and
+are next.
+
+## 39. Kernel changes turned into a real fork, not a patch file - repo-structure cleanup now that the boot fix is confirmed
+
+With the actual boot-blocking bug found and fixed (§36/§37), asked the broader question: how should
+this project's kernel/userspace/board-fixes/GUI split across repos, the way larger projects do it.
+Landed on Buildroot's own idiomatic answer to this exact question - a small `BR2_EXTERNAL`-style tree
+(this repo already plays that role) referencing upstream/forked dependencies, rather than a bigger
+multi-repo split. The one real gap: the kernel's OpenKE changes lived as a patch file
+(`patches/x2000_kernel_6.6-openke.patch`) applied at build time on top of a third-party clone, not as
+real, reviewable git history.
+
+**Fixed**: forked the real upstream kernel repo (`Llixuma/ingenic-linux-kernel6.6-x2000-v1.0-20250221`)
+to [`coreflake1/NebulaOS`](https://github.com/coreflake1/NebulaOS) via `gh repo fork`. `main` on the
+fork tracks upstream unmodified (still exactly `a98c2e1`, "initial release"); a new `openke` branch
+carries every OpenKE kernel change (NS2009 touch, the display panel driver, BT H5 vendor extension,
+watchdog fix, DTS wiring, `arch/mips/Kconfig` compression selects, the `binder.h` build fix) as one
+real, documented commit on top of that pinned upstream commit - the exact same diff the old patch
+file carried, just as committed history instead of a blob.
+
+**Build scripts updated to match**: `00-fetch-vendor-sources.sh` now clones `coreflake1/NebulaOS`
+directly and checks out `openke` (was: clone the third-party repo, pin a commit, apply a patch
+separately). `01-apply-kernel-patches.sh` no longer applies anything - there's nothing left to apply
+- it's now a pure verification step confirming the fork's content landed correctly, kept at its same
+pipeline position so the numbered `00`→`06` sequence and any existing muscle memory/docs referencing
+it still work. The old patch file removed from this repo (`git rm`) since it's now fully superseded
+by the fork's real history - anyone wanting the diff can `git diff a98c2e1 openke` on the fork itself,
+or use GitHub's own compare view, both strictly more useful than a static file.
+
+**Verified for real, not just written**: fresh-cloned the fork's `openke` branch into a scratch
+directory (same sparse-checkout the build script uses) and diffed it against the local working tree
+that's been built and boot-tested twice tonight (§37/§38) - zero source differences, only local build
+artifacts (`.config`, `.o`, generated files from the in-place `LINUX_OVERRIDE_SRCDIR` build). The fork
+really does carry the exact source this whole track has been proving works on real hardware.
+
+**Net effect**: this project is now two repos, not four - this repo (Buildroot config, board fixes,
+orchestration scripts, referencing the kernel fork + Buildroot + Klipper/Moonraker/ustreamer as pinned
+external sources) and GuppyScreen (already separate, unrelated to the original openke). No new repos
+for "userspace" or "Creality fixes" specifically - premature splitting for a project this size right
+now; revisit if/when someone else starts contributing to just one layer independently.

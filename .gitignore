@@ -14,3 +14,6 @@ __pycache__/
 artifacts/buildroot-halley5-v30-image/rootfs.ext2
 artifacts/buildroot-halley5-v30-image/rootfs.squashfs
 artifacts/buildroot-halley5-v30-image/xImage
+# Stale pre-v30 board target, same reasoning.
+artifacts/buildroot-halley5-image/rootfs.ext2
+artifacts/buildroot-halley5-image/uImage

@@ -4,3 +4,13 @@
 /vendor/
 __pycache__/
 *.pyc
+
+# Build OUTPUT, not source - scripts/build/00 through 05 reproduce these
+# exactly (see scripts/build/README.md). rootfs.ext2 alone is ~400MB, over
+# GitHub's 100MB per-file push limit, and re-committing it every build cycle
+# bloated .git substantially. The small config files alongside them
+# (buildroot.config, kernel.config, halley5-openke-fragment.config,
+# halley5_v30.dts) stay tracked - human-readable, worth keeping in history.
+artifacts/buildroot-halley5-v30-image/rootfs.ext2
+artifacts/buildroot-halley5-v30-image/rootfs.squashfs
+artifacts/buildroot-halley5-v30-image/xImage

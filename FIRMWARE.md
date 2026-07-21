@@ -2677,3 +2677,44 @@ Full boot log: `vendor/device-backups/init-bin-sh-diagnostic-boot-attempt.log`. 
 recovered to stock (`panic_timeout`'s own auto-reboot, no button-press needed this time - the
 marker naturally stayed on `kernel2` since `S00revert-safety` never got a chance to run, requiring
 one more manual mask-ROM recovery cycle to get back to `kernel`).
+
+## 34. Applied the kmod-exhaustion fixes, but the test that would confirm them was compromised by a real process-hygiene bug
+
+**Cross-referenced §33's finding against real compiled output before fixing anything.** Decoded our
+own compiled devicetree blob (not just the source) and paired every enabled node's `compatible`
+string against the actual kernel `.config` to check which had a real, compiled driver (built-in or
+module) versus none at all. Several initially-suspicious candidates (a leftover `goodix,gt9xx` node,
+`ovti,ov2735a`, `rohm,dh2228fv`, `ingenic,bt_power`) all turned out to have real, working, mostly
+*already built-in* drivers - no single "dead node" explains the kmod pressure. The real, narrower
+picture: only 20 total loadable (`=m`) modules exist in this config, and **10 of them are a broad
+family of USB-Ethernet dongle drivers** (`AX8817X`, `CDC-ETHER`, `CDC-NCM`, `NET1080`, `CDC-SUBSET`,
+`ZAURUS`, `RTL8153-ECM`, plus `PHYLINK`/`AX88796B_PHY`) pulled in wholesale by enabling
+`USB_NET_DRIVERS`, none of which are our actual hardware (confirmed: `AX88179_178A`'s only real
+dependency is `USB_USBNET` + auto-selected `CRC32`/`PHYLIB`, both static libraries, not separate
+autoload targets). Real USB hotplug enumeration at boot (this device does have a physical USB
+Ethernet adapter attached) could plausibly probe several of these overlapping candidates via
+`request_module()` before landing on the right one.
+
+**Fixed two things**: converted the three small, single-purpose `=m` drivers (`ns2009` touchscreen,
+the display panel, `ingenic-rng`) to built-in (`=y`) - no real benefit to remaining loadable on fixed
+hardware, only downside (autoload contention at the exact moment init tries to start). Explicitly
+disabled the 10 redundant USB-net/PHY options, keeping only `USB_USBNET`+`USB_NET_AX88179_178A`.
+Rebuilt: `xImage` grew only ~4KB (comfortably still under the 8MB partition), `rootfs.squashfs`
+shrank ~94KB (fewer `.ko` files). `06-verify.sh` correctly shows the three converted drivers as
+"MISS" as separate module files - expected, since they're compiled into the kernel binary now, not
+a regression.
+
+**Tested live - but the result is not trustworthy, and that's a real, separate finding worth
+recording.** The device bootlooped audibly (repeated buzzer beeps, confirmed by the user) before
+recovery. Investigating the captured serial log found it suspiciously short and missing the
+expected repeated SPL banners for each loop cycle - checking running processes revealed **six
+separate, un-killed `cat /dev/ttyUSB0` capture processes** had accumulated since roughly midnight,
+one launched fresh for each of tonight's tests without ever stopping the previous one. Multiple
+readers on the same tty device race for incoming bytes non-deterministically - this very plausibly
+explains several instances of garbled/interleaved text seen in earlier logs tonight too, not just
+this one. All six killed; a clean, single-reader capture is now in place for the next real test.
+
+**Honest conclusion**: the kmod-exhaustion fixes are real, well-justified, and committed - but
+whether they actually resolved the boot failure is genuinely unconfirmed, since the one live test
+run against them had compromised data. This needs a fresh, clean test to actually know. Device
+safely back on stock (confirmed via `/proc/cmdline` showing `root=/dev/mmcblk0p7`, kernel 4.4.94).

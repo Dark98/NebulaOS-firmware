@@ -10,6 +10,10 @@ set -e
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
+
+# 2026-07-23: see 02-configure-buildroot.sh for why this lock exists.
+exec 9>"$REPO_ROOT/.openke-build.lock"
+flock -n 9 || { echo "another build stage already owns $REPO_ROOT/.openke-build.lock" >&2; exit 1; }
 BUILDROOT_DIR="$REPO_ROOT/vendor/buildroot-x2000"
 KERNEL_MOUNT="$REPO_ROOT/vendor/x2000_kernel_6.6/kernel/kernel-6.6"
 

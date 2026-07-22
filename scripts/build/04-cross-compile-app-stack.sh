@@ -13,6 +13,10 @@ set -e
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
+
+# 2026-07-23: see 02-configure-buildroot.sh for why this lock exists.
+exec 9>"$REPO_ROOT/.openke-build.lock"
+flock -n 9 || { echo "another build stage already owns $REPO_ROOT/.openke-build.lock" >&2; exit 1; }
 VENDOR="$REPO_ROOT/vendor"
 BUILDROOT_DIR="$VENDOR/buildroot-x2000"
 OVERLAY="$BUILDROOT_DIR/board/halley5-openke-overlay"
@@ -52,6 +56,31 @@ rm -rf "$OVERLAY/opt/moonraker/moonraker"
 cp -r "$VENDOR/moonraker/moonraker" "$OVERLAY/opt/moonraker/"
 find "$OVERLAY/opt/moonraker" -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 
+# OpenKE (2026-07-23): vendor/moonraker is a plain upstream clone re-fetched
+# fresh by 00-fetch-vendor-sources.sh every time (unlike the kernel, which
+# is a real fork we commit to) - so this patch is applied to the copy that
+# just landed in the overlay, not to vendor/moonraker itself, which would
+# silently lose it on the next fetch. Fixes a real, reproducible hang/
+# "database is locked" error found on real hardware: strace showed
+# fcntl64(fd, F_SETLK64, F_RDLCK, PENDING_BYTE) = -1 EACCES on this
+# kernel's tmpfs, with zero real lock contention (single connection, first
+# ever access) - SQLite's own documented nolock=1 URI workaround for
+# filesystems with broken POSIX locking fixes it, confirmed reliably
+# reproducible/fixed multiple times in a row (see FIRMWARE.md sec 23).
+#
+# -N: the copy above is a fresh rm -rf + cp -r from vendor/moonraker every
+# run, so this should always be pristine and apply cleanly - but patch's own
+# "already applied" detection has, in practice, still triggered here and
+# (without -N) aborted the whole script via set -e despite the file already
+# being in the correct end state. -N makes patch skip hunks it detects as
+# already-applied instead of erroring, so this stays idempotent either way.
+patch -N -p1 -d "$OVERLAY/opt/moonraker" < "$SCRIPT_DIR/patches/moonraker-sqlite-nolock.patch" || true
+
+# OpenKE (2026-07-23): zipp added after a real, previously-silent bug found
+# on real hardware - importlib_metadata (below) imports zipp at runtime, but
+# --no-deps meant it was never actually downloaded, so Moonraker died
+# instantly with ModuleNotFoundError: No module named zipp, before opening
+# its own log file at all.
 echo "== downloading Moonraker's pure-Python deps with no Buildroot package =="
 mkdir -p "$WORK/pywheels"
 docker run --rm --user root -v "$WORK/pywheels:/wheels" pellcorp/k1-bash-build bash -c '
@@ -59,7 +88,8 @@ apt-get update >/dev/null 2>&1
 apt-get install -y python3-pip >/dev/null 2>&1
 pip3 download -d /wheels --no-deps \
 	inotify-simple==2.0.1 libnacl==2.1.0 apprise==1.9.3 ldap3==2.9.1 \
-	importlib_metadata==8.4.0 preprocess-cancellation==0.2.1 pyasn1
+	importlib_metadata==8.4.0 preprocess-cancellation==0.2.1 pyasn1 \
+	zipp==3.20.2
 '
 SITEPKG="$OVERLAY/usr/lib/python3.11/site-packages"
 mkdir -p "$SITEPKG"

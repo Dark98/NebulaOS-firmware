@@ -1,0 +1,75 @@
+diff --git a/moonraker/components/database.py b/moonraker/components/database.py
+index 74ba38d..04c087e 100644
+--- a/moonraker/components/database.py
++++ b/moonraker/components/database.py
+@@ -97,6 +97,30 @@ def decode_record(bvalue: bytes) -> DBRecord:
+             f"Error decoding value {val}, format: {chr(fmt)}"
+         )
+ 
++def connect_sqlite_nolock(
++    db_path: pathlib.Path, timeout: float = 5.
++) -> sqlite3.Connection:
++    # OpenKE (Ender 3 V3 KE / Nebula Pad, Ingenic X2000, Linux 6.6.18-rt23):
++    # plain sqlite3.connect() against this database path hits
++    # "sqlite3.OperationalError: database is locked" (or hangs outright) on
++    # every single boot, even with a single connection and zero real
++    # contention. strace on the real hardware isolates it to one syscall:
++    # fcntl64(fd, F_SETLK64, {l_type=F_RDLCK, l_start=1073741824, l_len=1})
++    # = -1 EACCES - SQLite's own PENDING_BYTE locking-protocol offset,
++    # rejected by this kernel's tmpfs POSIX advisory locking with no other
++    # process holding anything. Reproduced consistently, and consistently
++    # fixed, by opening the connection with the "nolock=1" URI parameter,
++    # SQLite's own documented workaround for filesystems that do not
++    # support POSIX locking correctly (see sqlite.org's URI filename docs).
++    # Safe here specifically because this database is private to a single
++    # Moonraker process on a private tmpfs mount - there is no real
++    # multi-process contention for nolock to be unsafely skipping.
++    from urllib.parse import quote
++    uri = f"file:{quote(str(db_path))}?nolock=1"
++    return sqlite3.connect(
++        uri, uri=True, timeout=timeout, detect_types=sqlite3.PARSE_DECLTYPES
++    )
++
+ def getitem_with_default(item: Dict, field: Any) -> Any:
+     if not isinstance(item, Dict):
+         raise ServerError(
+@@ -751,9 +775,7 @@ class SqliteProvider(Thread):
+         sqlite3.register_converter("pybool", lambda x: bool(x))
+         sqlite3.register_adapter(list, jsonw.dumps)
+         sqlite3.register_adapter(dict, jsonw.dumps)
+-        self.sync_conn = sqlite3.connect(
+-            str(db_path), timeout=1., detect_types=sqlite3.PARSE_DECLTYPES
+-        )
++        self.sync_conn = connect_sqlite_nolock(db_path, timeout=1.)
+         self.sync_conn.row_factory = sqlite3.Row
+         self.setup_database()
+ 
+@@ -774,9 +796,7 @@ class SqliteProvider(Thread):
+ 
+     def run(self) -> None:
+         loop = self.asyncio_loop
+-        conn = sqlite3.connect(
+-            str(self._db_path), timeout=1., detect_types=sqlite3.PARSE_DECLTYPES
+-        )
++        conn = connect_sqlite_nolock(self._db_path, timeout=1.)
+         conn.row_factory = sqlite3.Row
+         while True:
+             future, func, args = self.command_queue.get()
+@@ -1345,7 +1365,7 @@ class SqliteProvider(Thread):
+             parent.mkdir(parents=True, exist_ok=True)
+         elif bkp_path.exists():
+             bkp_path.unlink()
+-        bkp_conn = sqlite3.connect(str(bkp_path))
++        bkp_conn = connect_sqlite_nolock(bkp_path)
+         conn.backup(bkp_conn)
+         bkp_conn.close()
+ 
+@@ -1356,7 +1376,7 @@ class SqliteProvider(Thread):
+             raise self.server.error("Database already restored")
+         if not restore_path.is_file():
+             raise self.server.error(f"Restoration File {restore_path} does not exist")
+-        restore_conn = sqlite3.connect(str(restore_path))
++        restore_conn = connect_sqlite_nolock(restore_path)
+         restore_info = self._validate_restore_db(restore_conn)
+         restore_conn.backup(conn)
+         restore_conn.close()

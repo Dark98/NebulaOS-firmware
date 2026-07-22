@@ -25,3 +25,10 @@ artifacts/buildroot-halley5-image/uImage
 # this repo. Re-run that script after a fresh checkout.
 scripts/build/overlay/lib/firmware/brcm/brcmfmac43430-sdio.bin
 scripts/build/overlay/lib/firmware/brcm/brcmfmac43430-sdio.txt
+
+# build-stage exclusive lock (scripts/build/0[2-5]-*.sh) - local, per-checkout
+.openke-build.lock
+
+# 04-cross-compile-app-stack.sh's own scratch dir - downloaded pywheels and
+# extracted tarballs, pure build output like vendor/.
+/build-work/

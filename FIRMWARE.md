@@ -4471,3 +4471,164 @@ device, for the first time in this project's history.
 - No `insmod`/`rmmod` of `cywdhd.ko`/`soc_msc.ko` at any point.
 - Two real, isolated commits this section, in this main repo (not the kernel fork): the firmware-
   packaging mechanism, and the `S39wifi` config-path fix.
+
+## 54. Testing the custom slot end to end - Klipper and Moonraker actually start, four more real bugs
+found and fixed (three kernel/build-side, one app-config-side), one already-in-flight app patch
+reconciled
+
+WiFi (sec 53) was the headline gap, but never actually proved the rest of the stack (Klipper,
+Moonraker) worked - this section rebooted into the custom slot with fresh eyes, found real problems in
+both the boot log and the app stack, root-caused each one against real hardware evidence (not guesses),
+and didn't stop until Moonraker was genuinely healthy and `S99confirm-good` committed to the custom
+slot on its own.
+
+### uart0 vs msc0: real pin conflict, cosmetic in practice, fixed anyway
+
+dmesg showed `pin GPD-23 already requested by 13450000.msc; cannot claim for 10030000.serial` on every
+boot. Traced both sides: `msc0_8bit` (the real eMMC, `gpd 17-26`) vs `uart0_pd` (`gpd 23-26`) - a real
+overlap. msc0 always won (it's essential, uart0 isn't used by anything in this project - unlike
+uart1/uart3/uart4, all documented real links), so nothing actually broke, but the conflict was pure
+noise. Fixed by disabling uart0 outright (kernel fork commit `095970ba2`).
+
+### uart3 (Bluetooth) vs i2c4 (touch): real pin conflict, NOT fixed - genuine hardware constraint
+
+Same dmesg pattern, different pins: `GPC-25 already requested by 10054000.i2c; cannot claim for
+10033000.serial`. Resolved both pinctrl phandles against the real stock device's own live DTB this time
+before touching anything (the mission-brief warning from early in this project about not trusting raw
+phandle numbers, still paying off): `uart3-pc` and `i2c4-pc` resolve to the *exact same two physical
+pins* (`gpc 25-26`), just different mux function selects. Stock's own real DTB has the identical
+dual-claim on both nodes - this is genuine hardware pin-sharing, not a devicetree bug in this project.
+Considered moving `&i2c4` to its `i2c4_pd` alternate (`gpd 0-1`) to free the pins for BT, and rejected
+it: stock's real DTB never references `i2c4_pd`, only `i2c4_pc`, so there's no confirmation those
+alternate pins are physically wired to the NS2009 touch chip on this board - moving it would risk
+silently breaking the confirmed-working touchscreen to maybe help BT (never confirmed against real
+mainboard hardware at all, per sec 44's own uart3 comment). Documented in place (kernel fork commit
+`095970ba2`); touch keeps winning the race, BT stays a known, real, unfixed limitation until someone
+implements the same dynamic pin hand-off stock's own `bt_enable_bsa.sh` presumably does at runtime.
+
+### `libstdc++.so.6` missing from every build for days - Klipper died with no log line at all
+
+Real, previously-silent bug, found the moment Klipper actually reached the `import greenlet` line for
+the first time: `ImportError: libstdc++.so.6: cannot open shared object file`, no log file even opened
+(dies before `-l klippy.log` gets created). `BR2_INSTALL_LIBSTDCPP=y` has always been set, and the
+library genuinely was built - sitting in the toolchain's own sysroot - but `gcc-final`'s
+`.stamp_target_installed` dated back to 19 Jul 10:57, the very first build of this whole project, so
+its `INSTALL_TARGET_CMDS` step (the one that actually copies `libstdc++.so*` into the rootfs) never ran
+again on any build since. The exact same class of Buildroot stamp-staleness bug this project has now
+hit three times (kernel source changes, `wpa_supplicant` Kconfig changes, now the toolchain itself).
+Fixed permanently: `03-build-kernel-and-rootfs.sh` now runs `make gcc-final-reinstall` before the main
+`make` - cheap (just re-copies already-built libraries, no toolchain rebuild) and makes every future
+build immune to this specific staleness class. `06-verify.sh` gained a permanent `libstdc++.so.6`
+presence check.
+
+### `zipp` missing - Moonraker died with no log line either, right after the libstdc++ fix let it get further
+
+Same silent-death pattern, one import deeper: `ModuleNotFoundError: No module named 'zipp'`.
+`importlib_metadata` (a real Moonraker dependency, downloaded with `--no-deps` in
+`04-cross-compile-app-stack.sh`) imports `zipp` at runtime, but `--no-deps` meant it was never actually
+fetched. Fixed by adding `zipp==3.20.2` to the same pip download line. This prompted a full audit of
+every other `--no-deps`-downloaded package's real transitive dependencies (`apprise`, `ldap3`,
+`libnacl`, `inotify-simple`, `preprocess-cancellation`) against their actual `Requires-Dist` metadata -
+all already satisfied by other Buildroot-provided packages (`certifi`/`requests`/`click`/`markdown`/
+`PyYAML` for `apprise`; `pyasn1` for `ldap3`; `libsodium.so` for `libnacl`) or genuinely dependency-free.
+Two *latent* (not currently triggered - config-gated, only load if `moonraker.conf` ever gains a
+`[zeroconf]` or `[mqtt]` section) version mismatches noted but not chased: Buildroot's bundled
+`zeroconf` (0.39.4) and `paho-mqtt` (1.6.1) both trail what Moonraker's own `moonraker-requirements.txt`
+actually wants (`>=0.131.0` and `==2.1.0` respectively - the 1.x/2.x paho-mqtt gap is a known breaking
+API change).
+
+### `numpy` - not a bug, but a real completeness gap, fixed proactively
+
+`shaper_calibrate.py` only raises a clean, user-facing `command_error` if `numpy` is missing (not a
+crash), and only when a user actually invokes resonance/input-shaper calibration - so this was never
+blocking anything. But input-shaper calibration is close to a universal step for any real Klipper
+setup, `numpy` is a ready, arch-supported Buildroot package
+(`BR2_PACKAGE_PYTHON_NUMPY_ARCH_SUPPORTS=y`), and cross-compiling it isn't the BLAS/LAPACK-dependent
+ordeal `scipy` would be - so it's enabled now rather than left as a day-one surprise for whoever first
+tries `MEASURE_AXES_NOISE`/`SHAPER_CALIBRATE`. `scipy` (used only by Klipper's optional `sos_filter`/
+`probe_eddy_ng` extras, neither referenced in this printer's real `printer.cfg`) was left alone -
+genuinely irrelevant to this hardware (BLTouch, not eddy-current), not worth the bigger cross-compile
+risk for zero current benefit.
+
+### The real root cause of `sqlite3.OperationalError: database is locked` - `CONFIG_FILE_LOCKING` was off in the kernel
+
+The deepest find of this session. Moonraker's database component failed on its *very first* sqlite
+open - single process, brand-new file, zero real contention - with `database is locked`. Reproduced the
+same failure with a bare, minimal Python script, then with raw `flock()`/`fcntl(F_SETLK)` calls on a
+throwaway file in `/tmp`: `flock()` returned `ENOSYS`, `fcntl(F_SETLK)` returned `EACCES`, both on an
+utterly uncontended file. `:memory:` sqlite worked fine, ruling out the Python binding/library itself.
+Checked the built kernel's own `.config`: `# CONFIG_FILE_LOCKING is not set` - inherited from the base
+`x2000_halley5_v30_linux` vendor defconfig (almost certainly a kernel-size trim on Ingenic's part, not
+a deliberate choice for this project), silently disabling POSIX advisory locking kernel-wide. This
+would have broken *any* future component depending on `flock`/`fcntl` locks, not just Moonraker's
+sqlite usage - a systemic gap, not a narrow one. Fixed with one line in
+`halley5-openke-fragment.config`: `CONFIG_FILE_LOCKING=y`. `06-verify.sh` gained a permanent check.
+
+Independently, and in parallel, a `moonraker-sqlite-nolock.patch` had already been added to
+`04-cross-compile-app-stack.sh` - a real, working, application-level fix for the exact same symptom
+(root-caused via `strace` down to the same `fcntl64(F_SETLK64, PENDING_BYTE)` = `EACCES` call, and
+worked around with SQLite's own documented `nolock=1` URI parameter, safe here since this database is
+private to a single Moonraker process). Both fixes are real and both stay - they don't conflict: the
+kernel fix restores real locking system-wide, and Moonraker's own connections simply don't need to rely
+on it, which is harmless for a private, single-process database. The patch step itself had a real
+robustness gap - `patch`'s own idempotent-reapplication exit code, combined with `set -e`, could abort
+the whole script even when the file was already correctly patched - fixed with `patch -N ... || true`
+so repeat builds stay safe either way.
+
+### `S99confirm-good` never flipped the marker forward - not a crash, an auth config gap
+
+With every fix above in place, Moonraker's own `/server/info` endpoint started returning a real,
+healthy JSON body - but `wget`-ed from `127.0.0.1`, it came back `401 Unauthorized` instead, since
+`moonraker.conf`'s `trusted_clients` only listed `192.168.0.0/16` and `10.0.0.0/8`, neither of which
+covers loopback. `S99confirm-good`'s own health check greps for `"result"` in the response body, which
+a 401 never has - so it kept declaring Moonraker unhealthy and leaving the ota marker on stock, even
+though the server was fully up. Fixed by adding `127.0.0.1` to `trusted_clients` - a one-line,
+standard-practice addition any real local Moonraker setup would want anyway.
+
+### Real, permanent build-script robustness fixes made along the way
+
+- **`vendor/buildroot-x2000/board/halley5-openke-overlay` ownership**: `02-configure-buildroot.sh`'s
+  own `cp -r` of the overlay runs inside a `--user root` container, leaving the tree root-owned; the
+  very next stage (`04-cross-compile-app-stack.sh`) writes into that same tree as the host user and
+  failed with `Permission denied` on a rebuild. `02-configure-buildroot.sh` now hands the overlay tree
+  back to the host user (`chown -R $(id -u):$(id -g)`) as its own last step, so this can't regress.
+- Build-stage exclusive lock (`.openke-build.lock`, `flock`) added across `02`-`05` to stop two build
+  stages from interleaving writes into the same shared `vendor/buildroot-x2000` tree if run
+  concurrently.
+- `build-work/` (04's own pywheels/tarball scratch dir) added to `.gitignore` - pure build output, same
+  reasoning as `vendor/`.
+
+### Final verified state, real hardware, this section
+
+```
+wget http://127.0.0.1:7125/server/info
+{"result":{"klippy_connected":true,"klippy_state":"startup", ...
+ "components":[...,"database",...], "failed_components":["machine"], ...}}
+
+dd if=/dev/mmcblk0p1 bs=1 count=16 2>/dev/null   # the raw ota marker
+ota:kernel2
+```
+
+`failed_components: ["machine"]` is expected and benign - that component needs
+`org.freedesktop.systemd1` over D-Bus, and this is a deliberately systemd-free BusyBox/Buildroot
+target. Everything else, including `database`, loaded clean. Klipper itself still stops short of fully
+running - `configparser.Error: Option 'z_offset' in section 'bltouch' must be specified` - but that's a
+real, expected, physical bed-leveling calibration value every BLTouch-equipped Klipper setup needs from
+its actual owner, not a build or kernel bug; Klipper now gets all the way to real config parsing, which
+is as far as software alone can take it.
+
+**The `ota` marker read back `ota:kernel2` after a real reboot** - `S99confirm-good` independently
+confirmed Moonraker healthy and committed to the custom slot on its own, unprompted, for the first time
+in this project's history. WiFi re-verified working on this exact build too (`wpa_state=COMPLETED`,
+real DHCP lease, reachable by `ssh` and `wget` from an external host).
+
+### Real hardware safety record this section
+
+- Every reboot preceded by a live `print_stats` idle check; every image write through
+  `flash-spare-slot.sh`'s own md5 verification; spare slot only, never `p5`/`p7`.
+- No `insmod`/`rmmod` of `cywdhd.ko`/`soc_msc.ko` at any point.
+- The one write to the real shared partition (`/dev/mmcblk0p10`) was the same read-only-mount,
+  single-file, immediate-unmount `wpa_supplicant.conf` copy as sec 53 - repeated each boot since
+  `/usr/data` is tmpfs and doesn't persist (a known, already-documented, deliberate tradeoff, sec 24).
+- Two real, isolated commits so far this section: the kernel fork's uart0/BT documentation commit
+  (`095970ba2`), plus this main-repo commit bundling the build-script and config fixes above.

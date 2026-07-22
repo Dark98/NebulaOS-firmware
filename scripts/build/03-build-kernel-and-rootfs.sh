@@ -39,10 +39,30 @@
 # changed after it's already been built once, the same `<pkg>-dirclean`
 # treatment is needed - this project has hit this exact class of bug twice
 # now, for two different packages, for the same underlying reason.
+#
+# IMPORTANT: also force-reinstalls gcc-final specifically, a third instance of
+# the same underlying bug (found 2026-07-23, real-hardware testing): this
+# project's base defconfig has always had BR2_INSTALL_LIBSTDCPP=y, but the
+# very first build's gcc-final .stamp_target_installed predates whatever
+# point that became load-bearing (greenlet, Klipper's own C extension
+# dependency, needs libstdc++.so.6 at runtime) - every build since silently
+# kept reusing that stamp, so gcc-final's own INSTALL_TARGET_CMDS (the step
+# that actually copies libstdc++.so* into the rootfs) never ran again, even
+# though libstdc++ was genuinely compiled and sitting in the toolchain's own
+# sysroot the whole time. Symptom: Klipper (and anything else linking a C++
+# extension) fails ImportError: libstdc++.so.6: cannot open shared object
+# file, with no log line at all (dies before its own log file opens).
+# `gcc-final-reinstall` re-runs just the install steps (cheap - the compiler
+# itself doesn't need rebuilding), unlike `gcc-final-dirclean` which would
+# force a full toolchain rebuild for no reason.
 set -e
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
+
+# 2026-07-23: see 02-configure-buildroot.sh for why this lock exists.
+exec 9>"$REPO_ROOT/.openke-build.lock"
+flock -n 9 || { echo "another build stage already owns $REPO_ROOT/.openke-build.lock" >&2; exit 1; }
 BUILDROOT_DIR="$REPO_ROOT/vendor/buildroot-x2000"
 KERNEL_MOUNT="$REPO_ROOT/vendor/x2000_kernel_6.6/kernel/kernel-6.6"
 
@@ -62,6 +82,7 @@ apt-get install -y -qq python3 bc cpio rsync unzip bison flex libncurses5-dev fi
 	libjpeg-dev libpng-dev libtiff-dev libwebp-dev libopenjp2-7-dev >/dev/null 2>&1
 make linux-dirclean
 make wpa_supplicant-dirclean
+make gcc-final-reinstall
 make
 '
 

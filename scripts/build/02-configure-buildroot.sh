@@ -25,6 +25,13 @@ set -e
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
+
+# 2026-07-23: this and the other numbered build stages all write into the
+# same shared vendor/buildroot-x2000 tree - running two of these at once
+# (e.g. from two terminals) would silently interleave writes. Cheap
+# insurance: a single exclusive lock file, held for the whole script.
+exec 9>"$REPO_ROOT/.openke-build.lock"
+flock -n 9 || { echo "another build stage already owns $REPO_ROOT/.openke-build.lock" >&2; exit 1; }
 BUILDROOT_DIR="$REPO_ROOT/vendor/buildroot-x2000"
 ARTIFACTS="$REPO_ROOT/artifacts/buildroot-halley5-v30-image"
 
@@ -56,6 +63,19 @@ mkdir -p "/repo/vendor/buildroot-x2000/board/halley5-openke-overlay/opt/printer_
          "/repo/vendor/buildroot-x2000/board/halley5-openke-overlay/opt/printer_data/logs" \
          "/repo/vendor/buildroot-x2000/board/halley5-openke-overlay/opt/printer_data/gcodes"
 '
+
+# Hand the overlay tree back to the host user - real bug found 2026-07-23:
+# 04-cross-compile-app-stack.sh writes into this same tree (opt/klipper,
+# opt/moonraker) as the host user, not root, and a root-owned overlay from
+# the cp above makes that fail with "Permission denied" on the very next
+# stage. The rest of vendor/buildroot-x2000/ deliberately stays root-owned
+# (this scripts own docker run above already re-roots itself every time to
+# cope with that) - only the overlay tree actually needs to be writable by
+# the host user.
+docker run --rm --user root \
+	-v "$REPO_ROOT:/repo" \
+	pellcorp/k1-bash-build \
+	chown -R "$(id -u):$(id -g)" "/repo/vendor/buildroot-x2000/board/halley5-openke-overlay"
 
 echo "== normalizing .config (resolves any derived Kconfig selects) =="
 docker run --rm --user root \

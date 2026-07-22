@@ -54,6 +54,13 @@ if [ -f "$KERNEL_CONFIG" ]; then
 	else
 		echo "MISS CONFIG_EXTRA_FIRMWARE not set as expected - did fetch-wifi-firmware.sh run before 02-configure-buildroot.sh?"
 	fi
+	# FIRMWARE.md sec 23 (2026-07-23): the base vendor defconfig has this off
+	# (a kernel-size trim, not deliberate for this project) - without it,
+	# flock()/fcntl locking fail kernel-wide (ENOSYS/EACCES on a brand new,
+	# uncontended file, confirmed on real hardware), which broke Moonraker
+	# with sqlite3.OperationalError: database is locked on its very first
+	# database open. Affects anything using file locks, not just sqlite.
+	check_builtin CONFIG_FILE_LOCKING
 else
 	echo "MISS $KERNEL_CONFIG not found - run 03-build-kernel-and-rootfs.sh first"
 fi
@@ -84,6 +91,30 @@ check /usr/bin/ustreamer
 check /etc/init.d/S50webcam
 
 echo "=== app stack ==="
+# FIRMWARE.md sec 23 (2026-07-23): real, previously-silent bug - the
+# gcc-final packages INSTALL_TARGET_CMDS step (copies libstdc++.so* into
+# the rootfs) is gated on a Buildroot package stamp that does not get
+# invalidated just because BR2_INSTALL_LIBSTDCPP became load-bearing
+# later - a stale stamp from the very first build meant this was
+# silently missing from every build for days while Klipper (needs it via
+# greenlet) died instantly with no log line at all.
+# 03-build-kernel-and-rootfs.sh now forces gcc-final-reinstall; this
+# check is the permanent guard against that regressing silently again.
+check /usr/lib/libstdc++.so.6
+# FIRMWARE.md sec 23 (2026-07-23): real, previously-silent bug found right
+# after the libstdc++ fix above let Moonraker actually import far enough to
+# hit it - importlib_metadata (a real Moonraker dependency) imports zipp at
+# runtime, but 04-cross-compile-app-stack.sh downloaded it with --no-deps,
+# so zipp itself was never fetched. Moonraker died with
+# ModuleNotFoundError: No module named zipp, before opening its own log.
+check /usr/lib/python3.11/site-packages/zipp
+# FIRMWARE.md sec 23 (2026-07-23): numpy is a soft/lazy Klipper dependency -
+# shaper_calibrate.py only raises a clean, user-facing error if it is
+# missing (not a crash), and only when a user actually runs resonance
+# testing. Not launch-blocking, but a real completeness gap for a near-
+# universal Klipper workflow, and available as a ready Buildroot package
+# (BR2_PACKAGE_PYTHON_NUMPY), so enabled rather than left missing.
+check /usr/lib/python3.11/site-packages/numpy
 check /usr/bin/python3.11
 check /opt/klipper/klippy/klippy.py
 check /opt/klipper/klippy/chelper/c_helper.so

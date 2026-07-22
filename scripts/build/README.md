@@ -32,12 +32,17 @@ rootfs-overlay deletion gotcha) are all documented there with root causes, not j
   own real git history instead of a patch file. What else *is* checked into this repo: the small set
   of files this project actually wrote by hand (`scripts/build/overlay/` - init scripts and configs,
   not the third-party source/binaries those scripts launch).
+- **Network/serial access to a real, working stock Nebula Pad** for `fetch-wifi-firmware.sh` (see
+  below) - the WiFi firmware/NVRAM are proprietary Cypress/Broadcom binaries with no accompanying
+  license found anywhere on the device, so they're never committed to this repo (see `.gitignore`).
+  Without this step, the build still completes and boots, just without WiFi.
 
 ## Running the whole thing
 
 ```sh
 cd scripts/build
 ./00-fetch-vendor-sources.sh
+STOCK_ROOT_PW=... ./fetch-wifi-firmware.sh          # optional - only needed for WiFi, see below
 ./01-apply-kernel-patches.sh
 ./02-configure-buildroot.sh
 ./03-build-kernel-and-rootfs.sh
@@ -50,6 +55,12 @@ Each script is idempotent (safe to re-run) and checks its own prerequisites befo
 Run them in order the first time; after that, re-running just the stage you're iterating on is
 fine as long as its inputs (the previous stages' outputs) are still in place.
 
+**`fetch-wifi-firmware.sh` must run before `02-configure-buildroot.sh`** (which is what actually
+copies `scripts/build/overlay/` - including whatever this script staged under
+`overlay/lib/firmware/brcm/` - into Buildroot's own overlay dir). Skipping it is fine for a first
+build/boot test of everything else; WiFi just won't come up (`brcmfmac` will report a firmware
+load failure, harmless to everything else - see `FIRMWARE.md` §53).
+
 ## What each stage does
 
 1. **`00-fetch-vendor-sources.sh`** - clones/downloads every third-party source this build needs
@@ -58,6 +69,14 @@ fine as long as its inputs (the previous stages' outputs) are still in place.
    x2000-v1.0-20250221`), the Buildroot config (`lone0/buildroot-x2000`), Klipper
    (`pellcorp/klipper`, SimpleAF's fork), Moonraker (`Arksine/moonraker`, official),
    `pellcorp/k1-ustreamer`, and Mainsail's latest prebuilt release.
+   - **`fetch-wifi-firmware.sh`** (optional, real device required) - extracts the stock CYW43438/
+     BCM43430 WiFi firmware + board NVRAM live off a real, running stock device (read-only, over
+     SSH) and stages them as `brcmfmac43430-sdio.bin`/`.txt` under `scripts/build/overlay/lib/
+     firmware/brcm/`, the filenames/path mainline `brcmfmac` actually requests. Not numbered into
+     the 00-06 sequence since it needs a real device, not a URL - see `FIRMWARE.md` §53 for how
+     these exact files/paths were determined (disassembling stock's own `cywdhd.ko`, reading its
+     live boot log) and why they're fetched rather than committed (proprietary binaries, no
+     license file found on the device).
 2. **`01-apply-kernel-patches.sh`** - no longer applies anything (this project's kernel changes -
    touch DT wiring, the new display panel driver, the new Bluetooth H5 Broadcom vendor extension,
    WiFi/BT/display Kconfig changes, the real ported NS2009 driver, and the upstream `binder.h`
@@ -67,8 +86,12 @@ fine as long as its inputs (the previous stages' outputs) are still in place.
    linux` defconfig plus every option this project added - WiFi/BT/touch/display/RNG/Python3/
    nginx/etc, using a helper that finds-and-replaces each option's *real* existing line rather than
    blindly appending, which is what caused a real class of bugs this session - see `FIRMWARE.md`
-   §14), the kernel config fragment file, `local.mk` (the `LINUX_OVERRIDE_SRCDIR` pointer), and
-   copies this repo's own hand-written overlay content (`scripts/build/overlay/`) into
+   §14), the kernel config fragment file (`halley5-openke-fragment.config` - includes
+   `CONFIG_EXTRA_FIRMWARE`, which embeds the WiFi firmware directly into the kernel image rather
+   than relying on the rootfs being mounted yet - `brcmfmac` is built-in and probes for it earlier
+   in boot than the real root filesystem mounts, see `FIRMWARE.md` §53), `local.mk` (the
+   `LINUX_OVERRIDE_SRCDIR` pointer), and copies this repo's own hand-written overlay content
+   (`scripts/build/overlay/`, including whatever `fetch-wifi-firmware.sh` staged) into
    `board/halley5-openke-overlay/`.
 4. **`03-build-kernel-and-rootfs.sh`** - the main kernel + rootfs build (`make`) - touch, display,
    WiFi, Bluetooth, camera-kernel-side, and Core SoC infra all come from this one pass, since

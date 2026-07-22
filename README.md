@@ -30,7 +30,22 @@ All three tracks share the same workspace and a lot of platform-level groundwork
 kernel source, etc.) - that shared material lives in track 3's files/memory, not duplicated across
 all three.
 
-## Status: IN PROGRESS (2026-07-19/20) - Track 3 Phase 2 now has touch/display/WiFi/BT/camera all built and wired into the rootfs, SSH/password/console access-path audited and fixed, the U-Boot slot-selection mechanism fully resolved via live device forensics (real regression risk found + backed up), and both recovery-bundle formats reverse-engineered with no signature enforcement found anywhere in the real boot chain (three independent sources, incl. real third-party USB-boot tooling); Track 3 item 1 (insmod) resume point unchanged
+## Status: WiFi now fully working on the custom kernel, real hardware, end to end (2026-07-22)
+
+**Track 3's custom Linux 6.6 kernel now boots on real hardware with fully working WiFi** - the
+device connects, gets a real DHCP lease, and is reachable over the network, all independently
+verified (`ping` from an external host). This was the single biggest open item blocking the whole
+custom-kernel track; the sections below (some dated 2026-07-19/20) predate this and describe an
+earlier, much less complete state - see `FIRMWARE.md` §44-53 for the real, full story (a genuine
+multi-session hardware bring-up investigation: a detection race found and fixed, two separate GPIO
+polarity bugs found via disassembling stock's own live kernel modules and fixed, and a kernel-image-
+embedded-firmware fix for a driver-probe-vs-rootfs-mount timing race). `scripts/build/README.md` is
+the current, accurate way to reproduce this build from scratch, including the one manual step WiFi
+needs (`fetch-wifi-firmware.sh` - pulls stock's own proprietary firmware live off a real device,
+never committed to this repo).
+
+The paragraphs immediately below (IN PROGRESS, 2026-07-19/20) are kept for their real historical
+value but are superseded by the above and by `FIRMWARE.md`'s own much longer, more current record.
 
 `ke-next`'s M600 fixes were confirmed working on real hardware and `v1.5.0-OpenKE` shipped
 (2026-07-18/19) - the "paused until ke-next real-device testing is done" condition below is now

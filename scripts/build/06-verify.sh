@@ -9,10 +9,53 @@ set -e
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
 IMAGES="$REPO_ROOT/vendor/buildroot-x2000/output/images"
+KERNEL_CONFIG="$REPO_ROOT/vendor/buildroot-x2000/output/build/linux-custom/.config"
 
 if [ ! -f "$IMAGES/rootfs.ext2" ]; then
 	echo "rootfs.ext2 not found - run 05-final-build.sh first" >&2
 	exit 1
+fi
+
+# ns2009, the display panel, brcmfmac and the RNG are all built statically
+# into vmlinux (=y, not =m) - see halley5-openke-fragment.config's own
+# comments for why each one was switched. A built-in driver produces no
+# separate .ko file under /lib/modules at all, so these are checked against
+# the actual built kernel .config instead of debugfs'd out of rootfs.ext2 -
+# checking for a .ko file here would silently and permanently report MISS
+# for correctly-working built-in support.
+echo "=== built-in kernel drivers (not loadable modules) ==="
+if [ -f "$KERNEL_CONFIG" ]; then
+	check_builtin() {
+		sym="$1"
+		if grep -q "^${sym}=y$" "$KERNEL_CONFIG"; then
+			echo "OK   $sym=y (built-in)"
+		else
+			echo "MISS $sym"
+		fi
+	}
+	check_builtin CONFIG_TOUCHSCREEN_NS2009
+	check_builtin CONFIG_STAGE_OPENKE_GENERAL_480X272
+	check_builtin CONFIG_BRCMFMAC
+	check_builtin CONFIG_INGENIC_HW_RANDOM
+	# Two competing WiFi drivers were a real, previously-hit bug (FIRMWARE.md
+	# sec 24/36) - confirm the vendor's out-of-tree one stays disabled.
+	if grep -q "^CONFIG_BCMDHD=y$" "$KERNEL_CONFIG"; then
+		echo "MISS CONFIG_BCMDHD is set - conflicts with CONFIG_BRCMFMAC for the same SDIO chip"
+	else
+		echo "OK   CONFIG_BCMDHD not set (brcmfmac is the only WiFi driver)"
+	fi
+	# FIRMWARE.md sec 53: CONFIG_BRCMFMAC=y means brcmfmac's own firmware
+	# request happens before the real rootfs is mounted - embedding the
+	# firmware in the kernel image itself is what actually makes WiFi work,
+	# not just having the files present in rootfs.ext2 (checked separately
+	# below - both need to be true).
+	if grep -q "^CONFIG_EXTRA_FIRMWARE=\"brcm/brcmfmac43430-sdio.bin brcm/brcmfmac43430-sdio.txt\"$" "$KERNEL_CONFIG"; then
+		echo "OK   CONFIG_EXTRA_FIRMWARE set (WiFi firmware embedded in the kernel image)"
+	else
+		echo "MISS CONFIG_EXTRA_FIRMWARE not set as expected - did fetch-wifi-firmware.sh run before 02-configure-buildroot.sh?"
+	fi
+else
+	echo "MISS $KERNEL_CONFIG not found - run 03-build-kernel-and-rootfs.sh first"
 fi
 
 docker run --rm --user root -v "$IMAGES:/img" pellcorp/k1-bash-build bash -c '
@@ -28,13 +71,13 @@ check() {
 	fi
 }
 
-echo "=== kernel modules ==="
-check /lib/modules/6.6.18-rt23/kernel/drivers/input/touchscreen/ns2009.ko
-check /lib/modules/6.6.18-rt23/kernel/module_drivers/drivers/video/fbdev/ingenic/displays/panel-openke-general-480x272.ko
-check /lib/modules/6.6.18-rt23/kernel/drivers/net/wireless/broadcom/brcm80211/brcmfmac/brcmfmac.ko
+echo "=== kernel modules (still loadable, not built-in) ==="
 check /lib/modules/6.6.18-rt23/kernel/drivers/bluetooth/hci_uart.ko
 check /lib/modules/6.6.18-rt23/kernel/drivers/bluetooth/btbcm.ko
-check /lib/modules/6.6.18-rt23/kernel/module_drivers/drivers/char/hw_random/ingenic-rng.ko
+
+echo "=== WiFi firmware (FIRMWARE.md sec 53 - proprietary, not committed, staged by fetch-wifi-firmware.sh) ==="
+check /lib/firmware/brcm/brcmfmac43430-sdio.bin
+check /lib/firmware/brcm/brcmfmac43430-sdio.txt
 
 echo "=== camera ==="
 check /usr/bin/ustreamer
@@ -67,8 +110,7 @@ check /usr/data/printer_data/config/GuppyScreen/scripts/static_ip.py
 echo "=== architecture spot-checks (host objdump has no MIPS backend - using the k1-bash-build toolchain) ==="
 docker run --rm --user root -v "$IMAGES:/img" pellcorp/k1-bash-build bash -c '
 apt-get -qq update >/dev/null 2>&1; apt-get install -y -qq e2fsprogs file >/dev/null 2>&1
-for f in "kernel/module_drivers/drivers/video/fbdev/ingenic/displays/panel-openke-general-480x272.ko" \
-         "kernel/drivers/bluetooth/hci_uart.ko"; do
+for f in "kernel/drivers/bluetooth/hci_uart.ko"; do
 	debugfs -R "dump /lib/modules/6.6.18-rt23/$f /tmp/x.ko" /img/rootfs.ext2 >/dev/null 2>&1
 	echo "$f: $(file -b /tmp/x.ko)"
 done

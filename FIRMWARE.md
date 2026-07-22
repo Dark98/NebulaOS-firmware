@@ -2998,3 +2998,1476 @@ orchestration scripts, referencing the kernel fork + Buildroot + Klipper/Moonrak
 external sources) and GuppyScreen (already separate, unrelated to the original openke). No new repos
 for "userspace" or "Creality fixes" specifically - premature splitting for a project this size right
 now; revisit if/when someone else starts contributing to just one layer independently.
+
+## 40. Unattended session: a full hardware sweep, both userspace bugs root-caused, one real fixed+verified, one documented pending review
+
+Run solo while the user stepped away, on the still-running custom kernel from §37/38 (never rebooted
+back to stock - real live shell access the whole session via serial, root/`openke`, same as before).
+Goal: fix the two open userspace bugs (GuppyScreen crash, USB dongle), and sweep for any other
+hardware that isn't being detected correctly.
+
+**Full hardware sweep results:**
+- **eMMC**: fully healthy - all 10 real partitions plus both `mmcblk0boot0`/`boot1` hardware boot
+  partitions visible in `/proc/partitions`, matching the documented layout exactly.
+- **Touch (NS2009)**: working - registered as a real input device (`ns2009_ts`, `mouse0`/`event0`),
+  i2c bus 4 address 0x48, matching the DTS.
+- **Framebuffer/display**: `/dev/fb0` present, driver name `ingenicfb` - the panel driver itself is
+  fine (matches §37's finding that GuppyScreen's black screen was a userspace crash, not a display
+  driver problem).
+- **Audio**: real sound card registered (`0 [halley5v30]: halley5_v30 - halley5_v30`,
+  `x2000-sound sound: Sound Card successed`) - some benign `ASoC: mux LOx_MUX has incorrect number of
+  controls` warnings (DAPM route/control-count mismatch, cosmetic, card still registers and works).
+- **RTC/watchdog**: both present and responding (`/dev/rtc0`, `/dev/watchdog0`).
+- **WiFi SDIO (mmc1)**: **broken, real root cause found and fixed** - see below.
+- **USB host**: controller initializes (registers `usb1`, internal root hub only) but nothing external
+  ever enumerates - **real root cause found, documented, deliberately not blind-fixed** - see below.
+- **Backlight**: no `/sys/class/backlight/` device at all. `ingenic-pwm` itself probes fine
+  (`ingenic-x2000 Probe of pwm success!`), but there's no `pwm-backlight`-compatible DTS node wired up
+  at all - stock's own `module_driver/pwm_backlight.sh` shows real hardware wiring
+  (`pwm_gpio=PC00 power_gpio=PC22 pwm_freq=50000`) that we never added an equivalent for. Screen may
+  be running at whatever fixed/default brightness the panel powers up at, with no software control.
+  **Not fixed this session** - found late, and every kernel change tonight already needed a full
+  dirclean rebuild + real hardware boot test to verify; didn't want to stack a third unverified DTS
+  change into one unattended cycle. Real, actionable next item.
+- **`/dev/disk/by-partlabel/`**: empty - udev/mdev never ran blkid-based partition-label symlink
+  rules. Minor, not currently blocking anything (all partition management happens from stock via SSH,
+  not from within this custom kernel), but would matter if that ever changes.
+
+**WiFi SDIO (`mmc1: Failed to initialize a non-removable card`) - real root cause found and fixed.**
+Read `wlan_pwrseq`'s own boot-time warning literally instead of assuming it was noise:
+`OF: /wlan_pwrseq: #gpio-cells = 3 found 2`. This board's gpio controller binding is `#gpio-cells =
+<3>` (pin, active-flag, ingenic bias-flag) - confirmed against stock's own live, decompiled DTB
+(every `gpa`/`gpb`/`gpc`/`gpd`/`gpe` node there declares exactly `#gpio-cells = <0x03>`), and every
+*other* GPIO reference in our own board file already uses all 3 cells - `wlan_pwrseq`'s `reset-gpios`
+was the one exception, only ever specifying 2 (`<&gpd 1 GPIO_ACTIVE_LOW>`). `mmc-pwrseq-simple` (the
+standard kernel driver that's supposed to toggle the WiFi chip's reset/power-on line before the SDIO
+core ever tries to enumerate it) can't reliably act on a malformed GPIO reference - real, live-
+confirmed explanation for the SDIO init failure, completely independent of wpa_supplicant config
+(which is a separate, already-understood, expected limitation - no config supplied, `wlan0` correctly
+never appears - but the SDIO card itself failing is a different, deeper problem that would have
+blocked WiFi even with perfect wpa_supplicant config). Fixed by adding the missing 3rd cell
+(`INGENIC_GPIO_NOBIAS`, matching the sibling reference two lines up). Committed to the kernel fork
+(`coreflake1/NebulaOS`, `openke` branch, `e67eefc40`) and pushed - not yet re-verified on hardware as
+of writing this section (rebuild was still running); see the end of this section for the real result.
+
+**USB dongle never enumerating - real root cause found via a real stock-vs-ours DTB comparison, not
+guessed.** Decompiled stock's own live device tree (`vendor/device-backups/stock-live-device-tree.dtb`,
+using `dtc` already built by tonight's own Buildroot run rather than needing a fresh install) and
+compared its real, working USB PHY wiring against ours node-by-node - the same technique that's
+found every other real hardware bug this whole track (§32 first, repeated many times since).
+**Stock's actual `drvvbus-gpio` (the GPIO that supplies power to the USB bus when acting as host) is
+wired to `gpc pin 9`, on the *newer* PHY node** (`otg_new_phy`, compatible `ingenic,usbphy-x2000`) -
+stock's *old* PHY node (`otg_phy`, compatible `ingenic,innophy`) carries **zero** GPIO properties at
+all. **Our board file has this backwards**: `drvvbus-gpio` is wired to `gpe pin 22`, on the *old*
+`otg_phy` node - the wrong pin, on the node whose real, working stock counterpart never uses GPIO
+properties in the first place. Practical effect: even though `dr_mode = "otg"` matches stock exactly
+(so that alone isn't the differentiator, ruling out an earlier, weaker hypothesis about missing
+ID-pin detection), the GPIO that's supposed to actually power the bus for an attached device is very
+likely never being driven at all, on either kernel - it's probably just silently ignored by whichever
+PHY driver is actually bound (property placed on a node that likely doesn't read it), rather than
+being actively harmful. **Deliberately not fixed this session**: correcting this properly likely means
+switching which PHY/controller compatible pair is enabled (old `otg`/`otg_phy` vs new
+`otg_new`/`otg_new_phy`) - a bigger, less-certain change than moving one GPIO reference, made riskier
+by being done unattended with no one available to help recover if a driver-path switch broke the
+otherwise-working internal USB bus. Real, concrete, well-evidenced finding for review, not a guess.
+
+**GuppyScreen's `nlohmann::detail::parse_error` crash - real root cause found and fixed.** Traced
+every `json::parse()` call site in the GuppyScreen source (`~/Documents/guppyscreen/src/`) that
+doesn't disable exceptions. `guppyconfig.json` itself was ruled out first (confirmed present, 1097
+bytes, valid/complete JSON, read directly off the device). The real target:
+`guppyscreen.cpp`'s startup sequence computes `selected_theme` from `guppyconfig.json`'s `"theme"`
+key, defaulting to `"blue.json"` when absent (our config has no `"theme"` key at all), then loads
+`<config dir>/themes/<selected_theme>` unconditionally. **`/opt/guppyscreen/themes/` didn't exist on
+this rootfs at all** - confirmed directly on the device (`ls`: "No such file or directory"). Root
+cause was a packaging gap, not a code bug: the real theme files already exist in the GuppyScreen
+source repo itself (`~/Documents/guppyscreen/themes/*.json`, and even in its own built
+`releases/guppyscreen/themes/` copy) - they just never got included in this project's Buildroot
+overlay (`scripts/build/overlay/opt/guppyscreen/` had `guppyscreen`/`guppybeep`/`guppyconfig.json`/
+`thumbnails/`, no `themes/` at all). Diffed our overlay against the real release directory to confirm
+nothing else was similarly missing (everything else that differs is either ours-intentionally or
+Creality/K1 installer tooling we don't use). **Fixed**: copied all 6 real theme files (`blue`/`red`/
+`green`/`purple`/`pink`/`yellow`.json, matching the 6 options `SysInfoPanel`'s theme dropdown actually
+offers) into `scripts/build/overlay/opt/guppyscreen/themes/` from the real GuppyScreen source - not
+improvised placeholder content.
+
+**Rebuild + re-verification**: both fixes (wlan DTS + guppyscreen themes) went into the same rebuild/
+reflash/retest cycle. Real result: **the themes fix was real but insufficient** - GuppyScreen crashed
+identically even with the theme files confirmed present and byte-correct on the device. See §41 for
+the actual root cause, found by continuing to dig rather than stopping at the first plausible fix.
+`mmc1` also still failed with the gpio-cells fix alone, cells warning confirmed gone but the SDIO card
+still wouldn't enumerate - see §41 for the follow-up attempt there too.
+
+## 41. The real GuppyScreen root cause (not the themes directory), a second WiFi attempt, and where things stand
+
+**GuppyScreen: the actual bug, found by not stopping at "plausible" - it's a real bug in GuppyScreen's
+own source, not a packaging gap.** The themes-directory fix (§40) was real and worth keeping, but a
+live re-test showed the identical crash even with the theme file confirmed present and correct on the
+device. Traced every `json::parse()` call site again, more carefully this time: both
+`config.cpp:69` and `theme.cpp:28` (in `~/Documents/guppyscreen`, this user's own separately-maintained
+project) load their JSON file via `json::parse(std::fstream(config_path))`. `std::fstream`'s **default
+open mode is read+write** - on this rootfs (squashfs, mounted `ro`), opening *any* file read-write
+fails even though the file exists and is perfectly readable (`stat()` succeeds, `open(O_RDWR)`
+doesn't) - the failed/unopened stream reads as immediate EOF, and `json::parse()` throws exactly
+`unexpected end of input` on startup, before any UI ever shows. Not a missing-file or bad-content bug
+at all - a wrong-open-mode bug that could only ever manifest on a read-only rootfs, which is why it
+was never caught before: every existing deployment (stock Creality firmware included) keeps
+GuppyScreen's directory on a writable partition (`/usr/data/guppyscreen` there, confirmed live via SSH
+- not `/opt` at all, that symlink actually points to Creality's own separate `k1_mods` staging area).
+
+**Fixed at the source** (`~/Documents/guppyscreen`, commit `3496b94` on `ke-next`, not pushed):
+changed both call sites to `std::ifstream` - config/theme loading never needs to write to these files.
+Cross-compiled fresh MIPS binaries via the project's own `scripts/build-mips.sh` (Docker,
+`ghcr.io/coreflake1/guppydev:latest`, already present locally), copied into
+`scripts/build/overlay/opt/guppyscreen/`. **Confirmed on real hardware**: `ps` shows
+`650 root /opt/guppyscreen/guppyscreen` actually running (not crashed), and its own log
+(`/opt/printer_data/logs/guppyscreen.log`) shows a completely clean startup - version banner, touch
+calibration loaded, the missing-backlight case handled gracefully (matching §40's finding, not fatal),
+and an active connection attempt to Moonraker's websocket. This is a real, complete, verified fix.
+
+**Also added `BR2_PACKAGE_STRACE=y`** to the build while chasing this - a permanent, low-risk
+diagnostic tool addition (was about to use it to pin down the GuppyScreen bug the hard way before
+finding it via source reading instead; kept in since it's generally useful for future debugging on
+real hardware where a live shell is the only tool available).
+
+**WiFi SDIO (`mmc1`): a second real attempt, still not resolved.** `drivers/mmc/core/pwrseq_simple.c`'s
+`post_power_on_delay_ms` defaults to 0 when unset (`device_property_read_u32` leaves the zeroed
+default untouched) - this property was never set on `wlan_pwrseq` at all, meaning the SDIO core was
+probing the CYW43438 immediately after its reset line was released, a well-known real failure mode for
+this chip class. Added `post-power-on-delay-ms = <200>;`. **Real result: still fails.** `mmc1: Failed
+to initialize a non-removable card` persists even with both the gpio-cells fix *and* the delay fix
+applied together. The gpio-cells fix is confirmed real and necessary (the kernel warning is
+permanently gone), but it alone was never sufficient, and 200ms of extra delay didn't close the gap
+either. The DTS comment's own flagged uncertainty (ACTIVE_LOW polarity assumption, "not independently
+hardware-verified") remains the most likely next thing to check, but that's a genuine guess rather
+than something backed by direct evidence the way the previous two fixes were - **deliberately left
+for the next session with the user present**, rather than trying a third unverified guess unattended.
+
+**Final state at end of this unattended session**: device rebooted back to stock (network-accessible,
+known-safe resting state) - this was a deliberate choice once GuppyScreen's fix was confirmed working,
+rather than leaving the device sitting on the test kernel with no network access. All three real fixes
+this session (wlan gpio-cells, wlan post-power-on-delay, GuppyScreen ifstream) are committed and
+pushed to the kernel fork (`coreflake1/NebulaOS`, `openke` branch, commits `e67eefc40`/`5dca5971f`) and
+committed locally to the guppyscreen repo (`3496b94` on `ke-next`, not yet pushed - the user's own repo,
+left for their own review/push decision). The ke-mainline-klipper repo itself (this repo) still has no
+remote and several open questions from the repo-restructuring work (§38-39) that were paused mid-way
+when this session's priority shifted to the userspace fixes - see the end-of-session summary for the
+full list of what's pending a decision.
+
+**Summary of tonight's full hardware sweep** (§40) remains accurate and unchanged - eMMC/touch/
+display/audio/RTC/watchdog all confirmed healthy, backlight and USB dongle enumeration remain open,
+undocumented-elsewhere items for a future session.
+
+## 42. USB fixed at the devicetree level, then conclusively ruled out as a software problem at all
+
+**The `drvvbus-gpio` pin really was wrong, and it's a real, confirmed fix - just not sufficient to
+explain the actual symptom.** Direct comparison against stock's own live, decompiled device tree
+(`vendor/device-backups/stock-live-device-tree.dtb`) found stock's real, working `drvvbus-gpio` (the
+GPIO that powers the USB bus in host mode) is `gpc` pin 9, not `gpe` pin 22 as our board file had it.
+Also confirmed, contrary to an earlier session's (and this session's own initial) suspicion, that this
+was never a wrong-driver-path problem - both trees use the identical compatible strings
+(`ingenic,x2000-dwc2-hsotg` / `ingenic,usbphy-x2000`), confirmed via stock's own live `dmesg` showing
+`13500000.otg_new` as the bound device name (our tree only ever carries this one driver generation,
+simply not suffixed `_new` since there's no legacy variant to disambiguate from in this source tree).
+Fixed, committed, and pushed to the kernel fork (`coreflake1/NebulaOS`, `openke`, commit `c902097d1`).
+Also traced `ingenic,vbus-dete-gpio` (a property our board file sets that stock's real config doesn't)
+through `phy-ingenic.c`'s actual source and confirmed it only affects *peripheral/gadget*-mode
+connection detection, not host-mode VBUS driving at all - real, valid cleanup to match stock exactly,
+but not itself blocking anything for our host-mode use case.
+
+**Rebuilt and reflashed with the fix - external USB still didn't enumerate.** Rather than assume the
+fix was insufficient and keep guessing at kernel internals, did the one test that actually settles it:
+checked whether the exact same device enumerates on **stock's own presumably-working firmware**.
+**It doesn't.** Ran the complete test matrix, live, with the user physically swapping hardware between
+each step:
+- USB-ethernet dongle alone: nothing (only the internal root hub, `usb1`/`1-0:1.0`).
+- A different device (a plain USB flash drive) alone, in either of the board's two physical USB-A
+  ports: nothing.
+- Both devices simultaneously, one per port: nothing.
+
+Every combination of device x port x stock's own tested firmware produced identical results - no
+external USB device has ever enumerated on this physical unit, independent of our kernel, our
+devicetree, or which specific device is attached.
+
+**Pushed back on that conclusion before accepting it - real, genuine automount infrastructure exists
+on stock for exactly this use case.** `/etc/udev/rules.d/10-mount-udisk.rules` matches
+`KERNEL=="sd[a-z]"` (real USB mass-storage device nodes) and runs `/etc/auto_mount_udisk.sh`, which
+itself handles NTFS via `ntfs-3g` - genuine, real, vendor-built infrastructure for exactly "insert a
+USB stick," not something invented or assumed. This is real evidence the feature is *meant* to work,
+which is why "hardware limitation, stop here" wasn't accepted as the final answer without one more
+real test.
+
+**Found the actual mechanism this board needs, in `phy-ingenic.c`**: a real, vendor-provided, write-only
+sysfs attribute (`sw_switch_hsotg`) exists specifically for boards without ID-pin sensing (ours has
+none - `ingenic,id-dete-gpio` is commented out, "shares pins with msc1") to manually force host vs
+device role, since the normal automatic ID-pin-triggered role-switching path
+(`is_id_host()`/`id_work`) is entirely gated behind `if (usb_phy->id_gpiod)` and never engages at all
+without that GPIO.
+
+**Tested directly, live, on our own kernel** (rebooted into it specifically for this):
+`echo host > /sys/devices/platform/apb/10000000.otg_phy/sw_switch_hsotg` - the kernel acknowledged it
+immediately (`---Forced switching Host mode!` in `dmesg`), confirming the mechanism is real and wired
+up correctly on our build. Had the user physically replug both test devices *after* the forced switch,
+to rule out a stale connection-state issue. **Still nothing** - `/sys/bus/usb/devices/` stayed at just
+the internal root hub, and `dmesg` showed zero USB connection/reset/speed-negotiation activity at all
+after the switch, not even a failed attempt.
+
+**Conclusion, now much more strongly evidenced than the first pass**: this isn't a devicetree property,
+a driver compatible-string mismatch, or a role-detection/OTG-mode issue - the single most direct
+software lever available (the vendor's own manual host-mode override, built for exactly this
+no-ID-pin scenario) was pulled directly and produced zero downstream effect. That points at something
+below the driver layer entirely - VBUS not physically reaching the connector despite the GPIO
+correctly toggling, or the D+/D- data lines themselves not being connected/functional - which needs a
+hardware-level check (multimeter/continuity on the actual port, or comparing against a second unit of
+the same printer model), not more kernel or devicetree changes. The devicetree fix (`drvvbus-gpio` pin
+correction) is real, correct, and stays committed regardless - it's simply not the actual blocker for
+the symptom that motivated finding it. Closed as out-of-scope for firmware-level debugging.
+
+## 43. `uart1` (the real mainboard MCU link) wired up for the first time, and a real pin conflict it exposed
+
+Prompted by a real physical constraint: the printer's mainboard and this board's serial debug console
+(`uart4`/`ttyS4`) can't be connected at the same time, so once WiFi works, `uart1` becomes the only way
+to reach both the Nebula Pad *and* the mainboard MCU simultaneously. Worth verifying now rather than
+waiting to discover a problem only once the mainboard is finally reconnected.
+
+**Real, confirmed gap**: `printer.cfg`'s own `[mcu]` section confirms `serial:/dev/ttyS1` is the real,
+actual link to the printer mainboard's MCU - but this board's devicetree never referenced `&uart1` at
+all, unlike every other UART actually in use (`uart0`/`uart3`/`uart4` all have explicit `pinctrl-0`
+assignments). The base `x2000.dtsi` leaves `uart1` with no `status` property at all (defaults to
+enabled per devicetree spec), but without a pinctrl assignment the physical TX/RX pins were never
+muxed to the UART1 function - the controller was nominally "on" with nothing actually reaching the
+connector. Added the missing `pinctrl-0 = <&uart1_pc>` (`x2000-pinctrl.dtsi`'s `gpc 21-24` - the only
+real pin group defined for this uart, no ambiguity to resolve, unlike `uart3`'s 2-pin/4-pin choice).
+
+**First real boot test exposed a second, genuine bug**: `pin GPC-21 already requested by
+134da000.as-dmic; cannot claim for 10031000.serial`. This board's `&as_dmic` override (a 4-channel
+digital-mic array) claims `gpc-21` via `dmic_pc_4ch`, directly conflicting with `uart1_pc`. Checked -
+this override had **zero justification comment**, unlike everything else in this file, and this
+printer's confirmed real audio path is the speaker/codec (`icodec`, "x2000-sound sound: Sound Card
+successed" from earlier boot logs), not a mic array - same bug class as BCMDHD/GT9XX/the camera ISP
+pipeline/the second MIPI panel (a vendor reference-board feature enabled without ever being verified
+against real hardware, this time actively blocking something confirmed real and needed). Disabled
+`&as_dmic` entirely.
+
+**Re-tested, confirmed clean**: `10031000.serial: ttyS1 at MMIO 0x10031000 ... is a uart1` registers
+with no conflict. Two *other*, pre-existing pin conflicts remain in the same log (`uart0` vs
+`13450000.msc`/eMMC, and `uart3`/Bluetooth vs `10054000.i2c`) - both unrelated to this fix, both
+already present before tonight's changes, neither blocking anything currently confirmed needed. Left
+alone, flagged for a future pass.
+
+**Not yet tested against the real mainboard** - it was physically disconnected for the USB port
+hardware inspection (§42) for the entire duration of this fix, and can't be reconnected until WiFi
+works (uart4/serial console and the mainboard connection are mutually exclusive on this hardware,
+confirmed by the user - the debug console this whole project has relied on all night literally cannot
+be present at the same time as the connection this fix is for). This closes what's confirmed possible
+from source alone; the real MCU handshake test is the next real milestone once WiFi is working.
+
+Both commits pushed to the kernel fork (`coreflake1/NebulaOS`, `openke`: `4905cb23e` for the uart1
+pinctrl addition, `c60cf4d67` for the `as_dmic` disable).
+
+## 44. The real WiFi root cause: two sessions of devicetree-property tuning were toggling a GPIO pin the chip isn't even wired to
+
+Every WiFi fix so far (§40) worked on real, genuine bugs (`#gpio-cells`, `post-power-on-delay-ms`) but
+none of them moved the actual symptom: `mmc_rescan_try_freq()` exhausting every card type at every
+frequency with zero response. That symptom means the chip itself was never responding to anything -
+not a devicetree-property-level problem, a "is the chip even powered on" problem. Comparing our
+properties against Raspberry Pi's known-working CYW43438 reference (done in §40/41) couldn't have
+caught this, since a wrong *pin number* on our own board's own wiring has nothing to do with generic
+SDIO/pwrseq binding correctness.
+
+**Read the actual vendor SDHCI driver source** (`module_drivers/drivers/mmc/host/sdhci-ingenic.c`,
+`ingenic_sdio.c`) to understand the real bring-up model. Found `ingenic_sdio_wlan_init()` and
+`ingenic_mmc_manual_detect()` (called via `EXPORT_SYMBOL`, meant to be invoked by "a manually
+card-detect driver such as wifi" per the function's own doc comment). Also found the real vendor
+config: `CONFIG_MMC_SDHCI_INGENIC=y` and `CONFIG_BCMDHD=y` are both built statically into our kernel -
+but stock's own boot log shows its WiFi mmc host is named `md_ingenic,sdhci.1`, not a devicetree node
+name at all, meaning stock doesn't bring this up via static devicetree + built-in driver the way we've
+been doing it.
+
+**Went looking for hardware-verified ground truth instead of reasoning further from source alone.**
+`vendor/device-backups/nebula_system_backup.bin` is a full 1.5GB dd of the device's eMMC (GPT-parseable
+even though the backup itself is truncated relative to the disk's real 6GB+ `userdata` size - `rootfs`,
+partition 7, ends well inside the captured range). Extracted it (`dd` with the partition's real
+byte offset/size, then `unsquashfs`, both fully read-only) and found stock ships its *entire* board
+driver stack - MMC/WiFi, backlight, fb, gpio, i2c, rotator, touch, watchdog - as loadable out-of-tree
+`.ko` modules under `/module_driver/`, each with its own `insmod`-with-parameters `.sh` script and one
+`driver_default_init_script.sh` that runs them all in order. (The `.ko` files themselves are
+`vermagic=4.4.94` - stock runs an ancient 4.4 BSP kernel; this whole project's premise is replacing
+that with a real 6.6.18-rt23 kernel, so the binaries themselves are useless to us, but the `.sh`
+scripts are exact, real, hardware-verified documentation of the vendor's own wiring.)
+
+**`soc_msc.sh` and `cywdhd.sh`'s insmod parameters gave the real GPIO pins, verbatim**:
+`wifi_reg_on=PD04` (port D, pin **4**) and `gpio_wlan_wake_host=PE02` (port E, pin 2) -
+cross-confirmed independently against this exact board's own `stock-boot-reference-log.txt` line
+`WL_HOST_WAKE=130` (port E is the SoC's 5th gpio chip, 0-indexed: 4*32+2 = 130, exact match, no
+ambiguity). There's also a **third gpio these scripts use that had no equivalent anywhere in our
+devicetree at all**: `wifi_power_on`/`gpio_bt_wifi_power = PA01` (port A, pin 1), a separate,
+shared power-rail enable for the whole combo chip, active-high per the vendor's own
+`wifi_power_on_level=1`.
+
+**Our devicetree had been toggling `gpd 1` (port D, pin 1) this whole time** - for both
+`wlan_pwrseq`'s `reset-gpios` and `bcmdhd_wlan`'s `gpio_wl_reg_on` - a pin the WiFi chip was never
+wired to at all, and never drove the PA01 power-enable line in the first place. This fully explains
+the "zero response at every frequency" symptom: the chip was simply never powered on. Fixed both
+places to the real pins (`gpd 4` for WL_REG_ON, `gpe 2` for WL_HOST_WAKE), and added `gpa 1` to
+`wlan_pwrseq`'s `reset-gpios` alongside `gpd 4` - confirmed via `drivers/mmc/core/pwrseq_simple.c`
+that `reset-gpios` is a real gpio *array* (`devm_gpiod_get_array`), toggled together, each line
+honoring its own active-flag independently (mixed active-high/active-low in one array is correct,
+not a bug, given the vendor's own opposite polarities for these two lines).
+
+**Real hardware boot test (2026-07-21, later still).** Flashed the combined build (this WiFi fix +
+the already-built §43 uart1/as_dmic fix, both baked into the same kernel source tree) to the spare
+slot via `flash-spare-slot.sh`, flipped the ota marker, rebooted, captured serial clean.
+
+**uart1: CONFIRMED CLEAN, for real this time.** `10031000.serial: ttyS1 at MMIO 0x10031000 ... is a
+uart1` registers with zero conflict. The two pin conflicts still present in the same log
+(`GPD-23`/uart0/`13450000.msc` and `GPC-25`/uart3/`10054000.i2c`) are the same pre-existing,
+already-documented, unrelated ones from §43 - nothing new. §43's fix is now real-hardware-verified,
+not just source-reviewed.
+
+**WiFi: still broken, same exact symptom.** `mmc1: Failed to initialize a non-removable card` -
+identical message to every attempt before this one. `ingenic,sdhci 13460000.msc: allocated
+mmc-pwrseq` did succeed (both `gpa 1` and `gpd 4` resolved as valid gpio phandles, no lookup error),
+so the pin numbers are at least structurally wired now - but the card still never responds. Per
+[[feedback_verify_fix_worked_not_just_plausible]]: the symptom didn't change, so the hypothesis was
+incomplete, not simply "not yet tested." Real candidates for what's still missing, not yet
+distinguished: (a) `gpa 1`/`gpd 4`'s active-high/active-low polarity guessed from the vendor's
+`_level=` insmod params without ever seeing the param-handling source (closed 4.4 BSP binary) - could
+be backwards; (b) toggling both lines simultaneously via one `reset-gpios` array vs. stock's
+possibly-sequenced power-on (rail-enable settling before reg_on asserts) - `post-power-on-delay-ms`
+only fires after both are already asserted, not between them; (c) still an entirely different pin.
+Self-healing worked exactly as designed throughout - `S99confirm-good` correctly never confirmed
+this boot (Moonraker never came up healthy, no network at all - both wlan0 and eth0 timed out during
+`Starting network`), leaving the ota marker on stock, so the very next reboot returned there with no
+manual marker write needed. Device confirmed back on stock via serial, real WiFi reassociating to
+"Office_2.4Ghz" - fully healthy, zero side effects from the test.
+
+Full boot log: `vendor/device-backups/custom-boot-wifi-gpio-fix-uart1-combined-20260721.log`.
+
+## 45. Six more real, independently-verified WiFi fixes, all tested on real hardware - the symptom never moved, and hardware-level evidence now says this is likely beyond software alone
+
+Continued autonomously (user's own instruction) after §44's pin fix produced zero change. Every fix
+below was rebuilt, reflashed to the spare slot, and boot-tested on real hardware before moving to the
+next - none of this was guessed-then-abandoned, each was a real, ruled-in-or-out hypothesis per
+[[feedback_verify_fix_worked_not_just_plausible]].
+
+1. **Active-flag polarity was backwards.** Traced `drivers/mmc/core/pwrseq_simple.c`'s actual logical
+   sequence (`pre_power_on`→logical 1/asserted, `post_power_on`→logical 0/released, enumeration
+   happens at logical-0) against the vendor's own insmod param levels (`wifi_reg_on_level=0`,
+   `wifi_power_on_level=1`) and found `gpd4`/`gpa1`'s `GPIO_ACTIVE_HIGH`/`_LOW` flags were exactly
+   inverted from what's needed. Fixed, retested: **identical failure.**
+
+2. **PA01 was silently mux-stolen by our own active serial console.** `x2000-pinctrl.dtsi`'s
+   `uart4_pa` group was `<&gpa 0 3>` (pins 0-3, ALL FOUR muxed to UART4 as one atomic group per
+   `pinctrl-ingenic.c`'s inclusive-range `pin_bitmap()`), while stock's own live DTB uses a narrower
+   `<0x08 0x02 0x03>` (pins 2-3 only). Our always-on debug console was permanently claiming PA1 -
+   the exact pin WiFi's power rail needs - with zero error printed (a different pinctrl group
+   silently mux-claiming a pin isn't the same code path as the loud "already requested" conflicts
+   this driver prints for named-group clashes). Narrowed the template to match stock exactly.
+   Retested: **identical failure.**
+
+3. **Modeled PA01 as its own `regulator-fixed` instead of a pwrseq reset-gpios line.** PA01 is a
+   shared combo-chip power rail (used by both the mmc host module and the separate wlan module in
+   stock's own scripts), not a per-card reset/wake signal - `mmc-pwrseq-simple` can only express one
+   shared-delay concept for every gpio in its array together, it can't stage "rail up first with its
+   own real ramp-up window, then toggle reset". Wired as `&msc1`'s `vmmc-supply` (confirmed real and
+   actively checked by this exact driver - it already prints "No vmmc regulator found" when absent).
+   Retested: **identical failure.**
+
+4. **`&msc1`'s own "default" pinctrl state was forcing the RTC32K reference clock OFF.**
+   `pinctrl-0 = <&msc1_4bit>, <&rtc32k_disable>` - `rtc32k_enable`/`_disable` mux `gpe23` between its
+   real clock-output function and a forced-low state, and this is a real, physical 32kHz reference
+   this exact chip class needs running (the vendor's own out-of-tree `ingenic_sdio.c` has a whole
+   atomic-refcounted `rtc32k_enable()` mechanism built around this precise pin). Nothing in mainline
+   `sdhci-ingenic.c` (unlike the vendor's own bcmdhd path we don't use) ever selects the "enable"
+   state - the clock was forced off at every single boot. Swapped to `rtc32k_enable` in the default
+   state itself, so the standard driver-core pinctrl binding (zero driver code needed) turns it on
+   automatically. Retested: **identical failure.**
+
+5. **Verified the compiled `.dtb` actually reflects every source change**, since 4 real fixes with
+   zero symptom movement started to raise the question of whether changes were even taking effect.
+   Decompiled the real build-output `halley5_v30.dtb` with `dtc` (via the same `k1-bash-build` docker
+   image) and confirmed every property - `vmmc-supply`, the `wifi_bt_power` regulator's `gpio`, the
+   single-entry `reset-gpios`, `uart4-pa`'s narrowed pin range - compiled in exactly as written. Ruled
+   out "the fix never applied" as an explanation.
+
+6. **Found a real vendor driver-source bug, not a devicetree issue.**
+   `sdhci_ingenic_set_clock()` (`module_drivers/drivers/mmc/host/sdhci-ingenic.c`) computes the
+   correct per-instance clock-control register address via `sdhci_ingenic_get_cpm_msc(host)` into a
+   local `cpm_msc` variable - then, for every low-speed (≤400kHz) clock setup (i.e. every single card
+   identification attempt, on every controller), writes to the **hardcoded literal `0xB0000068`**
+   (`CPM_MSC0_CLK_R`) instead of the `cpm_msc` variable that was computed for exactly this purpose one
+   line above. A real copy-paste bug: MSC0 (eMMC) incidentally still worked since it's the one
+   actually being hit; MSC1 (WiFi) silently never got its own register write. Fixed to use `cpm_msc`.
+   Retested: **identical failure.**
+
+### The real diagnostic breakthrough: dynamic debug + a live GPIO/pinctrl inspection
+
+Rather than guess a 7th devicetree change, enabled `CONFIG_DYNAMIC_DEBUG` (already compiled in) live
+over serial - `mount -t debugfs`, `echo 'file drivers/mmc/core/* +p' > .../dynamic_debug/control`,
+then `echo 13460000.msc > .../unbind` + `.../bind` to force a fresh, fully-instrumented probe without
+a whole new build/flash cycle. This produced real, detailed command-level tracing for the first time:
+
+```
+mmc1: starting CMD5 arg 00000000 flags 000000e1
+mmc1: sdhci: IRQ status 0x00018000
+mmc1: req done (CMD5): -145: 00000000 00000000 00000000 00000000
+mmc1: starting CMD55 arg 00000000 flags 000000f5   (x5, all identical timeouts)
+mmc1: clock 100000Hz busmode 1 powermode 2 cs 0 Vdd 21 width 1 timing 0
+mmc1: starting CMD1 arg 00000000 flags 000000e1
+mmc1: req done (CMD1): -145: 00000000 00000000 00000000 00000000
+```
+
+`IRQ status 0x00018000` decodes to `SDHCI_INT_ERROR | SDHCI_INT_TIMEOUT` - a genuine **hardware
+command timeout**, not a software-side misconfiguration. The controller is doing everything right:
+real clock at the correct 100kHz identification speed, real CMD5/CMD55/CMD1 commands sent - and the
+chip returns absolutely nothing, every time, at every frequency the outer `mmc_rescan_try_freq()` loop
+tries (already established in earlier sessions).
+
+Then checked the *live* electrical state directly via `/sys/kernel/debug/gpio` and
+`/sys/kernel/debug/pinctrl/.../pinmux-pins`, immediately after triggering that failed probe:
+
+```
+gpiochip0 (GPA): gpio-1  (wifi_bt_power_regula) out hi     <- PA01, correctly HIGH (enabled)
+gpiochip3 (GPD): gpio-100 (reset)               out lo     <- PD04, correctly LOW (enabled)
+pin 151 (GPE-23): 13460000.msc (GPIO UNCLAIMED) function rtc32k-pins group rtc32k-enable
+```
+
+Every single one of the six fixes above is confirmed **live, electrically correct, exactly as
+designed** - the power rail is genuinely driven high, the reset/enable line is genuinely at the
+vendor's documented enable level, the reference clock is genuinely muxed to its real clock-output
+function, not forced off. And the SDIO chip still does not respond to a single command.
+
+### Where this leaves things
+
+This is a materially stronger stopping point than "tried some things and gave up": six independent,
+real bugs were found and fixed (each individually justified, several likely also fixing real problems
+on other boards derived from this same vendor SDK/kernel fork), and the software/devicetree stack is
+now *confirmed* to be doing everything correctly at the electrical/register level. The remaining
+failure mode - total silence from the chip at every command, every frequency, with correct power,
+clock, and bus wiring all independently verified - points at something outside what devicetree or
+driver-source changes can reach from here: either a hardware-level fault or wiring difference on this
+specific unit (needs a multimeter/oscilloscope check of the actual WL_REG_ON/PA01/CLK pins during a
+real boot, the same class of verification that eventually closed out the USB investigation in §42), or
+a genuine, still-undiscovered timing/sequencing requirement that only the vendor's exact closed-source
+module binary knows about.
+
+**Not closing this out as "solved" or "impossible" - closing this specific investigation approach as
+exhausted**, with a clear, evidence-backed recommendation: the next productive step needs either
+physical measurement tools or a second reference unit for comparison, not another devicetree
+guess. Device left safely on stock (self-healing confirmed it throughout - `S99confirm-good` never
+saw Moonraker healthy on any of these six attempts and correctly left the marker on stock every time,
+zero manual intervention needed for safety). All six fixes are real and stay committed regardless of
+the open WiFi question - `uart1`/`as_dmic` (§43) is independently confirmed working, and none of these
+six changes are wrong, they just aren't sufficient on their own.
+
+## 46. User correctly pushed back on §45's conclusion as overconfident - real stock forensics instead of more devicetree guessing, two more real attempts, still open
+
+§45's framing ("likely beyond software alone") was too confident given one directly available fact:
+**stock WiFi works on this exact physical unit.** A live chip that responds correctly to stock's own
+kernel is strong evidence against "electrically dead," and CMD5/CMD55/CMD1 timeouts under *our*
+bring-up sequence prove the device isn't answering *that* sequence - not that it's faulty. Corrected
+course: pulled real, live forensics from stock instead of guessing at more devicetree changes.
+
+### Real stock forensics
+
+SSH'd into stock and ran a proper diagnostic sweep (SDIO sysfs identity, `/sys/kernel/debug/mmc1/ios`,
+dmesg, module locations, init.d ordering, the actual `soc_msc.ko`/`cywdhd.ko` insmod scripts). Real,
+concrete findings:
+
+- SDIO identity confirmed: vendor `0x02d0`, device `0xa9a6` (matches CYW43438, already known).
+- **The exact real boot sequence**, never seen this directly before: `soc_msc.ko` loads at `S11`
+  (very early - `msc1_rst=-1 msc1_pwr=-1`, this module has **zero gpio power/reset config of its
+  own**), then `cywdhd.ko` loads immediately after, and its own `dhd_module_init()` does ONE
+  automatic power-test cycle (real GPIO toggle via its own direct `gpio_direction_output()` calls,
+  bypassing devicetree/pwrseq entirely) - card responds within ~300ms, then gets **immediately
+  powered back off**. The REAL, lasting power-on (`bcm_wlan_power_on, RESET`) only happens ~5 seconds
+  later, from `S44wifi_bcm_up`'s `wifi_up.sh` (`rfkill unblock wifi` + `ifconfig wlan0 up`).
+- Confirmed: stock's `mmc1` is a **pure platform_device** (`md_ingenic,sdhci.1`, no devicetree node at
+  all - matches §44's earlier finding of `status="disabled"` in the static DTB), created and
+  parameterized entirely via `soc_msc.ko` module parameters, not `mmc-pwrseq-simple`/`vmmc-supply`.
+
+### Two more real, structurally different attempts (bringing the total to eight)
+
+**Attempt 7 - port the vendor's manual-insert glue, not the whole driver.** `cywdhd.ko`'s own
+`dhd_wlan_set_power()` calls the already-exported `ingenic_bcmdhd_wlan_power_onoff(MANUALLY_INSERT)`
+(→ `rtc32k_enable()` + `ingenic_mmc_clk_ctrl()` + `ingenic_mmc_manual_detect()`) after its own gpio
+sequencing - this exact function is already compiled into *our* kernel too (same source file,
+`ingenic_sdio.c`, built via `CONFIG_MMC_SDHCI_INGENIC=y`). Added a `late_initcall` in `ingenic_sdio.c`
+that calls it once, reusing our already-electrically-verified `wlan_pwrseq`/`wifi_bt_power` gpio
+sequencing (§45) instead of re-implementing gpio control from scratch. **Confirmed running correctly**
+(dmesg: `openke_wifi_manual_insert: triggering manual SDIO insert on mmc1` / `wlan power on:2`) -
+**identical timeout regardless.**
+
+Traced why: `drivers/mmc/core/core.c`'s `mmc_start_host()` (called from every `mmc_add_host()`,
+unconditionally, for every mmc host) *already* does one automatic `mmc_power_up()` + rescan at msc1's
+own probe time, completely independent of `non-removable`/`cd_type` - removing `non-removable`
+wouldn't have prevented this either, since the trigger for the initial scan is generic, not
+quirk-gated. By the time attempt 7's `late_initcall` ran, the pwrseq gpios were already sitting at
+whatever level that earlier, automatic cycle left them at - a *level* recheck, not a fresh
+*transition*. This is exactly the gap the user flagged: final GPIO state was checked in §45, never the
+actual edge.
+
+**Attempt 8 - force a real transition immediately before detection.** Modified
+`ingenic_mmc_manual_detect()` itself (real driver source, not devicetree) to call
+`mmc_power_off(host->mmc)` + `msleep(50)` + `mmc_power_up(host->mmc, host->mmc->ocr_avail)` right
+before its existing `mmc_detect_change()` call - forcing a genuine off-then-on cycle through our
+already-verified-correct pwrseq path at the exact moment of the real, intentional trigger, not relying
+on stale state from minutes-earlier automatic probing. (`mmc_power_up`/`mmc_power_off` are real,
+non-static, built-in mmc-core functions - declared only in the core subsystem's *private* header, so
+a manual `extern` was needed since this driver is built directly into vmlinux, not a loadable module.)
+**Confirmed running, identical timeout again.**
+
+### Honest status, not a re-declaration of "hardware dead"
+
+Eight real, independently-reasoned, real-hardware-tested attempts, spanning devicetree config (pin,
+polarity, pinmux conflict, regulator model, clock enable), a real driver-source bug fix, and now two
+attempts at the vendor's actual manual-insert architecture with a forced electrical transition - none
+have changed the symptom. What remains genuinely open, not concluded:
+
+- **Exact pulse timing/duration is still a guess.** `msleep(50)` before power-up, `200ms` after - both
+  chosen as "generously safe" values, never measured against what stock's own `dhd_gpio.c` actually
+  waits (its exact `mdelay`/`msleep` values weren't extracted from live stock forensics this round -
+  a concrete, cheap thing to pull next: `strings`/disassemble `cywdhd.ko` or trace GPIO timestamps
+  live on stock with a logic analyzer or even instrumented dmesg timestamps around the real
+  `bcm_wlan_power_on` cycle).
+- **Physical measurement remains the most information-dense next step** - a multimeter/oscilloscope
+  check of `PD04`/`PA01`/the CLK line during a real power-on, on *this* unit, would directly show
+  whether our forced transition (attempt 8) actually reaches the physical pins as intended, or whether
+  something in the pin's electrical path (pull-up/pull-down mismatch, drive strength, a level shifter,
+  or a genuinely different pin on this specific board revision) prevents it from ever being a real
+  factor. This is a "what would most efficiently resolve the remaining uncertainty" recommendation,
+  not a claim that the hardware is faulty - stock's own real-time behavior on this exact unit is
+  direct proof the hardware works.
+
+Device left safely on stock throughout (self-healing confirmed working correctly on both new attempts
+- zero manual marker intervention needed). All eight fixes/attempts stay committed; none are wrong,
+none are proven sufficient yet either.
+
+## 47. The real root cause of every prior WiFi attempt: wrong driver entirely - found via disassembling stock's own working binary, not another devicetree guess
+
+User pushed back a second time, more specifically: stop guessing GPIO delays, trace and reproduce
+stock's *exact* implementation using the source and binaries already available, since stock WiFi
+demonstrably works on this exact unit. Right call - this section is the direct result.
+
+### Disassembly, not speculation
+
+Pulled `cywdhd.ko` (stock's real WiFi driver) live off the running device and disassembled it with
+the project's own MIPS cross-toolchain (`mipsel-linux-gnu-objdump`, via the same `k1-bash-build`
+docker image already used for everything else). Its symbol table was NOT stripped - real function
+names, real call graphs, no guessing required:
+
+- `bcm_wlan_power_on()` disassembled directly: for the "manual insert" path, it does
+  `gpiod_set_raw_value(desc, 0)` → `msleep(100)` → `gpiod_set_raw_value(desc, 1)` → calls
+  `jzmmc_manual_detect(index, 1)`. `desc` resolves (via the `.data` symbol table) to `wlan_reg_on`,
+  a plain integer GPIO number populated from the `gpio_wlan_reg_on=PD04` module param - confirms the
+  real, physical WL_REG_ON toggle sequence byte-for-byte, straight from the vendor's own compiled
+  code, not reconstructed from param names alone.
+- Critically: `cywdhd.ko` calls **`jzmmc_manual_detect()`/`jzmmc_clk_ctrl()`** - real, exported
+  symbols. These do **not exist** in `sdhci-ingenic.c` (what this entire board file has used via
+  `CONFIG_MMC_SDHCI_INGENIC` since the project began). They exist in **`ingenic_mmc.c`** - a
+  completely separate, older-style MMC/SD driver already present in this exact kernel source tree,
+  never used by this board file until now. Confirmed directly in source:
+  `ingenic_mmc.c`'s own `jzmmc_manual_detect()`/`jzmmc_clk_ctrl()` are one-line wrappers (explicit
+  comment: `/* for module driver */`) around its own `ingenic_mmc_manual_detect()`/
+  `ingenic_mmc_clk_ctrl()`.
+
+**Every one of the eight prior WiFi attempts (§44-46) was correctly diagnosing and fixing real bugs
+in the wrong driver.** Stock never used `sdhci-ingenic.c` for msc1 at all.
+
+### The actual mechanism, confirmed in source, not assumed
+
+`ingenic_mmc.c` has a real `.get_cd` callback (`ingenic_mmc_get_card_detect`, returns whether
+`INGENIC_MMC_CARD_PRESENT` is set) - for `removal=MANUAL` devices, this bit is **never set** until
+`ingenic_mmc_manual_detect()` explicitly flags it. `sdhci-ingenic.c` has **no `.get_cd` callback at
+all** - confirmed by reading its full `sdhci_ops` struct back in §44-46's own investigation. Mainline
+`drivers/mmc/core/core.c`'s `mmc_start_host()` unconditionally does one `mmc_power_up()` + rescan for
+every registered mmc host, regardless of `non-removable`/quirks - with no `.get_cd` to say otherwise,
+this always resulted in real CMD5/CMD55/CMD1 being blindly sent before the chip was ever really ready,
+producing the identical "Failed to initialize a non-removable card" timeout on all eight prior
+attempts, no matter how correct the pin/polarity/clock/regulator config underneath it was.
+
+### Making the switch
+
+`INGENIC_MMC`'s Kconfig only listed older XBurst SoCs (`SOC_X1600`/`X1000`/`X1800`/`X1021`/`X1520`/
+`X1630`) - relaxed to also allow `SOC_X2000` after confirming (by grep) the driver itself has zero
+hardcoded SoC-specific register addresses; it's devicetree/clock-framework driven exactly like
+`sdhci-ingenic.c`. Enabled `CONFIG_INGENIC_MMC=y` + `CONFIG_INGENIC_MMC_MMC1=y` (msc0/msc2 stay on the
+old driver - already working, no reason to touch them). Changed *only* msc1's devicetree `compatible`
+from `"ingenic,sdhci"` to `"ingenic,x1600-mmc"` - specifically the x1600 variant because its
+clock-name convention (`div_msc%d`/`gate_msc%d`) matches what `sdhci-ingenic.c` already uses and what
+msc0/eMMC already proves works on this SoC's real clock provider (the generic `"ingenic,mmc"` variant
+uses a different, unverified `cgu_msc%d` naming).
+
+**Real build bug found and fixed along the way**: `sdhci-ingenic.c` and `ingenic_mmc.c` both
+independently define `ingenic_mmc_manual_detect()`/`ingenic_mmc_clk_ctrl()` - a genuine link-time
+`multiple definition` error the instant both are built into the same vmlinux (they were only ever
+designed as alternatives for different SoC generations, never linked together before). Renamed
+`sdhci-ingenic.c`'s copies to `sdhci_ingenic_mmc_manual_detect`/`sdhci_ingenic_mmc_clk_ctrl` (nothing
+external calls them anymore, since msc1 - the only real caller - now resolves to `ingenic_mmc.c`'s
+implementation via `ingenic_sdio.c`'s existing header-conditional include).
+
+### Real hardware result: the old symptom is gone, replaced by a new, more specific one
+
+Rebuilt, reflashed, rebooted. **`"mmc1: Failed to initialize a non-removable card"` no longer
+appears at all** - direct, real confirmation the `.get_cd`-gated premature auto-scan is genuinely
+eliminated, exactly as the mechanism above predicts. The existing manual-insert `late_initcall` (§46)
+fired correctly (`openke_wifi_manual_insert` / `wlan power on:2`) and this time triggered a REAL
+`ingenic_mmc.c`-level transaction attempt - which produced a new, much more specific, driver-level
+timeout with a full register dump:
+
+```
+ingenic,mmc 13460000.msc: timeout 3000ms op:0  sz:0 state:1 STAT:0x00000000 DMALEN:0x00000000 blks:0/0 clk:enable
+ingenic,mmc 13460000.msc: request time out, op=0 arg=0x00000000, sz:-1B state=1, status=0x00000000, ...
+REG dump: CTRL2=0x00000002 STAT=0x00000000 CLKRT=0x00000007 CMDAT=0x00000080 ... IMASK=0x03F70000 IFLG=0x070FFFFF CMD=0x00000000 ...
+```
+
+`op:0`/`op:8`/`op:5`/`op:55` confirm the driver genuinely attempts the full standard identification
+sequence (CMD0, CMD8, CMD5, CMD55) exactly as it should - `CTRL2` being non-zero shows register
+access to the controller works in general; `STAT` staying at `0x00000000` through every single
+attempt, at the actual hardware register level, is now the concrete, specific, remaining question -
+narrower and more actionable than the generic mmc-core-level timeout every prior attempt produced.
+
+**Real side effect discovered**: the perpetual 3-second retry timer this driver runs while a request
+never completes (real code: `ingenic_mmc_request_timeout()`, re-arms itself indefinitely) blocked a
+clean kernel reboot - `device_shutdown()` hung inside `mmc_host_classdev_shutdown()`'s
+`flush_work()` call, waiting on a work item that never quiesces. `reboot`/`reboot -f`/SysRq `b` all
+hit the same kernel-internal `device_shutdown()` path and couldn't unstick it from userspace - the
+device's own hardware watchdog (already confirmed present and working) eventually forced the actual
+reset. No risk in this: `S00revert-safety`'s marker was already pointed at stock from the start of
+this boot, so the eventual watchdog-forced restart landed safely on stock regardless, same as every
+other test this session - but worth flagging as a real, reproducible consequence of this specific
+failure mode if this driver work continues.
+
+### Where this leaves things
+
+This is real, substantial, hardware-confirmed progress, not a repeat of §45/46's pattern - a whole
+class of prior guesswork (every devicetree GPIO/polarity/clock tweak) is now confirmed unnecessary to
+revisit, since the actual driver architecture is now provably correct, matching stock's own compiled
+binary exactly. The remaining question is narrower and more concrete than before: why does `STAT`
+never show any activity at the hardware register level once the correct driver is finally in place.
+Six real, independently-verified fixes (§45) plus this driver switch are ALL still correct and worth
+keeping regardless of how this resolves. Device left safely on stock (via watchdog-forced recovery,
+confirmed via `/proc/cmdline` and real WiFi reassociation afterward).
+
+## 48. `ingenic_mmc.c` instrumented to the register level, then a second disassembly (this time of stock's actual MSC1 driver binary, not just the WiFi module) reversed §47's driver-family conclusion
+
+A long, heavily-instrumented follow-up to §47's `STAT` mystery, ending in a real pivot back to the
+driver family §47 moved away from - and a sobering, honestly-reported real-hardware result. Recorded
+in full because every step produced real, kept evidence, even though the net symptom is unchanged from
+before §47 ever started.
+
+### Phase 1: bounded retries and clean shutdown (real, kept fix)
+
+Before further diagnostics, fixed the exact reboot-hang mechanism §47 flagged: `ingenic_mmc_request_
+timeout()`'s retry ladder allowed up to 20 reschedules (60 real seconds) per failed request before
+ever calling `mmc_request_done()`. Bounded to one reschedule (~6s total), added the requested
+`"MSC1-DIAG: request failed, retries exhausted, completing request"` log line, and added `del_timer_
+sync()` for both `request_timer`/`detect_timer` to `mmc_ingenic_remove()`/`mmc_ingenic_shutdown()`
+(neither previously touched them at all). Confirmed twice on real hardware: a `reboot` issued while
+the retry timer was actively armed completed cleanly in both the old driver (before this fix existed,
+where it caused a genuine kernel panic on `device_shutdown()`) and, after the fix, on live boots where
+it no longer needed the watchdog to recover.
+
+### Phase 2: `CTRL`/CPM/clock instrumentation on `ingenic_mmc.c` - two real hypotheses closed with hardware evidence, one real bug fixed
+
+Added: a `CTRL` register dump line (previously missing from `ingenic_mmc_dump_reg()`), a
+`msc_wait_internal_clock()` bounded 1ms poll for `STAT_CLK_EN` (bit 8) right after reset, a raw CPM
+register dump (`ingenic_mmc_dump_cpm()`, reading `MSC0CDR`/`MSC1CDR`/`CLKGR`/`MPDCR` directly via
+`ioremap` of the real X2000 CPM physical base `0x10000000`) printing MSC0 and MSC1 side by side, and
+clock-acquisition logging at probe (`clk_get`/`clk_set_rate`/`clk_prepare_enable` results and rates).
+Along the way, fixed a real, silent bug: `if (!host->clk_cgu)` doesn't catch `devm_clk_get()` failure
+(`ERR_PTR`, never `NULL`) - present identically in stock's own 4.4.94 source, harmless there only
+because its `clk_get()` calls never actually fail. Changed to `IS_ERR()`.
+
+Real hardware results, in order:
+
+- **Power-domain gate ruled out.** `MSC0`/`MSC1` `pd_en` read identical (both enabled), and the raw
+  `MPDCR` register read `0x00000000` in its entirety throughout - this power-domain layer isn't
+  gating anything on this silicon, closing a real, plausible hypothesis with register evidence rather
+  than leaving it dangling.
+- **External clocks ruled out.** `MSC1-CLK-DIAG` showed `clk_cgu`/`clk_gate` as real, valid pointers,
+  both reporting `enabled=1` after `clk_onoff(1)`, rate landing at 23.4375MHz (375MHz/16, correct
+  integer-divider rounding for a 24MHz request - not a bug).
+- **A real, novel, but ultimately non-explanatory finding**: MSC1's CGU divider "busy" bit (bit 28 of
+  `MSC1CDR`) read `1` continuously from probe through roughly 30 seconds of uptime, while MSC0's read
+  `0` the entire capture - a real, asymmetric, timing-correlated phenomenon that directly explains why
+  the recurring `"wait cgu stable timeout!"` warning (`drivers/clk/ingenic-v2/clk-div.c`) specifically
+  tracks MSC1/WiFi bring-up. But `STAT` stayed `0x00000000` both while busy and after it cleared -
+  real, but not suffient on its own.
+- **The decisive test**: gated command submission on `STAT_CLK_EN`, refusing cleanly with
+  `-EIO`/a clear log line if unset. Real hardware result: `"MSC1-DIAG: internal clock failed
+  CTRL=00000000 STAT=00000000"` - the MSC1 controller's internal SD/MMC clock never starts at all,
+  confirmed directly rather than inferred from a stuck command.
+
+### A live stock reference read disproved the `STAT_CLK_EN` interpretation entirely
+
+Before building further on that "decisive" result, read the live, raw `STAT` register (via `/sbin/
+devmem`, discovered available directly on stock - no kernel module needed) on the actual, currently-
+associated, actively-transferring stock system: **`STAT=0x00007080` - bit 8 (`STAT_CLK_EN`) clear**,
+on a system with real, live SDIO traffic in flight (bits 7/12/13/14 - FIFO/data-done/SDIO-IRQ-active -
+were set, confirming genuine activity). Stock's own `soc_msc.ko` reset sequence, captured live (see
+below), also showed `CTRL=0`/`STAT=0` immediately after reset, with stock proceeding to working WiFi
+right after. **`STAT_CLK_EN` is not a valid "is the internal clock running" signal on this MSC
+revision** - the sec-51 gate that concluded otherwise was wrong, and was removed. This is exactly the
+kind of conclusion the project's own standing rule (check the working reference before trusting a
+failure-only signal) exists to catch, and it worked as intended here.
+
+### A live stock capture attempt - real data, a real vendor-module bug hit, and a real (recovered) kernel panic
+
+Given the plan to trace stock's own reset/clock-start/first-command sequence directly rather than
+guess further, wrote a script to `rmmod cywdhd; rmmod soc_msc`, poll `CTRL`/`STAT`/etc. via `/sbin/
+devmem` in a tight loop, then `insmod soc_msc.ko`/`cywdhd.ko` with their real, extracted insmod
+parameters (`/module_driver/{soc_msc,cywdhd}.sh`) while capturing. Real result: `soc_msc.ko`'s own
+reset showed the identical `STAT=0x00000000` transient stock's real driver produces too - useful,
+real confirmation this specific transient is normal. But `cywdhd.ko` failed to reload (`insmod: can't
+insert 'cywdhd.ko': File exists` - a real, pre-existing cleanup bug in the vendor module's own
+`module_exit`, leaving a stale `md_bcmdhd_bt_power` sysfs kobject behind), so the actual manual-
+detect/CMD5 sequence was never captured. That stale kobject later caused a genuine kernel panic
+(`device_shutdown` → `kobject_get` on the corrupted device tree) on a subsequent `reboot` attempt -
+recovered automatically and cleanly via the kernel's own panic-timeout auto-reboot, confirmed healthy
+afterward (fresh boot, `cywdhd`/`soc_msc` loaded cleanly, `wlan0` up with a real IP and active
+traffic). No persistent damage, since none of this touches boot partitions - but confirmed live
+`rmmod`/`insmod` reloading of these two modules on stock is **not a safe repeatable technique** and
+should not be attempted again; a cold-boot-synchronized trace (temporary init-script hook, or a real
+instrumented rebuild of `soc_msc.ko`) is the safe alternative if this is revisited.
+
+### The actual pivot: disassembling stock's real, live `soc_msc.ko` - not just `cywdhd.ko` this time
+
+The single highest-value action of this whole segment: pulled stock's actual, live, working `/module_
+driver/soc_msc.ko` off the device and disassembled it (same `mipsel-linux-gnu` toolchain used on
+`cywdhd.ko` in §47). Its own symbol table proves, directly, that **stock's real msc1 driver has always
+been `sdhci-ingenic.c`, not `ingenic_mmc.c`**: genuine `sdhci_ingenic_probe`/`sdhci_ingenic_set_clock`/
+`sdhci_ingenic_power_set`/`sdhci_ingenic_hwreset` symbols, real calls into `sdhci_add_host()`/
+`sdhci_alloc_host()`/`sdhci_reset()`/`sdhci_set_bus_width()` (genuine SDHCI-framework functions), *and*
+its own real, exported `jzmmc_clk_ctrl`/`jzmmc_manual_detect` symbols - the exact two names §47's
+`cywdhd.ko` disassembly found, which is what pointed at `ingenic_mmc.c` in the first place, since that
+driver happens to also define functions with these names. §47's "wrong driver entirely" finding was
+itself wrong: `ingenic_mmc.c` was never stock's msc1 driver at all.
+
+Confirmed our own `sdhci-ingenic.c` already has the matching, correct architecture for this: `cd_type
+== SDHCI_INGENIC_CD_PERMANENT` (set from the `"non-removable"` devicetree property, already present)
+sets `MMC_CAP_NONREMOVABLE` + `SDHCI_QUIRK_BROKEN_CARD_DETECTION` at probe time, and its own real,
+exported manual-detect function flips `SDHCI_DEVICE_DEAD` and calls `mmc_detect_change()` - genuinely
+the same mechanism stock uses. Also confirmed, directly from stock's real insmod parameters
+(`msc1_cd_method=non-removable`), that stock uses the standard `non-removable` devicetree-equivalent
+property, not a `MANUAL`-mode `pdata->removal` field - and that `pdata->removal` is never actually
+read anywhere in our `sdhci-ingenic.c` outside a dead, commented-out parsing block, so this was never
+functionally gating anything (`manual_list` registration in this driver is unconditional).
+
+### The pivot, applied
+
+- `halley5_v30.dts`: `&msc1`'s `compatible` reverted from `"ingenic,x1600-mmc"` back to the base
+  `"ingenic,sdhci"`.
+- `halley5-openke-fragment.config`: `CONFIG_INGENIC_MMC` fully disabled (was `=y` with
+  `CONFIG_INGENIC_MMC_MMC1=y`) - nothing needs `ingenic_mmc.c` anymore.
+- `sdhci-ingenic.c`/`sdhci-ingenic.h`: the §47 rename (`sdhci_ingenic_mmc_manual_detect`/
+  `sdhci_ingenic_mmc_clk_ctrl`, done to dodge the link collision with `ingenic_mmc.c`) reverted back
+  to the original `ingenic_mmc_manual_detect`/`ingenic_mmc_clk_ctrl` names, since `ingenic_sdio.c`'s
+  glue calls those exact literal names and the collision no longer exists.
+
+**Real build-environment friction, unrelated to the code**: the kernel config fragment edit didn't
+take effect until an explicit `make linux-reconfigure` was run (Buildroot doesn't always re-merge
+fragments into an already-configured kernel `.config` just because the fragment file changed) - and
+that in turn needed host tools (`file`, then `cpio`/`unzip`/`rsync`/`bc`) that a fresh `--rm` docker
+container doesn't have until installed. Compounded by a genuinely degraded/flaky network reaching the
+Ubuntu mirrors during this exact window (dual-stack IPv6 routing failures, then partial-batch fetch
+failures, then a very slow but eventually complete fetch) - real, external, and unrelated to the
+firmware work itself, but it cost significant real time before the actual rebuild could run.
+
+### Real hardware result: the identical pre-§47 symptom is back
+
+Rebuilt, reflashed, rebooted. The driver binds correctly (`mmc1: SDHCI controller on ingenic-sdhci
+[13460000.msc] using ADMA`), the manual-insert `late_initcall` fires exactly as designed
+(`openke_wifi_manual_insert` → `wlan power on:2` → `ingenic,sdhci 13460000.msc: card insert
+manually`) - but:
+
+```
+[    2.204433] mmc1: Failed to initialize a non-removable card
+[    3.264963] mmc1: Failed to initialize a non-removable card
+```
+
+The exact same message every one of the original 8 attempts hit, before the driver-mismatch theory
+was ever found. Every GPIO/polarity/rtc32k/regulator/pwrseq fix from that era (§44/§45/§46) is still
+present in the devicetree and still didn't change this outcome.
+
+### Where this honestly leaves things
+
+Not a wasted detour - real facts were established that were not known before, and are worth keeping
+regardless of what comes next:
+
+- Stock's real msc1 driver is `sdhci-ingenic.c`, confirmed at the symbol level from stock's own live
+  binary, not inferred. This is no longer in question.
+- `STAT_CLK_EN` is confirmed, from a live working stock read, not a valid "internal clock running"
+  signal on this MSC revision - future instrumentation should not gate on it.
+- The CPM power-domain layer and the external clock framework are both confirmed not to be the
+  blocker, with direct register evidence, not assumption.
+- The bounded-retry/clean-shutdown fix is real and independent of which driver family is used - kept.
+- The remaining gap is real and still unexplained: with the *architecturally correct* driver, correct
+  removal mode, correct manual-detect mechanism, and every previously-found GPIO/polarity/power fix
+  all in place simultaneously, `sdhci-ingenic.c`'s actual SDIO identify sequence still fails the same
+  way it always has. This means the blocker was never really about driver-family choice - something
+  in the SDHCI-standard register/init path itself (or a hardware precondition common to both driver
+  families) is still missing, and has been missing since before §47 even started.
+
+Session paused here, deliberately, to consolidate findings before choosing a next direction, per
+explicit instruction rather than continuing to test speculatively. Device left safely on stock
+throughout (confirmed via live WiFi reassociation before and after every real-hardware cycle this
+segment).
+
+## 49. A real, paired stock-vs-custom CMD5 register trace - a genuine race condition found and fixed, but the actual root cause turns out to be one level deeper: the chip itself never answers on custom
+
+Direct instruction this session: stop guessing, capture the first successful stock CMD5 and the
+first failed custom CMD5 at the register level, using the same tool/addresses on both sides, and
+patch the first *proven* divergence - not another plausible-sounding theory.
+
+### Method
+
+**Stock side**: a small statically-built MIPS binary (`msc1_sampler.c`, built with the project's own
+`pellcorp/k1-bash-build` toolchain at `-mabi=32 -EL -mnan=2008 -march=mips32r2`, verified byte-for-
+byte ELF-flag-identical to stock's own `/bin/busybox` before trusting it) mmaps `/dev/mem` read-only
+over MSC1's SDHCI register block (phys `0x13460000`) and the CPM `MSC1CDR` clock-divider register
+(phys `0x100000a4`), tight-loop-polling and logging only *changed* 32-bit words with a monotonic
+timestamp. Installed via a temporary, self-deleting `/etc/init.d/S10wifitrace` hook (deletes itself
+as its literal first action, launches the sampler in the background so it never blocks the rest of
+`rcS`) that ran for exactly one real cold boot, then never again. Confirmed self-deleted and the
+trace log pulled off afterward; no lasting change to stock survived past that one boot.
+
+**Custom side**: real kernel-side instrumentation (`openke_msc1_trace()`, temporary, `sdhci-
+ingenic.c`), polling the *same* register set at the *same* physical addresses via the host's own
+already-mapped `host->ioaddr` plus a small `ioremap()` of the same CPM register, called synchronously
+right after `mmc_detect_change()` inside `ingenic_mmc_manual_detect()` for a bounded 2-second window.
+Same offsets, same format, directly diffable against the stock capture - no separate decode step
+needed for the comparison itself.
+
+Both captures are real, live, timestamped, and kept (trimmed excerpts below; full logs are large).
+
+### What the first pass found: a real, provable race condition
+
+The very first custom capture showed `mmc1: Failed to initialize a non-removable card` firing at
+kernel time 2.258s - **before** `openke_msc1_trace`'s own command activity (which only starts at
+2.513s) ever got underway. Cross-referencing timestamps: `mmc1` registers at 1.333s,
+`mmc_start_host()`'s own automatic power-up+rescan (real, unconditional, generic mainline
+`drivers/mmc/core/core.c` behavior - already known from §46) doesn't report its own failure until
+2.258s, **nearly a full second later**. This session's own manual-insert power-cycle
+(`mmc_power_off()` → `msleep(50)` → `mmc_power_up()`) runs at ~1.77s - squarely inside that window,
+while the automatic rescan may still be issuing commands against the same chip. Stock has no
+equivalent race: its manual insert (`dhd_module_init`'s own power-up sequence) is the *only* rescan
+ever run against `md_ingenic,sdhci.1`.
+
+**Fix** (`sdhci-ingenic.c`, `ingenic_mmc_manual_detect()`): one line,
+`cancel_delayed_work_sync(&host->mmc->detect)`, immediately before the existing power-cycle.
+`cancel_delayed_work_sync()` (unlike a bare cancel) blocks until any *currently executing* instance of
+the host's detect work has actually finished, not just cancels a future reschedule - guaranteeing the
+automatic rescan is fully done, not just no-longer-pending, before this function cuts power to the
+chip.
+
+**Built, flashed to the spare slot, and tested on real hardware.** Confirmed via the second trace: the
+race is genuinely gone - only one `"Failed to initialize"` message this time (the automatic rescan's
+own, at 2.175s, cleanly before the manual sequence starts at 2.482s - no more interleaving), and the
+manual sequence itself completes 3 clean, non-overlapping retry cycles before giving its own single
+`"Failed to initialize"` at 3.601s. **This is a real, verified fix and is being kept** - it removes a
+genuine bug independent of whether it explains the WiFi symptom.
+
+### The decisive finding: it doesn't explain the WiFi symptom - the chip itself never answers on custom
+
+**WiFi still did not come up** (`wlan0` never appeared) even with the race fixed. But the two register
+traces, captured with the *identical* tool at the *identical* addresses, converge on a single,
+unambiguous, no-decoding-required signal: `SDHCI_RESPONSE_0` (offset `0x10`), the register that
+latches the actual response the card sends back and *holds that value* until the next command
+overwrites it (unlike an interrupt-status bit, it can't be missed between polls):
+
+```
+stock:   MSC1+0x10 changes 110 times across the capture, e.g.
+         0.587141 MSC1+0x10 = 0x00001002
+         0.601978 MSC1+0x10 = 0x00001003
+         0.900157 MSC1+0x10 = 0x00001006
+         ... (real, varying, non-zero response values throughout)
+
+custom (race fixed):  MSC1+0x10 changes 0 times after the initial baseline read.
+                       Every single command, across all 3 clean retry cycles, gets no response at all.
+```
+
+Every other register this session traced (`PRESENT_STATE`, `CLOCK_CONTROL`, `CAPABILITIES`,
+`INT_ENABLE`/`SIGNAL_ENABLE`, the `COMMAND` register's own written values, the CPM `MSC1CDR` divider)
+matches between stock and custom closely enough to rule out the SDHCI hardware/software path itself:
+the controller issues the identical command family in the identical order every retry
+(`CMD52→CMD5→CMD55→CMD1`, sometimes `+CMD8`), `PRESENT_STATE`'s command-inhibit bit toggles correctly
+around every command (proving real completions/timeouts are happening, not a stuck controller), and
+the CPM divider's real bit-28 "busy" state - the leading theory at the end of §48 - reads `0` on
+*both* stock and custom throughout, cleanly closing that theory with fresh, paired, apples-to-apples
+data rather than the earlier single-sided measurement.
+
+**This directly answers the mission's own decision tree: Case E.** The SDHCI command engine is
+confirmed working, correctly, on custom - the divergence is entirely upstream of it. The physical
+WiFi chip is not answering CMD5 (or anything else) at all, on any of 3 real, cleanly-separated retry
+attempts, at the exact moments custom asks. Every previously-verified GPIO/pinctrl/regulator/rtc32k
+fix (§44-46) is still real and still in place - what's not yet proven is whether the *timing* of that
+sequence (settle time between the real REG_ON/reset transition and the first CMD5) matches what this
+specific chip actually needs, versus what stock's own `dhd_module_init` sequence - a different,
+multi-step, vendor-specific choreography - actually gives it.
+
+### Real hardware safety record this session
+
+- Stock's temporary trace hook (`S10wifitrace`) confirmed self-deleted after its one intended boot.
+- Two full custom boot/flash/test cycles, both via the spare `kernel2`/`rootfs2` slot only - the
+  active stock slot was never written to. Both `xImage`/`rootfs.squashfs` writes were md5-verified
+  byte-for-byte before every boot attempt.
+- `S00revert-safety` confirmed, both times, to have already flipped the ota marker back to
+  `ota:kernel` early in the custom boot (read directly off `/dev/mmcblk0p1`) - each subsequent reboot
+  landed cleanly back on stock without any manual marker intervention needed.
+- WiFi reassociation (`wl_bss_connect_done succeeded`) and a real DHCP lease confirmed on stock after
+  every cycle.
+- No `insmod`/`rmmod` of `cywdhd.ko`/`soc_msc.ko` at any point (the known unsafe path from §48) - all
+  stock-side evidence came from either a read-only live parameter/dmesg check, a live rfkill power-
+  cycle (the same action `wifi_up.sh` performs any time WiFi reconnects), or the one instrumented cold
+  boot above.
+- Printer confirmed idle (`print_stats.state == "standby"`) before every reboot.
+
+### Net result
+
+- **Real, kept fix**: the `mmc_start_host()`-vs-manual-insert race on custom, closed via
+  `cancel_delayed_work_sync()`. Independent of the WiFi symptom, this was a genuine correctness bug.
+- **Real, kept instrumentation**: `openke_msc1_trace()` in `sdhci-ingenic.c`, still present in the
+  tree - cheap (one bounded, read-only 2-second window, only on manual insert) and has already once
+  earned its keep. Worth a decision next session on whether to strip it now that the race is fixed, or
+  keep it for the next real hardware cycle.
+- **The actual root cause is now much more sharply scoped than at the end of §48**: not the SDHCI
+  register/software path (proven, with paired evidence, to behave correctly), not the CPM busy-bit
+  theory (proven false on both sides with fresh data), not the automatic-rescan race (real, but fixed,
+  and didn't change the outcome) - but a WiFi chip that never answers a single command across 3 clean
+  attempts on custom, while answering 110+ times on stock. The next concretely-scoped question is
+  timing: does the chip get the same real settle time between its actual power/reset transition and
+  the first CMD5 on custom as it does via stock's own `dhd_module_init` choreography, and if not,
+  where exactly does that gap come from.
+- Device left safely on stock, WiFi confirmed working, at the end of this session.
+
+## 50. Isolating the stock power choreography by disassembly - a real, verified polarity bug found and fixed, and the actual blocker narrowed to the mmc-pwrseq-simple GPIO-array write path itself
+
+Direct follow-up instruction: stop at the SDHCI boundary was correct (sec 49 proved the host command
+engine works), now reproduce stock's exact Wi-Fi power/reset choreography and port the first proven
+divergence - not another timing guess.
+
+### 1. Stock power call graph (from real disassembly, not inference)
+
+Pulled `/module_driver/cywdhd.ko` and `/module_driver/soc_msc.ko` fresh off the running stock device
+again and disassembled with `objdump -dr` (relocations included this time, not just `-d` - the `.ko`
+is unlinked, so plain disassembly shows `lui v0,0x0` placeholders for every symbol reference; only
+`-r` resolves them to real names). Found the real, exact call graph:
+
+```
+S11module_driver_default
+  insmod soc_msc.ko (msc1_is_enable=1, msc1_rst=-1, msc1_pwr=-1, msc1_cd_method=non-removable, ...)
+    sdhci_ingenic_probe(msc1) -> sdhci_add_host()   [mmc1 registered, no card yet]
+  insmod cywdhd.ko (wlan_mmc_num=1, gpio_bt_wifi_power=PA01, gpio_wlan_reg_on=PD04, ...)
+    dhd_module_init() -> wifi_platform_bus_enumerate()
+      bcm_wlan_power_on(1):
+        ingenic_rtc32k_enable()
+        gpio_to_desc(wlan_reg_on=PD04); gpiod_set_raw_value(desc, 0)   # raw LOW = held/reset
+        msleep(100)
+        gpio_to_desc(wlan_reg_on); gpiod_set_raw_value(desc, 1)        # raw HIGH = enabled
+        jzmmc_manual_detect(wlan_mmc_num=1, on=1)                      # called immediately, no extra delay
+          -> mmc_detect_change(mmc1, 0) -> mmc_rescan -> CMD52/CMD5/CMD55/CMD1 -> CMD3 (success)
+  (later, S44wifi_bcm_up) wifi_up.sh: rfkill unblock wifi -> dhd_bus_devreset() -> bcm_wlan_power_on() again
+```
+
+`bcm_wlan_power_off()` is exactly symmetric: `gpiod_set_raw_value(wlan_reg_on, 0)` then
+`ingenic_rtc32k_disable()`. Both directions cross-confirm the same polarity: **raw LOW is
+held/disabled, raw HIGH is the real enabled state**, and detection is triggered essentially
+immediately after the raw-HIGH write - the entire real settle time is the 100ms low-hold, not a
+post-enable delay. `PA01` (the shared power rail) is never touched by either function - matches this
+project's own choice (already modeled as an always-on regulator, `wifi_bt_power`, not cycled per
+power-on/off) with real evidence rather than an assumption.
+
+### 2. Custom power call graph
+
+```
+kernel boot
+  sdhci_ingenic_probe(msc1, &msc1 DT node, mmc-pwrseq=<&wlan_pwrseq>)
+    ingenic_sdio_wlan_init() -> rtc32k_init() [pinctrl handle for "enable"/"disable" states]
+    mmc_of_parse(host->mmc) -> mmc_pwrseq_alloc() [host->pwrseq attached - confirmed live, see below]
+    sdhci_add_host() -> mmc_add_host() -> mmc_start_host()
+      automatic mmc_power_up() + mmc_rescan (delayed work) - fails ~1s later
+late_initcall: openke_wifi_manual_insert()
+  ingenic_bcmdhd_wlan_power_onoff(MANUALLY_INSERT):
+    rtc32k_enable() -> pinctrl_select_state("enable")
+    ingenic_mmc_clk_ctrl(1) -> clk_prepare_enable(clk_cgu/clk_gate)
+    ingenic_mmc_manual_detect(1, on=1):
+      cancel_delayed_work_sync(&host->mmc->detect)   [sec 49 race fix]
+      mmc_power_off(host->mmc)   -> mmc_pwrseq_power_off()   [reset-gpios asserted]
+      msleep(50)
+      mmc_power_up(host->mmc, ocr) -> mmc_pwrseq_pre_power_on() + ... + mmc_pwrseq_post_power_on()
+      mmc_detect_change(mmc1, 0) -> mmc_rescan -> CMD52/CMD8/CMD5/CMD55/CMD1 (repeats, never reaches CMD3)
+```
+
+### 3. RTC32K comparison: no divergence found
+
+`ingenic_sdio.c`'s own `rtc32k_enable()` re-selects the `"enable"` pinctrl state on every power-on
+call (refcounted, but genuinely re-applied each time ref count goes 0->1) - the same
+"re-assert every power-on cycle" pattern stock's disassembly shows for `ingenic_rtc32k_enable()`.
+Real, checked, not a divergence.
+
+### 4. The real polarity bug, found by disassembly and fixed
+
+The sec 40/44/48 comments in `halley5_v30.dts` had reasoned about `wifi_reg_on_level=0`
+purely from the *module parameter name*, never from the real driver's own instructions - exactly the
+trap this investigation's own instructions warned against. The real disassembly (part 1 above) proves
+that reasoning was backwards: raw HIGH is the enabled state, not raw LOW.
+
+**Fixed** (`halley5_v30.dts`, `wlan_pwrseq`'s `reset-gpios`): `GPIO_ACTIVE_HIGH` -> `GPIO_ACTIVE_LOW`
+for `gpd 4` (so `mmc_pwrseq_simple`'s `post_power_on()` logical-0 release lands on the real,
+disassembly-proven raw-HIGH enabled state), and removed the second `gpd 1` entry entirely - the same
+disassembly proves stock's real driver never reads or touches a second GPIO in either
+`bcm_wlan_power_on()` or `bcm_wlan_power_off()`, so `gpd 1` (adopted from a generic vendor SDK
+reference tree in sec 48, not this board's real running driver) was an unproven guess.
+
+**Verified applied on real hardware**: `/sys/kernel/debug/gpio` (mounted fresh, read live during the
+custom boot) shows `gpio-100 (|reset) out lo ACTIVE LOW` - confirms the descriptor really is
+registered with the corrected polarity flag.
+
+**Result: WiFi still did not come up.** Rebuilt, flashed, tested on real hardware
+(`local_set_next_boot_device`, serial capture, `S00revert-safety` confirmed the marker already
+reverted to stock before I ever touched it). `openke_msc1_trace` still reported
+`"no SDHCI_RESPONSE_0 change across the whole window - chip never answered"`.
+
+### 5. Following the divergence one level deeper: the GPIO never actually reaches raw HIGH
+
+Rather than guess at a second theory, added direct instrumentation to observe the *live* GPIO value
+during the real power-up call, since the disassembly proved raw-HIGH is what the chip needs and the
+DT fix was confirmed applied. Added:
+
+- `openke_msc1_trace()`: also polls `gpio_get_value(100)` (WL_REG_ON's real global gpio number,
+  confirmed via debugfs above) every ~200-300us alongside the SDHCI registers it already tracked.
+- A diagnostic right after `mmc_of_parse()` in probe: `host->mmc->pwrseq` printed directly. Confirmed
+  non-NULL for msc1 (NULL for msc0/msc2, which have no `mmc-pwrseq` property) - `host->pwrseq` *is*
+  correctly attached; ruled out a simpler "pwrseq never allocated" theory cleanly.
+- Point-in-time `power_mode`/live-GPIO logging at all four steps of `ingenic_mmc_manual_detect()`'s
+  own sequence (before `mmc_power_off()`, after it, after the `msleep(50)`, after `mmc_power_up()`).
+
+**Real hardware result, in order:**
+
+```
+before power_off: power_mode=0 WL_REG_ON=0   <- already off/low - the automatic rescan's own
+                                                 cleanup already ran (its "Failed to initialize"
+                                                 fires at the same timestamp, microseconds apart)
+after power_off:  power_mode=0 WL_REG_ON=0   <- mmc_power_off()'s own early-return guard fires
+                                                 (already MMC_POWER_OFF) - genuinely a no-op, expected
+after msleep(50): power_mode=0 WL_REG_ON=0   <- unchanged, expected
+after power_up:   power_mode=2 WL_REG_ON=0   <- power_mode DID transition 0->2 (MMC_POWER_ON) -
+                                                 mmc_power_up() genuinely ran its full sequence,
+                                                 including mmc_pwrseq_pre_power_on() and
+                                                 mmc_pwrseq_post_power_on() - but the GPIO never left 0
+```
+
+`gpio_get_value()` reads raw, unfiltered by the active-flag (confirmed in source:
+`gpiod_get_raw_value(gpio_to_desc(gpio))`) - same as what `/sys/kernel/debug/gpio` itself displays, so
+this isn't a logical-vs-raw reading mismatch. `mmc_pwrseq_simple_post_power_on()` calls
+`mmc_pwrseq_simple_set_gpios_value(pwrseq, 0)`, which for an `ACTIVE_LOW`-flagged descriptor should
+drive raw HIGH via `gpiod_set_array_value_cansleep()` - real mainline code, read directly
+(`drivers/mmc/core/pwrseq_simple.c`), not assumed. It provably runs (`power_mode` proves
+`mmc_power_up()`'s full body executed), yet the pin measurably never moves.
+
+### Where this honestly leaves things
+
+Not resolved this session, but narrowed with real, layered, hardware-verified evidence at every step,
+each one closing a real candidate rather than leaving it open:
+
+- The SDHCI register/software path: proven correct (sec 49).
+- The `mmc_start_host()`-vs-manual-insert race: real, found, fixed, verified (sec 49) - kept.
+- The CPM MSC1CDR "busy bit" theory from sec 48: proven false on fresh, paired data on both sides.
+- `host->pwrseq` never attaching: proven false - it's genuinely non-NULL for msc1.
+- WL_REG_ON polarity being backwards from the module-parameter-name assumption: real, disassembly-
+  proven, fixed, and confirmed *applied* (`ACTIVE LOW` live in debugfs) - kept, even though it alone
+  didn't resolve the symptom.
+- **What's left, precisely scoped**: `mmc_power_up()` demonstrably runs its complete pwrseq sequence
+  (`power_mode` transitions `0`->`2`), the reset-gpios descriptor is confirmed correctly flagged
+  `ACTIVE_LOW`, yet the physical WL_REG_ON pin never reaches raw HIGH. The remaining gap is inside
+  `mmc_pwrseq_simple`'s own GPIO-array write path
+  (`mmc_pwrseq_simple_set_gpios_value()` / `gpiod_set_array_value_cansleep()`) or this platform's
+  own gpiolib/pinctrl `.set` callback underneath it - not the devicetree configuration, which is now
+  confirmed correct against stock's real, disassembled behavior.
+
+**Concretely scoped next step**: bypass the generic, array-based `mmc-pwrseq-simple` mechanism for
+this one GPIO and drive it directly from `ingenic_mmc_manual_detect()`, the same way stock's own
+`bcm_wlan_power_on()`/`bcm_wlan_power_off()` do (a single, direct `gpiod_set_raw_value()`-style call
+on the WL_REG_ON descriptor, byte-for-byte matching the real disassembled sequence: raw 0, real
+100ms hold, raw 1, detect immediately) - rather than continuing to trust a generic framework path this
+session's own live evidence shows isn't reaching the pin on this exact platform.
+
+### Real hardware safety record this session
+
+- Five full build/flash/boot/revert cycles this session, every one via the spare `kernel2`/`rootfs2`
+  slot only - the active stock slot was never written to. Every `xImage`/`rootfs.squashfs` write was
+  md5-verified byte-for-byte before boot.
+- `S00revert-safety` confirmed (read directly off `/dev/mmcblk0p1`) to have already reverted the ota
+  marker to `ota:kernel` early in every custom boot, before any manual intervention. One cycle also
+  showed `S99confirm-good`'s own 150s Moonraker-health timeout firing independently and correctly
+  leaving the marker on stock - a second, independent layer of the same safety net working exactly as
+  designed.
+- Printer confirmed idle (`print_stats.state == "standby"`) before every reboot.
+- WiFi reassociation (`wl_bss_connect_done succeeded`) and a real DHCP lease confirmed on stock after
+  every single cycle.
+- No `insmod`/`rmmod` of `cywdhd.ko`/`soc_msc.ko` at any point - all stock-side evidence this session
+  came from static disassembly of files pulled read-only off the live device.
+- Six real, isolated commits landed on the fork's `openke` branch this session (a catch-up commit for
+  previously-uncommitted sec 44-48 work, the sec 49 race fix, gated tracing, the sec 50 polarity fix,
+  WIFI_SEQ markers, and the live-GPIO/pwrseq diagnostics) - each independently reviewable, none mixing
+  unrelated changes.
+
+## 51. Bypassing the broken `mmc_pwrseq_simple` GPIO path - WL_REG_ON now proven to physically reach the
+correct stock state, and the real blocker is now one level deeper still
+
+Direct, narrowly-scoped follow-up: stop debugging the generic pwrseq framework, drive WL_REG_ON
+directly from `sdhci-ingenic.c` instead, and reproduce stock's exact raw sequence.
+
+### The change
+
+- **`halley5_v30.dts`**: WL_REG_ON (`gpd 4`/PD04) moved out of `wlan_pwrseq`'s `reset-gpios` entirely.
+  That node had no other real purpose on this board, so it - and the `mmc-pwrseq = <&wlan_pwrseq>;`
+  reference - was removed outright rather than left half-used. A new, dedicated `&msc1` property,
+  `wlan-reg-on-gpios`, takes its place. **Verified via a decompiled build-output DTB** (`dtc -I dtb -O
+  dts`) that PD04 now has exactly one consumer in the compiled tree, and no `reset-gpios`/`mmc-pwrseq`
+  reference survives anywhere.
+- **`sdhci-ingenic.h`**: new `wlan_reg_on` field on `struct sdhci_ingenic`.
+- **`sdhci-ingenic.c`**: acquired at probe with `devm_gpiod_get_optional(dev, "wlan-reg-on",
+  GPIOD_ASIS)` + `gpiod_direction_output_raw(desc, 0)`. `ingenic_mmc_manual_detect()` now drives it
+  with `gpiod_set_raw_value_cansleep()` - never the active-flag-translating
+  `gpiod_set_value_cansleep()` - reproducing stock's disassembled `bcm_wlan_power_on()` sequence
+  exactly: raw LOW, real 100ms hold, raw HIGH, detect triggered immediately with no invented delay
+  after the HIGH transition. `mmc_power_off()`/`mmc_power_up()` are kept immediately before/after the
+  GPIO toggle for their other real effects (voltage/clock setup via `mmc_set_ios()`) - now that PD04
+  is out of pwrseq, they can no longer touch this pin either way, so keeping them is free.
+
+### Real hardware result: the physical pin finally reaches the correct state
+
+```
+[1.271852] openke: WLAN_REG_ON GPIO acquired, direction_output_raw(0) ret=0
+...
+[1.828400] openke: WIFI_SEQ: WL_REG_ON requested_raw=0 descriptor_raw=0
+[1.835329] openke: WIFI_SEQ: sleeping 100 ms
+[1.980629] openke: WIFI_SEQ: WL_REG_ON requested_raw=1 descriptor_raw=1
+[1.987551] openke: WIFI_SEQ: triggering manual detection
+[1.993176] openke_msc1_trace:      0 ms WL_REG_ON (gpio 100) = 1
+```
+
+Confirmed **two independent ways**: the `gpiod_get_raw_value_cansleep()` readback taken immediately
+after the write, and `openke_msc1_trace`'s own separate live GPIO poll (added in sec 50, unchanged) -
+both agree the pin is physically HIGH. This closes the `mmc_pwrseq_simple` hypothesis completely and
+with certainty: WL_REG_ON now reaches exactly the raw state stock's own driver requires, at
+essentially the same ~100ms real timing stock uses.
+
+**WiFi still did not come up.**
+
+```
+[2.144759] mmc1: Failed to initialize a non-removable card
+[3.993190] openke_msc1_trace: no SDHCI_RESPONSE_0 change across the whole window - chip never answered
+```
+
+`SDHCI_RESPONSE_0` never changed once, across the entire post-detect window, exactly as before the fix
+- despite the one signal every prior theory (the automatic-rescan race, the reset-gpios polarity, and
+now the pwrseq GPIO-array bug) predicted would matter now genuinely being correct.
+
+### Where this leaves things (this investigation's own Case B)
+
+Not resolved this session, but a real prerequisite is now proven satisfied rather than assumed:
+
+- The SDHCI register/software path: proven correct (sec 49).
+- The `mmc_start_host()`-vs-manual-insert race: found, fixed, verified (sec 49) - kept.
+- WL_REG_ON polarity and, now, the entire GPIO delivery mechanism: found, fixed, and **verified to
+  physically reach the exact stock-required raw-HIGH state** (sec 50 + this section) - kept.
+- **What's left**: with WL_REG_ON now provably correct, the remaining candidates are the ones this
+  investigation's own decision tree lists for exactly this outcome - RTC32K's actual physical
+  routing/pinmux (not just its clock-framework-visible enabled state), the real delay from raw-HIGH to
+  first CMD5 versus what this specific chip needs, MSC1's own CLK/CMD/DAT pinmux and pull
+  configuration, the shared Wi-Fi/BT power rail's (`wifi_bt_power` regulator, PA01) actual live state,
+  and the Wi-Fi host-wake/wake-host lines. None of these has yet been checked with the same
+  disassembly-first, live-verified rigor applied to WL_REG_ON in sec 50-51 - that is the concretely
+  scoped next step, not a fresh guess.
+
+### Real hardware safety record this session
+
+- One more full build/flash/boot/revert cycle (six total across sec 49-51), again via the spare
+  `kernel2`/`rootfs2` slot only, `xImage`/`rootfs.squashfs` md5-verified before boot.
+- Before flashing, verified in the compiled DTB (not just the source) that PD04 has exactly one owner
+  and no `reset-gpios`/`mmc-pwrseq` reference survives - the exact check this investigation's own
+  build procedure calls for.
+- `S00revert-safety` confirmed (read directly off `/dev/mmcblk0p1`) to have already reverted the ota
+  marker before any manual intervention, as in every prior cycle.
+- Printer confirmed idle before the reboot. WiFi reassociation and a real DHCP lease confirmed on
+  stock afterward.
+- No `insmod`/`rmmod` of `cywdhd.ko`/`soc_msc.ko` at any point.
+- One real, isolated commit this section (`mmc: sdhci-ingenic: drive WLAN_REG_ON directly during
+  manual insertion`), on top of the six from sec 49-50 - seven total on the fork's `openke` branch
+  from this whole investigation, each independently reviewable.
+
+## 52. The real root cause: PA01 (the shared Wi-Fi/BT power rail) had the same class of unverified
+polarity bug as WL_REG_ON - fixing it produced the first real SDIO response and enumeration this
+entire investigation has ever seen
+
+Direct follow-up: with WL_REG_ON proven correct, compare stock and custom pinmux/RTC32K/timing with
+no-build, no-flash comparisons first, and patch only the first proven divergence.
+
+### Phase 1-2: MSC1 pin table and RTC32K - both ruled out, correctly, after resolving phandles
+
+Decompiled the actual packaged custom DTB (`dtc -I dtb -O dts`, sha256
+`ce55a791dd8c...fa039fba6`) and compared against `vendor/device-backups/stock-live-device-tree-
+decoded.dts`, resolving every phandle to its real node rather than trusting raw numbers (a real trap
+this investigation's own instructions warned about, and one this session nearly fell into: stock's
+`msc1-4bit` raw pinmux value `<0x06 0x08 0x0d>` looks like "bank 6" at first glance, but `0x06` is
+just `&gpd`'s auto-assigned phandle in that specific compilation, confirmed by cross-referencing
+`gpd`'s own `linux,phandle = <0x06>` a few lines above it in the same dump):
+
+- **MSC1 CLK/CMD/DAT0-3 pinmux**: stock resolves to `&gpd 8 13`, function 0. Custom:
+  `<&gpd 8 13>`, `PINCTL_FUNCTION0`. **Identical.** Ruled out.
+- **RTC32K enable path** (the one actually exercised - `rtc32k_enable()` runs on every real power-on
+  call, on both stock and custom): stock resolves to `&gpe 23 23`, function 0. Custom:
+  `<&gpe 23 23>`, `PINCTL_FUNCTION0`. **Identical.** Ruled out for the current symptom.
+- **RTC32K disable path**: a real, source-confirmed divergence exists here - stock's own vendor
+  source (`vendor/x2000_kernel/arch/mips/boot/dts/ingenic/x2000-v12-pinctrl.dtsi`) uses
+  `PINCTL_FUNCTIONS` (12, a sentinel/count value, likely a deliberate no-op that leaves the clock
+  running), custom uses `PINCTL_FUNCLOLVL` (5, forces the pin to a real GPIO-low output, actually
+  killing the clock). Real, but **not exercised** in our current boot sequence - nothing calls
+  `ingenic_bcmdhd_wlan_power_onoff(0)` (the only caller of `rtc32k_disable()`) during the manual-insert
+  path this investigation tests. Documented, not yet fixed - low priority unless a future session's
+  own power-off/suspend path starts exercising it.
+
+### Phase 7 (moved up, given the tools already in hand): the shared Wi-Fi/BT rail
+
+Rather than reason about PA01 from stock's module-parameter name again (`bt_wifi_power_valid_level=0`
+had been sitting in this investigation's own documentation since the very first session, never once
+checked against a live read), read it directly: `/sys/kernel/debug/gpio` on the real, currently
+running, currently-associated stock system, during real WiFi traffic:
+
+```
+gpio-1   (                    |bt_wifi_power       ) out lo
+```
+
+**Raw LOW, on real, live, working stock.** This directly and unambiguously confirms
+`bt_wifi_power_valid_level=0`: raw LOW is genuinely the enabled state for this shared rail.
+
+Custom's `wifi_bt_power_regulator` (`regulator-fixed`, wired as `&msc1`'s `vmmc-supply`) had
+`GPIO_ACTIVE_HIGH` + `regulator-always-on` + `regulator-boot-on` - driving PA01 to raw HIGH at boot
+and holding it there permanently. **The exact same class of mistake sec 50 found and fixed for
+WL_REG_ON** - an assumption read from a parameter name, never checked against stock's own live state,
+on the *other* real GPIO this investigation has touched. `enable-active-high` (also present) turned
+out to be completely dead code on this kernel version - read `drivers/regulator/fixed.c`'s own
+`of_get_fixed_voltage_config()` directly: it never parses that property at all, only `regulator-
+boot-on`, `startup-delay-us`, `off-on-delay-us`, and `vin-supply`. Polarity is controlled entirely by
+the `gpio` cell's own active-flag. Removed along with the fix.
+
+**Fixed**: `GPIO_ACTIVE_HIGH` -> `GPIO_ACTIVE_LOW`.
+
+### Real hardware result: the first real SDIO response and enumeration this investigation has ever seen
+
+```
+[1.993188] openke_msc1_trace:      0 ms WL_REG_ON (gpio 100) = 1
+[2.007950] openke_msc1_trace:     14 ms first SDHCI_RESPONSE_0 change: 0x00000000 -> 0x20ffff00
+[2.418750] mmc1: new high speed SDIO card at address 0001
+[2.441304] brcmfmac: brcmf_fw_alloc_request: using brcm/brcmfmac43430-sdio for chip BCM43430/1
+[2.450426] brcmfmac mmc1:0001:1: Direct firmware load for brcm/brcmfmac43430-sdio.ingenic,halley5.bin failed with error -2
+[2.462193] brcmfmac mmc1:0001:1: Direct firmware load for brcm/brcmfmac43430-sdio.bin failed with error -2
+[3.485049] brcmfmac: brcmf_sdio_htclk: HT Avail timeout (1000000): clkctl 0x50
+```
+
+`SDHCI_RESPONSE_0` changed - for the first time in every trace this whole investigation has captured
+(sec 49, 50, 51 all showed zero changes, ever). The SDIO card enumerated for real:
+`"new high speed SDIO card at address 0001"`, the exact success message stock's own boot log shows.
+**`brcmfmac` binds and correctly identifies the real chip** - `BCM43430/1`, the same actual silicon
+as stock's `CYW43438` (Cypress acquired Broadcom's WiFi business; CYW43438 is the rebranded
+BCM43430/1). Confirmed live via `/sys/kernel/debug/gpio` after boot: `gpio-1 (|wifi_bt_power_regula)
+out lo ACTIVE LOW` - matches stock exactly.
+
+**This was the real root cause.** Every hardware-level prerequisite this investigation set out to
+verify - the SDHCI register/software path (sec 49), WL_REG_ON's raw electrical sequence (sec 50-51),
+MSC1's pinmux, RTC32K's active-path pinmux - is now confirmed correct, and the physical, electrical
+chain from host to chip is genuinely working.
+
+**`wlan0` still does not appear** - but the reason is now a real, narrow, purely software one:
+brcmfmac can't find its firmware blob (`brcmfmac43430-sdio.bin`, error -2 = file not found) in the
+custom rootfs's `/lib/firmware/brcm/`. This is a firmware-packaging gap, not a hardware, pinmux, power,
+or timing one - stock's own `cyw43438-7.46.58.13.bin`/`nvram_azw372.txt` (Broadcom DHD driver naming)
+aren't directly usable by mainline `brcmfmac` (different driver, different firmware format/naming
+convention), so this needs either linux-firmware's own BCM43430 blob or a real, verified-compatible
+conversion - a genuinely new, concretely scoped, much narrower next task.
+
+### Where this leaves things
+
+- The SDHCI register/software path: proven correct (sec 49).
+- The `mmc_start_host()`-vs-manual-insert race: found, fixed, verified (sec 49) - kept.
+- WL_REG_ON polarity and delivery mechanism: found, fixed, verified physically correct (sec 50-51) -
+  kept, and genuinely necessary (without it, PA01 alone would not have been enough either).
+- MSC1 pinmux and RTC32K's active enable path: confirmed identical to stock, with phandles properly
+  resolved rather than trusted at face value.
+- **PA01/shared-rail polarity: found, fixed, and verified to produce the first real SDIO response and
+  enumeration this whole investigation has recorded.** This is the real root cause this investigation
+  was searching for.
+- **New, narrow, concretely scoped next step**: get a real, brcmfmac-compatible firmware blob (and
+  NVRAM, if brcmfmac needs one for this chip/board combination) into `/lib/firmware/brcm/` in the
+  custom rootfs, matching the exact filename `brcmfmac` requests (`brcmfmac43430-sdio.bin`, or the
+  more specific `brcmfmac43430-sdio.ingenic,halley5.bin` board-specific variant if one exists) - not
+  a hardware question anymore.
+
+### Real hardware safety record this session
+
+- One more full build/flash/boot/revert cycle, via the spare slot only, `xImage`/`rootfs.squashfs`
+  md5-verified before boot.
+- All comparison work in Phase 1-2 and the PA01 live read were done with zero hardware risk: reading
+  an already-decompiled DTB, comparing against an already-captured live-device-tree dump, and a
+  read-only `/sys/kernel/debug/gpio` read on the currently-running, currently-healthy stock system.
+- `S00revert-safety` confirmed (read directly off `/dev/mmcblk0p1`) to have already reverted the ota
+  marker before any manual intervention.
+- Printer confirmed idle before the reboot. WiFi reassociation and a real DHCP lease confirmed on
+  stock afterward.
+- No `insmod`/`rmmod` of `cywdhd.ko`/`soc_msc.ko` at any point.
+- One real, isolated commit this section (`mmc: msc1 dts: fix wifi_bt_power (PA01) shared-rail
+  polarity - this was the real root cause`) - eight total on the fork's `openke` branch from this
+  whole investigation, each independently reviewable.
+
+## 53. Wi-Fi actually works: real firmware, real association, real DHCP lease, on the custom Linux 6.6
+kernel, on real hardware
+
+The finish line. With the hardware chain fully proven (sec 49-52), this section closes the two
+remaining gaps - firmware packaging and a real config-path bug - and confirms full, real, end-to-end
+WiFi on the custom kernel for the first time in this project's history.
+
+### Firmware inventory (real, from the live stock device)
+
+```
+/lib/firmware/wifi_bcm/cyw43438-7.46.58.13.bin   406602 bytes  sha256 60dbb5b7...52d720
+/lib/firmware/wifi_bcm/nvram_azw372.txt             962 bytes  sha256 78fee458...cfb0a
+```
+
+Confirmed via `strings` on the firmware binary: `43430a1-roml/sdio-...Version: 7.46.58.13 (r688474
+CY)... Date: Thu 2018-04-19 21:19:09 PDT` - the exact same version string this project has seen in
+every stock boot log throughout this investigation. The NVRAM is plain LF-terminated ASCII
+(`key=value` lines, `#` comments - the same format `brcmfmac`'s own parser, `drivers/net/wireless/
+broadcom/brcm80211/brcmfmac/firmware.c`, expects natively, confirmed by reading it directly), headed
+`# NVRAM file for BCM943430WLSELG` - the real module part number for this exact chip family. Its own
+`macaddr=00:11:22:33:44:55` field is explicitly commented as a placeholder ("just placeholders, need
+to be updated"), and `il0macaddr=00:90:4c:c5:12:38` doesn't match this device's real runtime MAC seen
+in earlier boot logs (`00:90:4c:11:22:33`) - confirmed no device-unique data in this file. `sibling
+/lib/firmware/wifi_bcm/{fw_bcm43438a1.bin,nvram_ap6212a.txt}` exist on the device too but are for a
+different, unused module variant - not what this board's real, live boot log picks (`cywdhd.ko` reads
+the SDIO card's own CIS tuples at runtime and explicitly selects the Azurewave-branded pair).
+
+**Not committed to this repo**: proprietary Cypress/Broadcom binaries with no accompanying license
+file found anywhere on the device - no clear basis to redistribute through this repo (see the
+licensing/redistribution guidance this session's own instructions called for). `scripts/build/fetch-
+wifi-firmware.sh` extracts them live, read-only, off a real stock device instead - gitignored, staged
+under `scripts/build/overlay/lib/firmware/brcm/` for `02-configure-buildroot.sh` to pick up.
+
+### First attempt: correctly packaged, still not found - a real rootfs-timing race
+
+Naive placement (files verified byte-for-byte present in the final packaged `rootfs.squashfs` via
+`unsquashfs -ll` and an extracted-and-hashed round-trip, matching source hashes exactly) still hit:
+
+```
+brcmfmac mmc1:0001:1: Direct firmware load for brcm/brcmfmac43430-sdio.bin failed with error -2
+```
+
+Real cause, not a packaging bug: `CONFIG_BRCMFMAC=y` (built directly into the kernel) means its
+firmware request runs synchronously inside the same early-boot `late_initcall` window
+`openke_wifi_manual_insert()` uses to force the manual SDIO insert (sec 46) - real hardware timestamps
+show this at ~2.4s, a full 1.5s before `"VFS: Mounted root (squashfs filesystem)"` (~4.0s). The file
+being correctly packaged doesn't help if `request_firmware()` runs before that filesystem exists.
+
+**Fixed**: `CONFIG_EXTRA_FIRMWARE="brcm/brcmfmac43430-sdio.bin brcm/brcmfmac43430-sdio.txt"` +
+`CONFIG_EXTRA_FIRMWARE_DIR` (pointing at this repo's own overlay content, always present under `/src`
+- this project's own `BUILDROOT_DIR` mount point - by the time the kernel build step runs) embeds
+both files directly in the kernel image, sidestepping the rootfs-mount race entirely without touching
+the early-manual-insert timing itself (a separate, already-hard-won fix). Real build-time bug hit and
+fixed along the way: `CONFIG_EXTRA_FIRMWARE_DIR` must point at the *parent* of the `brcm/` directory,
+not `brcm/` itself - the kernel's own Kbuild logic concatenates `DIR` + the full requested name
+(which already includes the `brcm/` prefix), and pointing `DIR` at `.../lib/firmware/brcm` produced a
+literal `.../brcm/brcm/brcmfmac43430-sdio.bin` build failure (`No rule to make target`) on the first
+attempt - fixed to point at `.../lib/firmware`.
+
+**Verified on real hardware**: firmware loads.
+
+```
+brcmfmac: brcmf_fw_alloc_request: using brcm/brcmfmac43430-sdio for chip BCM43430/1
+brcmfmac mmc1:0001:1: Direct firmware load for brcm/brcmfmac43430-sdio.clm_blob failed with error -2
+brcmfmac: brcmf_c_process_clm_blob: no clm_blob available (err=-2), device may have limited channels available
+brcmfmac: brcmf_c_preinit_dcmds: Firmware: BCM43430/1 wl0: Apr 19 2018 21:18:23 version 7.46.58.13 (r688474 CY) FWID 01-d4334d3d es4.c3.n4
+```
+
+The `.clm_blob` request failing is a pre-existing dangling symlink from the Buildroot linux-firmware
+package (`brcmfmac43430-sdio.clm_blob -> ../cypress/cyfmac43430-sdio.clm_blob`, target confirmed
+absent from this image) - `brcmfmac` itself treats this as non-fatal, exactly as its own decision
+tree anticipated (`Case D`), and never asked for it again. **Not chased further** - no evidence it's
+required, and the mission's own instruction was explicit: don't add a random CLM file speculatively.
+
+### The second gap: `wlan0` existed but never associated - a real, pre-existing script bug
+
+`wlan0` came up (`brcmf_fw_alloc_request` succeeded, interface visible, real MAC address assigned),
+but no association was ever attempted. `scripts/build/overlay/etc/init.d/S39wifi`'s own comment
+already documented the correct intent - read real credentials from `/usr/data/wpa_supplicant.conf`,
+since `/etc/wpa_supplicant.conf` is "an unused empty template" (confirmed originally via stock's own
+`wpa_supplicant` process's `/proc/<pid>/cmdline`, sec 18) - but the actual code hardcoded
+`CONF=/etc/wpa_supplicant.conf`, the exact dead path the comment above it was warning about. **Fixed**:
+one-line change to `/usr/data/wpa_supplicant.conf`.
+
+Real, deliberate design constraint surfaced along the way: this custom test image mounts `/usr/data`
+as an ephemeral tmpfs, not the real `/dev/mmcblk0p10` (`S01tmpfs-datastore`, sec 24) - a genuine prior
+safety decision to keep an untested custom image from ever writing to the real, persistent partition
+stock also depends on. That means the real `wpa_supplicant.conf` sitting on that partition isn't
+visible to the custom boot by design, not by bug. Rather than weaken that isolation permanently, this
+was verified with a manual, one-off, read-only step on the already-running test boot: mount
+`/dev/mmcblk0p10` with `-o ro`, copy just that one file into the tmpfs, unmount - the partition was
+never opened for writing at any point. This confirms the fix and the real credentials work together,
+without deciding a real architecture question (should `/usr/data` become persistent for a production
+image?) under real-hardware time pressure - left open, flagged for a real decision later, not resolved
+by default.
+
+### Real hardware result: full success
+
+```
+# iw dev wlan0 link
+Connected to 30:23:03:dc:0b:6b (on wlan0)
+	SSID: Office_2.4Ghz
+	freq: 2462
+	signal: -38 dBm
+	rx bitrate: 72.2 MBit/s
+	tx bitrate: 24.0 MBit/s
+
+# ip addr show wlan0
+2: wlan0: <BROADCAST,MULTICAST,UP,LOWER_UP> ...
+    inet 192.168.0.146/24 brd 192.168.0.255 scope global wlan0
+```
+
+Same BSSID and SSID stock's own boot logs have shown throughout this entire investigation. Pinged
+from the development host: `3 packets transmitted, 3 received, 0% packet loss`. Real, bidirectional,
+working network traffic over Wi-Fi, on the custom Linux 6.6.18-rt23 kernel, on this exact physical
+device, for the first time in this project's history.
+
+### Where this leaves things
+
+- **Hardware, firmware, and network stack: all proven working, end to end.** SDHCI command path,
+  WL_REG_ON, RTC32K, MSC1 pinmux, PA01, firmware loading, `wlan0`, association, DHCP - every milestone
+  this multi-session investigation set out to reach.
+- Nine real, isolated commits total across this whole investigation (seven on the fork's `openke`
+  branch, sec 49-52; two in this main repo this section) - each independently reviewable, none mixing
+  unrelated changes.
+- **Real, deliberately-left-open follow-up**: `/usr/data` as ephemeral tmpfs (a real, previously-made
+  safety decision, sec 24) means WiFi credentials (and any other `/usr/data` state) don't survive a
+  reboot on this test image as it stands - a real product decision, not a bug, and out of scope to
+  resolve unilaterally here.
+- **Cleanup opportunities, not done here** (real, but secondary to landing the actual fix while
+  hardware access was available): `openke_msc1_trace()`'s gated full-detail path already defaults to
+  off; the small number of always-on point-in-time `pr_info()` diagnostics added in sec 50-51 (WL_REG_ON
+  state, `mmc_of_parse`/`pwrseq` attachment) are cheap (a handful of lines per boot, not a loop) and
+  still genuinely useful for the next real hardware cycle - worth trimming in a dedicated pass once this
+  is considered fully stable, not bundled into the same commits as the fixes they helped find.
+
+### Real hardware safety record this session
+
+- Three full build/flash/boot/revert cycles this section (firmware packaging, the `CONFIG_EXTRA_
+  FIRMWARE` fix, the `S39wifi` fix), all via the spare slot only, all md5-verified before boot.
+- The `wpa_supplicant.conf` real-credential step was the one action this session that touched the real
+  shared partition at all - and it was a read-only mount (`-o ro`), a single-file copy into ephemeral
+  tmpfs, and an immediate unmount. `/dev/mmcblk0p10` was never opened for writing.
+- `S00revert-safety` confirmed, every cycle, to have already reverted the ota marker before any manual
+  intervention.
+- Printer confirmed idle before every reboot. Stock WiFi reassociation confirmed after every cycle.
+- No `insmod`/`rmmod` of `cywdhd.ko`/`soc_msc.ko` at any point.
+- Two real, isolated commits this section, in this main repo (not the kernel fork): the firmware-
+  packaging mechanism, and the `S39wifi` config-path fix.

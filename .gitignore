@@ -17,3 +17,11 @@ artifacts/buildroot-halley5-v30-image/xImage
 # Stale pre-v30 board target, same reasoning.
 artifacts/buildroot-halley5-image/rootfs.ext2
 artifacts/buildroot-halley5-image/uImage
+
+# Proprietary Cypress/Broadcom WiFi firmware + board NVRAM, extracted live
+# off a real stock device by scripts/build/fetch-wifi-firmware.sh
+# (FIRMWARE.md sec 53) - no license file found accompanying them anywhere
+# on the device, so there's no clear basis to redistribute them through
+# this repo. Re-run that script after a fresh checkout.
+scripts/build/overlay/lib/firmware/brcm/brcmfmac43430-sdio.bin
+scripts/build/overlay/lib/firmware/brcm/brcmfmac43430-sdio.txt

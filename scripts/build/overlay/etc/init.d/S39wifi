@@ -13,7 +13,7 @@
 # ctrl_interface=/var/run/wpa_supplicant in the config already matches what
 # GuppyScreen's own guppyconfig.json expects for its WiFi panel.
 
-CONF=/etc/wpa_supplicant.conf
+CONF=/usr/data/wpa_supplicant.conf
 PIDFILE=/var/run/wpa_supplicant-wlan0.pid
 
 start() {

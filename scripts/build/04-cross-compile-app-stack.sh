@@ -17,6 +17,23 @@ REPO_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
 # 2026-07-23: see 02-configure-buildroot.sh for why this lock exists.
 exec 9>"$REPO_ROOT/.openke-build.lock"
 flock -n 9 || { echo "another build stage already owns $REPO_ROOT/.openke-build.lock" >&2; exit 1; }
+
+# Orphaned-container cleanup (2026-07-23) - a real incident this session: a
+# killed build wrapper left its `docker run` process running independently
+# (SIGKILL can't be trapped, so no shell-level cleanup in the wrapper itself
+# could ever have caught this), needing a manual `docker stop` once noticed.
+# Every docker container this project's scripts spawn carries
+# --label openke-build-pid=<owning PID> - check each one found against a
+# live PID and stop anything left over from a run that's no longer alive,
+# regardless of whether the lock itself was contended just now.
+for cid_pid in $(docker ps --filter "label=openke-build-pid" --format '{{.ID}}={{.Label "openke-build-pid"}}' 2>/dev/null); do
+	cid=${cid_pid%%=*}
+	opid=${cid_pid##*=}
+	if ! kill -0 "$opid" 2>/dev/null; then
+		echo "stopping orphaned container $cid (from dead pid $opid)" >&2
+		docker stop "$cid" >/dev/null 2>&1 || true
+	fi
+done
 VENDOR="$REPO_ROOT/vendor"
 BUILDROOT_DIR="$VENDOR/buildroot-x2000"
 OVERLAY="$BUILDROOT_DIR/board/halley5-openke-overlay"
@@ -35,7 +52,7 @@ mkdir -p "$WORK"
 ###    (this fork's own checked-in c_helper.so is a prebuilt MIPS binary of
 ###    unknown toolchain/ABI provenance - don't trust it, rebuild it here).
 echo "== cross-compiling Klipper's chelper C extension =="
-docker run --rm \
+docker run --label "openke-build-pid=$$" --rm \
 	-v "$VENDOR/klipper:/klipper" \
 	-v "$BUILDROOT_DIR/output:/buildroot-output" \
 	-w /klipper/klippy/chelper pellcorp/k1-bash-build bash -c '
@@ -83,7 +100,7 @@ patch -N -p1 -d "$OVERLAY/opt/moonraker" < "$SCRIPT_DIR/patches/moonraker-sqlite
 # its own log file at all.
 echo "== downloading Moonraker's pure-Python deps with no Buildroot package =="
 mkdir -p "$WORK/pywheels"
-docker run --rm --user root -v "$WORK/pywheels:/wheels" pellcorp/k1-bash-build bash -c '
+docker run --label "openke-build-pid=$$" --rm --user root -v "$WORK/pywheels:/wheels" pellcorp/k1-bash-build bash -c '
 apt-get update >/dev/null 2>&1
 apt-get install -y python3-pip >/dev/null 2>&1
 pip3 download -d /wheels --no-deps \
@@ -98,13 +115,13 @@ for whl in "$WORK"/pywheels/*.whl; do
 done
 
 echo "== cross-compiling Moonraker's one real C extension: streaming-form-data =="
-docker run --rm --user root -v "$WORK/pywheels:/wheels" pellcorp/k1-bash-build bash -c '
+docker run --label "openke-build-pid=$$" --rm --user root -v "$WORK/pywheels:/wheels" pellcorp/k1-bash-build bash -c '
 apt-get update >/dev/null 2>&1
 apt-get install -y python3-pip >/dev/null 2>&1
 pip3 download -d /wheels --no-deps --no-binary :all: streaming-form-data==1.11.0
 '
 tar xzf "$WORK/pywheels/streaming-form-data-1.11.0.tar.gz" -C "$WORK"
-docker run --rm \
+docker run --label "openke-build-pid=$$" --rm \
 	-v "$SYSROOT:/sysroot" \
 	-v "$TOOLCHAIN_HOST:/buildroot-host" \
 	-v "$WORK/streaming-form-data-1.11.0:/src" \
@@ -122,7 +139,7 @@ cp "$WORK"/streaming-form-data-1.11.0/streaming_form_data/*.py \
 
 ### 3. ustreamer (camera pipeline)
 echo "== cross-compiling ustreamer =="
-docker run --rm -v "$VENDOR/k1-ustreamer:/home/tim/k1-ustreamer" \
+docker run --label "openke-build-pid=$$" --rm -v "$VENDOR/k1-ustreamer:/home/tim/k1-ustreamer" \
 	-w /home/tim/k1-ustreamer pellcorp/k1-camera-build \
 	/home/tim/k1-ustreamer/docker.sh all
 mkdir -p "$OVERLAY/usr/bin" "$OVERLAY/usr/lib"

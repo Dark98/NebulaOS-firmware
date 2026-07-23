@@ -63,6 +63,23 @@ REPO_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
 # 2026-07-23: see 02-configure-buildroot.sh for why this lock exists.
 exec 9>"$REPO_ROOT/.openke-build.lock"
 flock -n 9 || { echo "another build stage already owns $REPO_ROOT/.openke-build.lock" >&2; exit 1; }
+
+# Orphaned-container cleanup (2026-07-23) - a real incident this session: a
+# killed build wrapper left its `docker run` process running independently
+# (SIGKILL can't be trapped, so no shell-level cleanup in the wrapper itself
+# could ever have caught this), needing a manual `docker stop` once noticed.
+# Every docker container this project's scripts spawn carries
+# --label openke-build-pid=<owning PID> - check each one found against a
+# live PID and stop anything left over from a run that's no longer alive,
+# regardless of whether the lock itself was contended just now.
+for cid_pid in $(docker ps --filter "label=openke-build-pid" --format '{{.ID}}={{.Label "openke-build-pid"}}' 2>/dev/null); do
+	cid=${cid_pid%%=*}
+	opid=${cid_pid##*=}
+	if ! kill -0 "$opid" 2>/dev/null; then
+		echo "stopping orphaned container $cid (from dead pid $opid)" >&2
+		docker stop "$cid" >/dev/null 2>&1 || true
+	fi
+done
 BUILDROOT_DIR="$REPO_ROOT/vendor/buildroot-x2000"
 KERNEL_MOUNT="$REPO_ROOT/vendor/x2000_kernel_6.6/kernel/kernel-6.6"
 
@@ -71,7 +88,7 @@ if [ ! -f "$BUILDROOT_DIR/.config" ]; then
 	exit 1
 fi
 
-docker run --rm --user root \
+docker run --label "openke-build-pid=$$" --rm --user root \
 	-v "$KERNEL_MOUNT:/kernel_6_6/kernel/kernel-6.6" \
 	-v "$BUILDROOT_DIR:/src" -w /src pellcorp/k1-bash-build bash -c '
 apt-get -qq update >/dev/null 2>&1

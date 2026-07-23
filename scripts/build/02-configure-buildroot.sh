@@ -32,6 +32,23 @@ REPO_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
 # insurance: a single exclusive lock file, held for the whole script.
 exec 9>"$REPO_ROOT/.openke-build.lock"
 flock -n 9 || { echo "another build stage already owns $REPO_ROOT/.openke-build.lock" >&2; exit 1; }
+
+# Orphaned-container cleanup (2026-07-23) - a real incident this session: a
+# killed build wrapper left its `docker run` process running independently
+# (SIGKILL can't be trapped, so no shell-level cleanup in the wrapper itself
+# could ever have caught this), needing a manual `docker stop` once noticed.
+# Every docker container this project's scripts spawn carries
+# --label openke-build-pid=<owning PID> - check each one found against a
+# live PID and stop anything left over from a run that's no longer alive,
+# regardless of whether the lock itself was contended just now.
+for cid_pid in $(docker ps --filter "label=openke-build-pid" --format '{{.ID}}={{.Label "openke-build-pid"}}' 2>/dev/null); do
+	cid=${cid_pid%%=*}
+	opid=${cid_pid##*=}
+	if ! kill -0 "$opid" 2>/dev/null; then
+		echo "stopping orphaned container $cid (from dead pid $opid)" >&2
+		docker stop "$cid" >/dev/null 2>&1 || true
+	fi
+done
 BUILDROOT_DIR="$REPO_ROOT/vendor/buildroot-x2000"
 ARTIFACTS="$REPO_ROOT/artifacts/buildroot-halley5-v30-image"
 
@@ -46,7 +63,7 @@ fi
 # `cp`/`rm` calls here start failing with "Permission denied" on every
 # subsequent run. Doing the file operations here too, not just the make
 # steps, makes this script actually idempotent/re-runnable.
-docker run --rm --user root \
+docker run --label "openke-build-pid=$$" --rm --user root \
 	-v "$REPO_ROOT:/repo" \
 	pellcorp/k1-bash-build bash -c '
 set -e
@@ -72,13 +89,13 @@ mkdir -p "/repo/vendor/buildroot-x2000/board/halley5-openke-overlay/opt/printer_
 # (this scripts own docker run above already re-roots itself every time to
 # cope with that) - only the overlay tree actually needs to be writable by
 # the host user.
-docker run --rm --user root \
+docker run --label "openke-build-pid=$$" --rm --user root \
 	-v "$REPO_ROOT:/repo" \
 	pellcorp/k1-bash-build \
 	chown -R "$(id -u):$(id -g)" "/repo/vendor/buildroot-x2000/board/halley5-openke-overlay"
 
 echo "== normalizing .config (resolves any derived Kconfig selects) =="
-docker run --rm --user root \
+docker run --label "openke-build-pid=$$" --rm --user root \
 	-v "$REPO_ROOT/vendor/x2000_kernel_6.6/kernel/kernel-6.6:/kernel_6_6/kernel/kernel-6.6" \
 	-v "$BUILDROOT_DIR:/src" -w /src pellcorp/k1-bash-build bash -c '
 apt-get -qq update >/dev/null 2>&1

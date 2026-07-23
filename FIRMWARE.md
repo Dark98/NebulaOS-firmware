@@ -4632,3 +4632,98 @@ real DHCP lease, reachable by `ssh` and `wget` from an external host).
   `/usr/data` is tmpfs and doesn't persist (a known, already-documented, deliberate tradeoff, sec 24).
 - Two real, isolated commits so far this section: the kernel fork's uart0/BT documentation commit
   (`095970ba2`), plus this main-repo commit bundling the build-script and config fixes above.
+
+## 55. Stock-parity / board-port audit - two real pin conflicts found and fixed, four bounded investigations closed
+
+A systematic audit of the whole board, not just WiFi: prove the custom kernel configures every SoC
+pin/peripheral safely and consistently with stock, without requiring the (still disconnected)
+printer mainboard. Full detail lives in dedicated docs rather than here, since the raw data (register
+dumps, DTB diffs) is large:
+
+```
+docs/STOCK_PARITY_MATRIX.md
+docs/DTB_PARITY_REPORT.md
+docs/PIN_OWNERSHIP_MAP.md
+docs/PRINTER_MAINBOARD_PRECONNECTION_CHECKLIST.md
+scripts/parity/capture-state.sh
+artifacts/parity/{baseline,stock,custom}/
+```
+
+### Baseline frozen first
+
+Tagged `baseline-stock-parity-audit-start` in both this repo and the kernel fork before any
+exploratory work, with artifact hashes and a full serial verification log
+(`artifacts/parity/baseline/`) - nothing from this investigation gets mixed into that reference
+point.
+
+### Method
+
+Captured the same read-only inventory (`/proc`, `/sys`, `lsusb`, `iw`, debugfs
+gpio/pinctrl/clk/regulator/mmc/dma) on stock and custom at a comparable boot stage, decompiled the
+*exact packaged* custom DTB (not just source DTS) and diffed it against a real stock live device
+tree, then cross-referenced every disputed pin's DT intent against its *live* claim state - DT
+equivalence doesn't prove equivalent hardware state, and this caught real, live-only differences DT
+comparison alone would have missed entirely.
+
+### Two real, active pin conflicts found and fixed (each its own commit + full rebuild/reflash/verify cycle)
+
+- **`uart1` (the printer MCU link) vs. `lcd_vdd_en`**: custom claimed a 4-pin group (`GPC-21..24`)
+  where stock's real, running firmware only ever claims 2 (`GPC-23`/`24`). `GPC-21` was
+  *simultaneously* claimed by `uart1`'s alt-function and by `lcd_vdd_en` (the LCD power-enable line)
+  as a plain GPIO output - a genuine, active, live conflict, not hypothetical, harmless so far only
+  because Klipper's MCU protocol doesn't use hardware flow control. Fixed with a new board-local
+  2-pin group (`uart1_pc_txrx`, kernel fork commit `970bd6b83`) matching stock exactly. This was the
+  headline blocker in the printer-mainboard preconnection checklist - **now cleared**.
+- **`MSC2`**: inherited Halley5 reference-board config with no stock usage and no known physical SD
+  slot. Its `ingenic,sdr-gpio` property claimed `GPC-0` - the exact same pin `pwm0`/backlight uses
+  for its only real PWM alternate function on this SoC, confirmed structurally (not just "no card
+  responds") by cross-referencing the packaged DTB's own phandles against live debugfs GPIO state.
+  Disabled (kernel fork commit `72236226a`). Verified: `mmc2` no longer probes, `GPC-0`/`GPC-12` both
+  return to fully unclaimed. One useful negative result along the way: the pre-existing
+  `gpiod_set_value_cansleep: invalid GPIO (errorpointer)` dmesg warnings are **unchanged** by this
+  fix, proving - not assuming - they were never MSC2-related.
+
+Both fixes verified with a full rebuild → flash spare slot → reboot → live pinctrl/GPIO re-capture →
+WiFi/Moonraker/SQLite/`S99confirm-good` health check cycle. Zero regressions either time.
+
+### Four bounded, read-only investigations closed (no pin driven, no destructive test, one stock reboot)
+
+- **`spi_gpio`/`spi2.0`**: bound to generic `spidev` via the well-known `rohm,dh2228fv` placeholder
+  compatible, root-only `/dev/spidev2.0`. Classified `FACTORY_TEST_DEVICE` (moderate confidence) -
+  real, bound child device, not vendor-DT residue, but no specific consumer binary confirmed.
+- **`bt_reg_on` (`GPD-5`)**: stock's `rfkill list` shows a real, unblocked Bluetooth device and live
+  `btudpwork`/`btfwwork` kernel firmware-loading threads, alongside a steady `out hi` GPIO state.
+  Classified `BT_POWER_REQUIRED` (high confidence) - a real gap on custom, independent of the
+  already-known `uart3`/`i2c4` pin-sharing issue, but not implemented (needs its own polarity/
+  ordering/delay proposal first).
+- **`uart5`/`6`/`7`**: reclassified `STOCK_ENABLED_BUT_UNUSED` → `STOCK_ENABLED_PURPOSE_UNKNOWN` per
+  the mission's own correction (a disconnected mainboard proves nothing about *why* stock wires
+  these). None appear in `/proc/interrupts` (IRQ only requested on `open()`, so this means
+  never-opened this session, not non-functional) but all three `/dev/ttyS5-7` nodes exist and are
+  correctly driver-bound.
+- **eFuse**: `/dev/efuse-string-version` is a real, `ioctl`-gated misc device (plain `read()` returns
+  `EINVAL`) - the access pattern of a genuine, purpose-built consumer, but no consumer binary
+  positively identified. `CONFIG_INGENIC_EFUSE_X2000` stays disabled, per the mission's own stated
+  default when a required consumer isn't proven.
+
+### A real bug in this project's own tooling, found and fixed along the way
+
+`bluetoothctl show` hangs indefinitely with no TTY on stock's BusyBox (no `timeout` applet to bound
+it with) - `scripts/parity/capture-state.sh`'s `run()` helper now wraps every capture in a portable
+background+watchdog timeout instead of trusting the tool to return.
+
+### Real hardware safety record this section
+
+- Every reboot preceded by a live `print_stats` idle check (the printer mainboard stayed disconnected
+  throughout, so this only confirms Moonraker/Klipper state, not a physical print).
+- Every image write went through `flash-spare-slot.sh`'s own md5 verification; spare slot only.
+- One real scp-timeout bug caught before it caused harm: a 55MB rootfs transfer got killed mid-flight
+  by an over-tight wrapper timeout, leaving a truncated file on stock - caught by comparing file sizes
+  *before* flashing, not after, and fixed by re-copying with a longer timeout and explicit
+  post-transfer size verification.
+- One real process-hygiene mistake, self-corrected: a `03-build-kernel-and-rootfs.sh` run was
+  interrupted, but its `docker run` container kept running independently of the killed shell wrapper,
+  holding `.openke-build.lock` - found and stopped explicitly (`docker stop`) before the next build.
+- Five isolated commits this section: `970bd6b83` (uart1 fix), `72236226a` (MSC2 disable), plus three
+  main-repo doc commits (Phase 0/1 baseline+inventory, Phase 2/3A/10A findings, this section's fixes
+  and bounded investigations).

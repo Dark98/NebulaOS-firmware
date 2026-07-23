@@ -40,6 +40,17 @@ case "$1" in
 		mkdir -p /usr/data/printer_data/config/GuppyScreen/scripts
 		seed_tmpfs /opt/printer_data
 		seed_tmpfs /usr/data
+		# 2026-07-23 (beeper/BAIC4 audio investigation): GuppyScreen's own source
+		# (touch_beep.cpp's BEEP_PATH) and guppy_cmd.cfg's [gcode_shell_command
+		# guppybeep] both hardcode /usr/data/guppyscreen/guppybeep - the real
+		# stock filesystem's actual install path. This project's own Buildroot
+		# overlay stages guppyscreen under /opt/guppyscreen instead, and nothing
+		# ever bridged the two - both the touch-feedback beep and the M300/BEEP
+		# gcode macros were silently failing (execl()/RUN_SHELL_COMMAND hitting
+		# a missing binary) on every custom boot until now. /usr/data is fresh
+		# tmpfs every boot (seeded above), so this symlink has to be created
+		# here, not baked into the read-only squashfs.
+		ln -sf /opt/guppyscreen /usr/data/guppyscreen
 		;;
 	*)
 		;;

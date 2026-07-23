@@ -1,0 +1,13 @@
+bssid=30:23:03:dc:0b:6b
+freq=2462
+ssid=Office_2.4Ghz
+id=0
+mode=station
+wifi_generation=4
+pairwise_cipher=CCMP
+group_cipher=CCMP
+key_mgmt=WPA2-PSK
+wpa_state=COMPLETED
+ip_address=192.168.0.231
+address=fc:ee:11:00:4c:14
+uuid=b4d3f2ad-c732-57f4-8d2c-4b7f8551e2f3

@@ -1,0 +1,74 @@
+PID   USER     COMMAND
+    1 root     {linuxrc} init
+    2 root     [kthreadd]
+    3 root     [pool_workqueue_]
+    4 root     [kworker/R-rcu_g]
+    5 root     [kworker/R-rcu_p]
+    6 root     [kworker/R-slub_]
+   10 root     [kworker/u4:0-cf]
+   11 root     [kworker/R-mm_pe]
+   12 root     [ksoftirqd/0]
+   13 root     [rcu_preempt]
+   14 root     [migration/0]
+   15 root     [cpuhp/0]
+   16 root     [cpuhp/1]
+   17 root     [migration/1]
+   18 root     [ksoftirqd/1]
+   20 root     [kworker/1:0H-kb]
+   21 root     [kworker/u5:0-ev]
+   22 root     [kworker/u6:0-ev]
+   23 root     [kdevtmpfs]
+   24 root     [kworker/R-inet_]
+   26 root     [khungtaskd]
+   27 root     [oom_reaper]
+   28 root     [kworker/R-write]
+   29 root     [kworker/R-kinte]
+   30 root     [kworker/R-kbloc]
+   32 root     [watchdogd]
+   34 root     [kworker/0:1H-mm]
+   35 root     [kworker/R-cfg80]
+   36 root     [kswapd0]
+  107 root     [irq/8-as-dma]
+  126 root     [hwrng]
+  158 root     [kworker/R-helix]
+  162 root     [kworker/R-felix]
+  196 root     [kworker/u7:0-br]
+  197 root     [kworker/u8:0]
+  198 root     [kworker/u9:0]
+  199 root     [kworker/R-sdhci]
+  200 root     [irq/45-mmc0]
+  205 root     [kworker/R-sdhci]
+  206 root     [irq/44-mmc1]
+  210 root     [kworker/R-sdhci]
+  211 root     [irq/56-mmc2]
+  214 root     [irq/80-13490000]
+  215 root     [kworker/R-mmc_c]
+  489 root     [kworker/1:2-mm_]
+  497 root     [kworker/R-brcmf]
+  500 root     [brcmf_wdog/mmc1]
+  502 root     [kworker/u7:1]
+  527 root     /sbin/syslogd -n
+  545 root     /sbin/klogd -n
+  556 root     /sbin/udevd -d
+  559 root     [kworker/0:2H]
+  576 root     [kworker/1:2H]
+  582 dbus     dbus-daemon --system
+  623 root     /usr/sbin/ModemManager
+  632 root     /usr/sbin/dropbear -R
+  644 root     /usr/bin/python3 /opt/klipper/klippy/klippy.py /opt/printer_data/config/printer.cfg -a /opt/printer_data/comms/klippy.sock -l /opt/printer_data/logs/klippy.log
+  648 root     /usr/bin/python3 /opt/moonraker/moonraker/moonraker.py -d /opt/printer_data -c /opt/printer_data/config/moonraker.conf -l /opt/printer_data/logs/moonraker.log -u /opt/printer_data/comms/klippy.sock
+  653 root     /opt/guppyscreen/guppyscreen
+ 1123 root     [kworker/u5:1-ev]
+ 1781 root     -sh
+ 1831 root     /usr/sbin/wpa_supplicant -i wlan0 -c /usr/data/wpa_supplicant.conf
+ 1835 root     [kworker/u4:1-cf]
+ 1858 root     udhcpc -t1 -A3 -b -R -O search -O staticroutes -p /var/run/udhcpc.wlan0.pid -i wlan0
+ 1874 root     [kworker/u5:2-ev]
+ 1902 root     [kworker/u6:1-ev]
+ 1924 root     [kworker/0:1-eve]
+ 2011 root     [kworker/0:2-eve]
+ 2016 root     [kworker/0:0-eve]
+ 2057 root     [kworker/1:0]
+ 2073 root     /usr/sbin/dropbear -R -2 8
+ 2074 root     sh /tmp/capture-state.sh /tmp/parity-custom
+ 2136 root     ps

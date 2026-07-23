@@ -1,0 +1,9 @@
+name		active_count	event_count	wakeup_count	expire_count	active_since	total_time	max_time	last_change	prevent_suspend_time
+gpio_keys   	0		0		0		0		0		0		0		0		0
+alarmtimer.0.auto	0		0		0		0		0		0		0		0		0
+10003000.rtc	0		0		0		0		0		0		0		0		0
+mmc2        	0		0		0		0		0		0		0		0		0
+mmc1        	1		1		0		1		0		5026		5026		7430		0
+mmc0        	0		0		0		0		0		0		0		0		0
+10000000.otg_phy	0		0		0		0		0		0		0		0		0
+deleted     	0		0		0		0		0		0		0		0		0

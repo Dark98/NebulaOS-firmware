@@ -1,0 +1,38 @@
+system type		: xburst2-based
+machine			: ingenic,halley5
+processor		: 0
+cpu model		: Ingenic XBurst II V0.0  FPU V0.0
+BogoMIPS		: 2393.70
+wait instruction	: yes
+microsecond timers	: no
+tlb_entries		: 288
+extra interrupt vector	: yes
+hardware watchpoint	: yes, count: 1, address/irw mask: [0x0fff]
+isa			: mips1 mips2 mips32r2 mips32r5
+ASEs implemented	: msa
+Options implemented	: tlb ftlb tlbinv 4kex 4k_cache fpu prefetch mcheck llsc rixi userlocal perf_cntr_intr_bit nan_2008 ebase_wg perf
+shadow register sets	: 1
+kscratch registers	: 6
+package			: 0
+core			: 0
+VCED exceptions		: not available
+VCEI exceptions		: not available
+
+processor		: 1
+cpu model		: Ingenic XBurst II V0.0  FPU V0.0
+BogoMIPS		: 2393.70
+wait instruction	: yes
+microsecond timers	: no
+tlb_entries		: 288
+extra interrupt vector	: yes
+hardware watchpoint	: yes, count: 1, address/irw mask: [0x0fff]
+isa			: mips1 mips2 mips32r2 mips32r5
+ASEs implemented	: msa
+Options implemented	: tlb ftlb tlbinv 4kex 4k_cache fpu prefetch mcheck llsc rixi userlocal perf_cntr_intr_bit nan_2008 ebase_wg perf
+shadow register sets	: 1
+kscratch registers	: 6
+package			: 0
+core			: 1
+VCED exceptions		: not available
+VCEI exceptions		: not available
+

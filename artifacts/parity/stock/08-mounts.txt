@@ -1,0 +1,12 @@
+/dev/root /rom squashfs ro,relatime 0 0
+devtmpfs /dev devtmpfs rw,relatime,size=100748k,nr_inodes=25187,mode=755 0 0
+proc /proc proc rw,relatime 0 0
+devpts /dev/pts devpts rw,relatime,gid=5,mode=620,ptmxmode=666 0 0
+tmpfs /dev/shm tmpfs rw,relatime,mode=777 0 0
+tmpfs /tmp tmpfs rw,relatime 0 0
+tmpfs /run tmpfs rw,nosuid,nodev,relatime,mode=755 0 0
+sysfs /sys sysfs rw,relatime 0 0
+debugfs /sys/kernel/debug debugfs rw,relatime 0 0
+/dev/mmcblk0p9 /overlay ext4 rw,sync,relatime,block_validity,delalloc,barrier,user_xattr 0 0
+overlayfs:/overlay / overlay rw,sync,noatime,lowerdir=/,upperdir=/overlay/upper,workdir=/overlay/work 0 0
+/dev/mmcblk0p10 /usr/data ext4 rw,sync,relatime,block_validity,delalloc,barrier,user_xattr 0 0

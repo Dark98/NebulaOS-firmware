@@ -1,0 +1,1 @@
+cat: can't open '/proc/tty/driver/serial': No such file or directory

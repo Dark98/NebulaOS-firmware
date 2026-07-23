@@ -1,0 +1,232 @@
+[    0.522067] cdc_acm: USB Abstract Control Model driver for USB modems and ISDN adapters
+[    0.530227] usbcore: registered new interface driver uas
+[    0.535637] usbcore: registered new interface driver usb-storage
+[    0.541712] usbcore: registered new interface driver ums-alauda
+[    0.547717] usbcore: registered new interface driver ums-cypress
+[    0.553808] usbcore: registered new interface driver ums-datafab
+[    0.559901] usbcore: registered new interface driver ums_eneub6250
+[    0.566168] usbcore: registered new interface driver ums-freecom
+[    0.572257] usbcore: registered new interface driver ums-isd200
+[    0.578264] usbcore: registered new interface driver ums-jumpshot
+[    0.584440] usbcore: registered new interface driver ums-karma
+[    0.590360] usbcore: registered new interface driver ums-onetouch
+[    0.596546] usbcore: registered new interface driver ums-realtek
+[    0.602633] usbcore: registered new interface driver ums-sddr09
+[    0.608633] usbcore: registered new interface driver ums-sddr55
+[    0.614711] usbcore: registered new interface driver ums-usbat
+[    0.620660] usbcore: registered new interface driver usbserial
+[    0.626565] usbcore: registered new interface driver ch341
+[    0.632112] usbserial: USB Serial support registered for ch341-uart
+[    0.638537] i2c /dev entries driver
+[    0.642121] usbcore: registered new interface driver uvcvideo
+[    0.647895] USB Video Class driver (1.1.1)
+[    0.652078] sdhci: Secure Digital Host Controller Interface driver
+[    0.658300] sdhci: Copyright(c) Pierre Ossman
+[    0.662994] usbcore: registered new interface driver usbhid
+[    0.668576] usbhid: USB HID core driver
+[    0.673257] jz-rot 13070000.rotate: device registered as /dev/video0
+[    0.679648] jz-rot 13070000.rotate: Could not get reserved memory
+[    0.686294] helix-venc 13200000.helix: assigned reserved memory node reserved_mem@0x5000000
+[    0.694712] helix-venc 13200000.helix: encoder(helix) registered as /dev/video1
+[    0.702566] felix-vdec 13300000.felix: assigned reserved memory node reserved_mem@0x5000000
+[    0.710982] felix-vdec 13300000.felix: h264decoder(felix) registered as /dev/video2
+[    0.718952] mmc gpio ingenic,pwr-gpios num:-16 en-level: 0
+[    0.724449] mmc gpio ingenic,rst-gpios num:-16 en-level: 0
+[    0.730073] mmc0: Unknown controller version (5). You may experience problems.
+[    0.737360] ingenic,sdhci 13450000.msc: No vmmc regulator found
+[    0.743345] ingenic,sdhci 13450000.msc: No vqmmc regulator found
+[    0.780032] mmc0: SDHCI controller on ingenic-sdhci [13450000.msc] using ADMA
+[    0.787406] 10030000.serial: ttyS0 at MMIO 0x10030000 (irq = 55, base_baud = 9375000) is a uart0
+[    0.796549] 10031000.serial: ttyS1 at MMIO 0x10031000 (irq = 54, base_baud = 9375000) is a uart1
+[    0.805636] 10032000.serial: ttyS2 at MMIO 0x10032000 (irq = 53, base_baud = 9375000) is a uart2
+[    0.814737] 10033000.serial: ttyS3 at MMIO 0x10033000 (irq = 52, base_baud = 9375000) is a uart3
+[    0.823841] 10034000.serial: ttyS4 at MMIO 0x10034000 (irq = 51, base_baud = 9375000) is a uart4
+[    0.830797] mmc0: MAN_BKOPS_EN bit is not set
+[    0.837135] console [ttyS4] enabled
+[    0.838309] mmc0: new HS200 MMC card at address 0001
+[    0.844322] mmcblk0: mmc0:0001 DG4008 7.28 GiB 
+[    0.848478] mmcblk0boot0: mmc0:0001 DG4008 partition 1 4.00 MiB
+[    0.853837] mmcblk0boot1: mmc0:0001 DG4008 partition 2 4.00 MiB
+[    0.858483] mmcblk0rpmb: mmc0:0001 DG4008 partition 3 4.00 MiB
+[    0.860260] Alternate GPT is invalid, using primary GPT.
+[    0.860855]  mmcblk0: p1 p2 p3 p4 p5 p6 p7 p8 p9 p10
+[    0.920792] bootconsole [early0] disabled
+[    0.929334] 10035000.serial: ttyS5 at MMIO 0x10035000 (irq = 50, base_baud = 9375000) is a uart5
+[    0.938733] 10036000.serial: ttyS6 at MMIO 0x10036000 (irq = 49, base_baud = 9375000) is a uart6
+[    0.948126] 10037000.serial: ttyS7 at MMIO 0x10037000 (irq = 48, base_baud = 9375000) is a uart7
+[    0.957847] rtc-ingenic 10003000.rtc: rtc core: registered 10003000.rtc as rtc0
+[    0.966518] ingenic RTC probe success 
+[    0.970877] ingenic watchdog probe success
+[    0.975316] Netfilter messages via NETLINK v0.30.
+[    0.980275] ip_set: protocol 6
+[    0.983577] ip_tables: (C) 2000-2006 Netfilter Core Team
+[    0.989189] NET: Registered protocol family 17
+[    0.993845] bridge: automatic filtering via arp/ip/ip6tables has been deprecated. Update your scripts to load br_netfilter if you need this.
+[    1.006911] Bridge firewalling registered
+[    1.011964] rtc-ingenic 10003000.rtc: setting system clock to 1970-03-17 00:28:44 UTC (6481724)
+[    1.021299] v4l2loopback driver version 0.12.5 loaded
+[    1.029777] ALSA device list:
+[    1.032877]   No soundcards found.
+[    1.039208] VFS: Mounted root (squashfs filesystem) readonly on device 179:7.
+[    1.048045] devtmpfs: mounted
+[    1.051266] Freeing unused kernel memory: 248K
+[    1.117363] random: nonblocking pool is initialized
+[    1.682593] EXT4-fs (mmcblk0p9): mounted filesystem without journal. Opts: (null)
+[    4.471914] EXT4-fs (mmcblk0p10): mounted filesystem without journal. Opts: (null)
+[    4.561554] rmem:no remem set, use kmalloc
+[    4.566301] rmem_src md_rmem: assigned reserved memory node reserved_mem@0x5000000
+[    4.583591] init enable rtc32k out
+[    4.644059] mmc1: Unknown controller version (5). You may experience problems.
+[    4.651583] md_ingenic,sdhci md_ingenic,sdhci.1: No vmmc regulator found
+[    4.658547] md_ingenic,sdhci md_ingenic,sdhci.1: No vqmmc regulator found
+[    4.696051] mmc1: SDHCI controller on ingenic-sdhci [md_ingenic,sdhci.1] using ADMA
+[    4.777233] dhd_module_init in
+[    4.780462] [clooney]dhd_init_gpio_wlan_hostwake: WL_HOST_WAKE=130, oob_irq=73, oob_irq_flags=0x414
+[    4.790161] Power-up adapter 'DHD generic adapter'
+[    4.795210] =========== WLAN placed in NOMAL ON========
+[    4.800867] wlan power on: init
+[    4.804126] bcm_wlan_power_on  NORMAL
+[    4.908076] md_ingenic,sdhci md_ingenic,sdhci.1: card insert manually
+[    4.958560] mmc1: queuing unknown CIS tuple 0x80 (2 bytes)
+[    4.965797] mmc1: queuing unknown CIS tuple 0x80 (3 bytes)
+[    4.973407] mmc1: queuing unknown CIS tuple 0x80 (3 bytes)
+[    4.981932] mmc1: queuing unknown CIS tuple 0x80 (7 bytes)
+[    4.988565] mmc1: queuing unknown CIS tuple 0x81 (1 bytes)
+[    5.087667] mmc1: new high speed SDIO card at address 0001
+[    5.116034] wifi_platform_bus_enumerate device present 1
+[    5.137630] bcmsdh_register: register client driver
+[    5.142805] bcmsdh_sdmmc: bcmsdh_sdmmc_probe Enter
+[    5.148054] bcmsdh_sdmmc: bcmsdh_sdmmc_probe Enter
+[    5.153021] Got the chip vendor, tuple code=0x81 , Azurewave Module
+[    5.159731] bus num (host idx)=1, slot num (rca)=1
+[    5.164706] found adapter info 'DHD generic adapter'
+[    5.170392] sdioh_probe, 146, ready = 00000002
+[    5.178434] DHD: dongle ram size is set to 524288(orig 524288) at 0x0
+[    5.185239] wifi_platform_prealloc: failed to alloc static mem section 7
+[    5.192400] wifi_platform_get_mac_addr
+[    5.196307] Adding CYW43438 firmware and NVRAM path by CIS
+[    5.196307] 	firmware path: /lib/firmware/wifi_bcm/cyw43438-7.46.58.13.bin
+[    5.196307] 	NVRAM path:    /lib/firmware/wifi_bcm/nvram_azw372.txt
+[    5.216073] CFG80211-ERROR) wl_setup_wiphy : Registering Vendor80211
+[    5.223094] CFG80211-ERROR) wl_event_handler : tsk Enter, tsk = 0x890614e4
+[    5.227870] dhd_deferred_work_init: work queue initialized 
+[    5.228088] 
+[    5.228088] Dongle Host Driver, version 1.363.125.19 (r)
+[    5.228088] Compiled from 
+[    5.228476] Register interface [wlan0]  MAC: 00:90:4c:11:22:33
+[    5.228476] 
+[    5.253424] CFG80211-ERROR) wl_event_handler : was terminated
+[    5.259849] dhd_wl_ioctl: returning as busstate=0
+[    5.264885] dhd_bus_devreset: == Power OFF ==
+[    5.271056] bcmsdh_oob_intr_unregister: Enter
+[    5.275776] bcmsdh_oob_intr_unregister: irq is not registered
+[    5.281754] dhd_bus_devreset:  WLAN OFF DONE
+[    5.286346] =========== WLAN placed in NOMAL OFF ========
+[    5.292314] wlan power off: initok
+[    5.398001] dhd_module_init out
+[    5.411781] Bluetooth: HCI UART driver ver 2.3
+[    5.416476] Bluetooth: HCI UART protocol (null) registered
+[    5.422388] Bluetooth: HCI Realtek H5 protocol initialized
+[    5.428071] rtk_btcoex: rtk_btcoex_init: version: 1.2
+[    5.433494] rtk_btcoex: create workqueue
+[    5.441815] rtk_btcoex: alloc buffers 1408, 2240 for ev and l2
+[    5.453399] lcd_is_inited
+[    5.463856] input: ns2009 as /devices/i2c-4/4-0048/input/input0
+[    5.472503] addirq
+[    5.534501] udevd[920]: starting version 3.2.9
+[    5.571474] udevd[923]: starting eudev-3.2.9
+[    5.697643] ------------[ cut here ]------------
+[    5.698072] helix-venc 13200000.helix: V4L2_CID_JPEG_COMPRESSION_QUALITY = 1
+[    5.698086] helix-venc 13200000.helix: Create instance [0]@8c23a000 m2m_ctx=8c3e7000
+[    5.698090] helix-venc 13200000.helix: 13200000.helix vcodec [0]
+[    5.698347] helix-venc 13200000.helix: [0] encoder release
+[    5.729554] WARNING: CPU: 0 PID: 925 at kernel/irq/manage.c:513 enable_irq+0x7c/0x84()
+[    5.737733] Unbalanced enable for IRQ 74
+[    5.741783] Modules linked in: soc_watchdog(O) soc_efuse(O) ns2009_touch(O) lcd_general_480x272(O) hci_uart_h5_kernel_4_4_94(O) cywdhd(O) soc_dtrng(O) soc_msc(O) soc_fb(O) soc_fb_layer_mixer(O) soc_rotator(O) pwm_backlight(O) soc_pwm(O) soc_gpio(O) soc_i2c(O) soc_utils(O) rmem_manager(O) utils(O)
+[    5.768972] CPU: 0 PID: 925 Comm: udevd Tainted: G           O    4.4.94 #7
+[    5.776154] Stack : 80877a4a 0000003f 00000000 80880000 00000000 00000000 8007a034 807f4a47
+[    5.776154] 	  80744810 00000000 0000039d 80874768 89052644 8cb38550 00000000 8007a028
+[    5.776154] 	  00000000 8027aef0 00000001 00000000 80749d8c 8b3d5bf4 8b3d5bd8 800ac154
+[    5.776154] 	  8007d2ac 8003976c 89052644 8cb38550 8b3d5bf4 00000002 00000006 8c228000
+[    5.776154] 	  00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+[    5.776154] 	  ...
+[    5.812948] Call Trace:
+[    5.815477] [<8002250c>] show_stack+0x70/0x8c
+[    5.819983] [<80270524>] dump_stack+0x94/0xd0
+[    5.824489] [<8003991c>] warn_slowpath_common+0xa0/0xd0
+[    5.829887] [<80039978>] warn_slowpath_fmt+0x2c/0x38
+[    5.835015] [<8007d2ac>] enable_irq+0x7c/0x84
+[    5.839517] [<c0364028>] ns2009_open+0x28/0x38 [ns2009_touch]
+[    5.845461] [<8038b92c>] input_open_device+0x9c/0xd0
+[    5.850593] [<8039196c>] evdev_open+0x168/0x20c
+[    5.855273] [<800f04a0>] chrdev_open+0x150/0x180
+[    5.860042] [<800ea2d4>] do_dentry_open.isra.2+0x2d0/0x338
+[    5.865709] [<800f94c8>] path_openat+0x8b4/0xde8
+[    5.870478] [<800fab9c>] do_filp_open+0x38/0x8c
+[    5.875158] [<800eb638>] do_sys_open+0x1c0/0x24c
+[    5.879924] [<80029058>] syscall_common+0x30/0x54
+[    5.884773] 
+[    5.886309] ---[ end trace b248ed6faa4557fc ]---
+[    5.895081] h264_decode_init done!
+[    5.912733] Create instance [0]@8b71ea00 m2m_ctx=8c397000
+[    5.918993] 13300000.felix vcodec [0]
+[    5.924732] [0] vcodec release
+[    5.929256] total_alloc_cnt: 1, total_alloc_size: 131072, total_free_size:131072, total_free_cnt:1
+[    9.429249] dhd_set_mac_addr_handler: interface info not available/down 
+[    9.710811] 
+[    9.710811] 
+[    9.710811] Dongle Host Driver, version 1.363.125.19 (r)
+[    9.710811] Compiled from 
+[    9.722169] wl_android_wifi_on in
+[    9.725907] =========== WLAN placed in RESET ON  ========
+[    9.731506] wlan power on: poweron
+[    9.735148] bcm_wlan_power_on, RESETsdio_reset_comm():
+[   10.087433] mmc1: queuing unknown CIS tuple 0x80 (2 bytes)
+[   10.099327] mmc1: queuing unknown CIS tuple 0x80 (3 bytes)
+[   10.111220] mmc1: queuing unknown CIS tuple 0x80 (3 bytes)
+[   10.128077] mmc1: queuing unknown CIS tuple 0x80 (7 bytes)
+[   10.137478] mmc1: queuing unknown CIS tuple 0x81 (1 bytes)
+[   10.492266] Adding CYW43438 firmware and NVRAM path by CIS
+[   10.492266] 	firmware path: /lib/firmware/wifi_bcm/cyw43438-7.46.58.13.bin
+[   10.492266] 	NVRAM path:    /lib/firmware/wifi_bcm/nvram_azw372.txt
+[   10.511493] 
+[   10.511493] 
+[   10.511493] dhd_bus_devreset: == WLAN ON ==
+[   10.522489] DHD: dongle ram size is set to 524288(orig 524288) at 0x0
+[   10.671459] dhd_bus_init: enable 0x06, ready 0x06 (waited 0us)
+[   10.677691] bcmsdh_oob_intr_register: Enter
+[   10.682244] bcmsdh_oob_intr_register OOB irq=73 flags=4 
+[   10.688197] Disable tdls_auto_op failed. -1
+[   10.692536] wifi_platform_get_mac_addr
+[   10.699640] Firmware up: op_mode=0x0005, MAC=fc:ee:11:00:4c:14
+[   10.711794] dhd_preinit_ioctls Set txbf failed  -23
+[   10.717782] dhd_preinit_ioctls Set ampdu_mpdu to 16 failed  -29
+[   10.725735] dhd_preinit_ioctls pspretend_threshold for HostAPD failed  -23
+[   10.742423] Firmware version = wl0: Apr 19 2018 21:18:23 version 7.46.58.13 (r688474 CY) FWID 01-d4334d3d es4.c3.n4
+[   10.754542] dhd_wlfc_hostreorder_init(): successful bdcv2 tlv signaling, 64
+[   10.763425] dhd_pno_init: Support Android Location Service
+[   10.801020] rtt_do_get_ioctl: failed to send getbuf proxd iovar (CMD ID : 1), status=-23
+[   10.810068] dhd_rtt_init : FTM is not supported
+[   10.817323] dhd_interworking_enable: failed to set WNM info, ret=-23
+[   10.835227] CFG80211-ERROR) wl_update_wiphybands : error reading vhtmode (-23)
+[   10.854960] CFG80211-ERROR) wl_event_handler : tsk Enter, tsk = 0x890614e4
+[   11.267617] CFG80211-ERROR) wl_run_escan : LEGACY_SCAN sync ID: 4660, bssidx: 0
+[   11.444408] Adding 131068k swap on /usr/data/swap.  Priority:-1 extents:3 across:141308k SS
+[   11.516948] S99guppyscreen (1233): drop_caches: 3
+[   12.363045] CFG80211-ERROR) wl_cfg80211_connect : Connecting with30:23:03:dc:0b:6b ssid "Office_2.4Ghz", len (13) channel=11
+[   12.363045] 
+[   12.415654] dhd_rx_frame: Got BRCM event packet in a chained packet.
+[   12.422289] dhd_rx_frame: Got BRCM event packet in a chained packet.
+[   12.422304] wl_bss_connect_done succeeded with 30:23:03:dc:0b:6b
+[   12.435314] ETHER_TYPE_802_1X [RX]: ver 1, type 3, replay 1
+[   12.480957] ETHER_TYPE_802_1X [RX]: ver 1, type 3, replay 2
+[   12.519600] wl_bss_connect_done succeeded with 30:23:03:dc:0b:6b
+[   43.508865] helix-venc 13200000.helix: V4L2_CID_JPEG_COMPRESSION_QUALITY = 1
+[   43.516181] helix-venc 13200000.helix: Create instance [0]@890be000 m2m_ctx=8afc6000
+[   43.525617] helix-venc 13200000.helix: 13200000.helix vcodec [0]
+[   43.532043] helix-venc 13200000.helix: [0] encoder release
+[   43.538036] h264_decode_init done!
+[   43.542356] Create instance [0]@8b71e800 m2m_ctx=8afc6000
+[   43.547965] 13300000.felix vcodec [0]
+[   43.551822] [0] vcodec release
+[   43.556131] total_alloc_cnt: 1, total_alloc_size: 131072, total_free_size:131072, total_free_cnt:1

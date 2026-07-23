@@ -1,0 +1,233 @@
+[    0.000016] clocksource: Switched to clocksource jz_clocksource
+[    0.013948] NET: Registered PF_INET protocol family
+[    0.018966] IP idents hash table entries: 4096 (order: 3, 32768 bytes, linear)
+[    0.026728] tcp_listen_portaddr_hash hash table entries: 256 (order: 0, 5120 bytes, linear)
+[    0.035186] Table-perturb hash table entries: 65536 (order: 6, 262144 bytes, linear)
+[    0.043056] TCP established hash table entries: 2048 (order: 1, 8192 bytes, linear)
+[    0.050801] TCP bind hash table entries: 2048 (order: 4, 81920 bytes, linear)
+[    0.058078] TCP: Hash tables configured (established 2048 bind 2048)
+[    0.064534] UDP hash table entries: 128 (order: 0, 6144 bytes, linear)
+[    0.071109] UDP-Lite hash table entries: 128 (order: 0, 6144 bytes, linear)
+[    0.078238] NET: Registered PF_UNIX/PF_LOCAL protocol family
+[    0.086213] Initialise system trusted keyrings
+[    0.091181] workingset: timestamp_bits=30 max_order=16 bucket_order=0
+[    0.097840] squashfs: version 4.0 (2009/01/31) Phillip Lougher
+[    0.103726] jffs2: version 2.2. (NAND) © 2001-2006 Red Hat, Inc.
+[    0.209950] jitterentropy: Initialization failed with host not compliant with requirements: 9
+[    0.218550] Key type asymmetric registered
+[    0.222699] Asymmetric key parser 'x509' registered
+[    0.227662] io scheduler mq-deadline registered
+[    0.232231] io scheduler kyber registered
+[    0.240959] dwc2 13500000.otg: supply vusb_d not found, using dummy regulator
+[    0.248245] dwc2 13500000.otg: supply vusb_a not found, using dummy regulator
+[    0.580073] dwc2 13500000.otg: EPs: 9, dedicated fifos, 3576 entries in SPRAM
+[    0.587339] dwc2 13500000.otg: DWC OTG Controller
+[    0.592081] dwc2 13500000.otg: new USB bus registered, assigned bus number 1
+[    0.599204] dwc2 13500000.otg: irq 9, io mem 0x13500000
+[    0.604639] usb usb1: New USB device found, idVendor=1d6b, idProduct=0002, bcdDevice= 6.06
+[    0.612971] usb usb1: New USB device strings: Mfr=3, Product=2, SerialNumber=1
+[    0.620293] usb usb1: Product: DWC OTG Controller
+[    0.625050] usb usb1: Manufacturer: Linux 6.6.18-rt23 dwc2_hsotg
+[    0.631152] usb usb1: SerialNumber: 13500000.otg
+[    0.636391] hub 1-0:1.0: USB hub found
+[    0.640218] hub 1-0:1.0: 1 port detected
+[    0.645182] usbcore: registered new interface driver usb-storage
+[    0.651490] mousedev: PS/2 mouse device common for all mice
+[    0.657250] input: ns2009_ts as /devices/platform/apb/10054000.i2c/i2c-4/4-0048/input/input0
+[    0.666398] usbcore: registered new interface driver uvcvideo
+[    0.672816] sdhci: Secure Digital Host Controller Interface driver
+[    0.679015] sdhci: Copyright(c) Pierre Ossman
+[    0.683932] usbcore: registered new interface driver usbkbd
+[    0.689593] usbcore: registered new interface driver usbmouse
+[    0.696455] NET: Registered PF_PACKET protocol family
+[    0.701942] as-platform 134d0000.as-platform: probe success!!!
+[    0.708209] as-dsp 134d4000.as-dsp: probe success!!
+[    0.713465] as-mixer 134dc000.as-mixer: amixer platform probe success
+[    0.720912] as-baic 134d5000.as-baic: baic platform probe success
+[    0.727467] as-spdif 134db000.as-spdif: spdif platform probe success
+[    0.734311] as-virtual-fe 0.as-virtual-fe: probe success!!!
+[    0.740207]  alcl_gain = 0x1f hpoutl_gain = 0x0 micbias = 0x0
+[    0.745970] icodec 10020000.icodec: component icodec platfrom probe success
+[    0.753661] x2000-sound sound: ASoC: CPU DAI DMIC not registered
+[    0.759975] x2000-sound sound: snd_soc_register_card failed -517
+[    0.766348] ingenic-trng 10072000.dtrng: ingenic HW dtrng Probe success!
+[    0.773337] copy logo_buf from .init.data section, size=29480
+[    0.779576] ingenic-fb 13050000.dpu: mode->refresh: 60, mode->pixclock: 92962, rate: 10756800, modex->pixclock: 92962
+[    0.790304] ingenic-fb 13050000.dpu: dpu_ctrl_init start!
+[    0.795872] ingenic-fb 13050000.dpu: rdma_desc @ (ptrval) size: 144
+[    0.802179] ingenic-fb 13050000.dpu: composer framedesc @ (ptrval) size 144
+[    0.809219] ingenic-fb 13050000.dpu: composer layerdesc @ (ptrval) size 576
+[    0.816300] ingenic-fb 13050000.dpu: dpu_ctrl_init success
+[    0.822871] ingenic-fb 13050000.dpu: vidmem @ (ptrval) size 1566720
+[    0.855837] ingenic-fb 13050000.dpu: fbdev->rot_angle=0, swap_dims=0
+[    0.862244] ingenic-fb 13050000.dpu: fbdev get swap param error! please check dts.
+[    0.871232] start parse remote-endpoint!
+[    0.875968] start parse remote-endpoint!
+[    0.880554] ingenic-mscaler 13702300.mscaler: error -ENXIO: IRQ index 0 not found
+[    0.888082] ingenic-mscaler 13702300.mscaler: No MScaler IRQ specified
+[    0.894903] ingenic-mscaler 13802300.mscaler: error -ENXIO: IRQ index 0 not found
+[    0.902446] ingenic-mscaler 13802300.mscaler: No MScaler IRQ specified
+[    0.910650] ingenic-rot 13070000.rotate: assigned reserved memory node reserved_mem@6000000
+[    0.919320] ingenic-rot 13070000.rotate: device registered as /dev/video0
+[    0.926898] helix-venc 13200000.helix: assigned reserved memory node reserved_mem@6000000
+[    0.935158] helix-venc 13200000.helix: encoder(helix) registered as /dev/video1
+[    0.943313] felix-vdec 13300000.felix: assigned reserved memory node reserved_mem@6000000
+[    0.951572] felix-vdec 13300000.felix: h264decoder(felix) registered as /dev/video2
+[    0.960534] ingenic SADC driver registeres over!
+[    0.965769] ingenic sadc aux0 probe success
+[    0.970292] ingenic sadc aux1 probe success
+[    0.974762] ingenic sadc aux2 probe success
+[    0.979189] ingenic sadc aux3 probe success
+[    0.983636] ingenic sadc aux4 probe success
+[    0.988069] ingenic sadc aux5 probe success
+[    0.992506] ingenic-tcu 10002000.tcu: error -ENXIO: IRQ index 1 not found
+[    0.999327] ingenic-tcu 10002000.tcu: not support irq trigger function
+[    1.006003] ingenic-tcu 10002000.tcu: ingenic TCU driver register completed
+[    1.013624] rsa 13480000.rsa: rsa driver probe ok!
+[    1.019636] openke: mmc_of_parse ok, host->mmc->parent=13450000.msc of_node=/ahb2/msc@13450000 pwrseq=00000000
+[    1.060067] mmc0: SDHCI controller on ingenic-sdhci [13450000.msc] using ADMA
+[    1.067886] ingenic_gpio_request: GP:GPD  used_pins_bitmap: 0X07FE3F3C
+[    1.074494] CPU: 0 PID: 1 Comm: swapper/0 Not tainted 6.6.18-rt23 #4
+[    1.080888] Stack : 81642080 00000004 81002ea0 81460364 81451af4 00000000 80d30000 80b4217c
+[    1.089362]         814603f0 80ccc2e3 80d3458c 00000000 00000000 00000001 81451aa0 814669a0
+[    1.097838]         00000000 00000000 80b4217c 814519a0 fffffdff 8145199c 00000000 00000000
+[    1.106314]         0470b273 814518b5 ffffffff ffffffff 80b4217c 00000001 815c04f4 815c04f4
+[    1.114790]         fffffff0 80a57b8c 81451cc0 00000008 00000000 80012620 00000000 80d30000
+[    1.123266]         ...
+[    1.125738] Call Trace:
+[    1.128209] [<8001e998>] show_stack+0x28/0xf0
+[    1.132627] [<80991afc>] dump_stack_lvl+0x5c/0x7c
+[    1.137392] [<8093c808>] ingenic_gpio_request+0x74/0x94
+[    1.142691] [<80387b78>] gpiod_request_commit+0x104/0x1cc
+[    1.148165] [<80388c2c>] gpiod_request+0x8c/0x17c
+[    1.152933] [<80389e54>] gpiod_find_and_request+0xb8/0x4c8
+[    1.158494] [<8038a304>] gpiod_get_index+0x64/0x98
+[    1.163351] [<8038bc1c>] devm_gpiod_get_index+0x1c/0xbc
+[    1.168648] [<8038c210>] devm_gpiod_get_optional+0x14/0x44
+[    1.174211] [<8092d650>] sdhci_ingenic_probe+0x304/0x6d4
+[    1.179596] [<80400ab8>] platform_probe+0x6c/0xcc
+[    1.184365] [<803fd714>] really_probe+0xec/0x468
+[    1.189043] [<803fdb3c>] __driver_probe_device+0xac/0x270
+[    1.194518] [<803fdd48>] driver_probe_device+0x48/0x110
+[    1.199815] [<803fe0b8>] __driver_attach+0x14c/0x200
+[    1.204848] [<803fb1c0>] bus_for_each_dev+0x70/0xbc
+[    1.209792] [<803fc6f8>] bus_add_driver+0x110/0x234
+[    1.214737] [<803ff12c>] driver_register+0x88/0x15c
+[    1.219680] [<80010500>] do_one_initcall+0x40/0x290
+[    1.224626] [<80ce1f00>] kernel_init_freeable+0x1fc/0x29c
+[    1.230100] [<80992964>] kernel_init+0x24/0x118
+[    1.234691] [<80017ccc>] ret_from_kernel_thread+0x14/0x1c
+[    1.240166] 
+[    1.241719] module_drivers/drivers/pinctrl/pinctrl-ingenic.c:gpio functions has redefinition
+[    1.250294] openke: WLAN_REG_ON GPIO acquired, direction_output_raw(0) ret=0
+[    1.257458] openke: mmc_of_parse ok, host->mmc->parent=13460000.msc of_node=/ahb2/msc@13460000 pwrseq=00000000
+[    1.296850] mmc1: SDHCI controller on ingenic-sdhci [13460000.msc] using ADMA
+[    1.304656] ingenic,sdhci 13490000.msc: Got CD GPIO
+[    1.309616] openke: mmc_of_parse ok, host->mmc->parent=13490000.msc of_node=/ahb2/msc@13490000 pwrseq=00000000
+[    1.345416] mmc0: new HS200 MMC card at address 0001
+[    1.350732] mmc2: SDHCI controller on ingenic-sdhci [13490000.msc] using ADMA
+[    1.358375] mmcblk0: mmc0:0001 DG4008 7.28 GiB
+[    1.363225] Enter 'CDT' mode.
+[    1.366268] Enter 'DMA Descriptor chain' mode.
+[    1.371226] ingenic-sfc 13440000.sfc: unknown flash type
+[    1.376619] ingenic-sfc: probe of 13440000.sfc failed with error -22
+[    1.377891] Alternate GPT is invalid, using primary GPT.
+[    1.388464]  mmcblk0: p1 p2 p3 p4 p5 p6 p7 p8 p9 p10
+[    1.394109] gpiod_set_value_cansleep: invalid GPIO (errorpointer)
+[    1.402096] mmcblk0boot0: mmc0:0001 DG4008 4.00 MiB
+[    1.408375] mmcblk0boot1: mmc0:0001 DG4008 4.00 MiB
+[    1.414476] mmcblk0rpmb: mmc0:0001 DG4008 4.00 MiB, chardev (249:0)
+[    1.430055] gpiod_set_value_cansleep: invalid GPIO (errorpointer)
+[    1.472139] eth%d: no PHY found
+[    1.475251] dwc-mac 134a0000.mac: MII Probe failed!
+[    1.481356] ingenic-pwm 134c0000.pwm: ingenic-x2000 Probe of pwm success!
+[    1.489509] 10031000.serial: ttyS1 at MMIO 0x10031000 (irq = 54, base_baud = 9375000) is a uart1
+[    1.499417] ingenic pinctrl 10010000.pinctrl: pin GPC-25 already requested by 10054000.i2c; cannot claim for 10033000.serial
+[    1.510872] ingenic pinctrl 10010000.pinctrl: pin-89 (10033000.serial) status -22
+[    1.518488] ingenic pinctrl 10010000.pinctrl: could not request pin 89 (GPC-25) from group uart3-pc  on device ingenic pinctrl
+[    1.530120] ingenic-uart 10033000.serial: Error applying setting, reverse things back
+[    1.538652] 10034000.serial: ttyS4 at MMIO 0x10034000 (irq = 51, base_baud = 9375000) is a uart4
+[    1.547696] printk: legacy console [ttyS4] enabled
+[    1.557550] printk: legacy bootconsole [early0] disabled
+[    1.572931] rtc-ingenic 10003000.rtc: registered as rtc0
+[    1.578465] rtc-ingenic 10003000.rtc: setting system clock to 2020-03-03T13:25:00 UTC (1583241900)
+[    1.587851] ingenic RTC probe success 
+[    1.592605] ingenic watchdog probe success
+[    1.596906] mmc1: Failed to initialize a non-removable card
+[    1.608298] Loading compiled-in X.509 certificates
+[    1.631554] x2000-sound sound: ASoC: CPU DAI DMIC not registered
+[    1.638076] x2000-sound sound: snd_soc_register_card failed -517
+[    1.644900] x2000-sound sound: ASoC: CPU DAI DMIC not registered
+[    1.652216] x2000-sound sound: snd_soc_register_card failed -517
+[    1.659272] input: gpio_keys as /devices/platform/gpio_keys/input/input1
+[    1.667405] x2000-sound sound: ASoC: CPU DAI DMIC not registered
+[    1.670519] cfg80211: Loading compiled-in X.509 certificates for regulatory database
+[    1.674368] x2000-sound sound: snd_soc_register_card failed -517
+[    1.689598] Loaded X.509 cert 'wens: 61c038651aabdcf94bd0ac7ff06c7248db18c600'
+[    1.698327] Loaded X.509 cert 'sforshee: 00b28ddf47aef9cea7'
+[    1.704287] platform regulatory.0: Direct firmware load for regulatory.db failed with error -2
+[    1.713219] WIFI_SEQ: openke_wifi_manual_insert entry
+[    1.718433] openke_wifi_manual_insert: triggering manual SDIO insert on mmc1
+[    1.725756] cfg80211: failed to load regulatory.db
+[    1.730042] WIFI_SEQ: wlan power on requested, flag=2
+[    1.735912] wlan power on:2
+[    1.738795] WIFI_SEQ: RTC32K enable requested
+[    1.743319] WIFI_SEQ: RTC32K enable completed
+[    1.747823] WIFI_SEQ: MSC1 clock enable requested
+[    1.752693] WIFI_SEQ: MSC1 clock enable completed
+[    1.757545] WIFI_SEQ: manual insert requested
+[    1.762053] ingenic,sdhci 13460000.msc: card insert manually
+[    1.767903] openke: WIFI_SEQ: WL_REG_ON requested_raw=0 descriptor_raw=0
+[    1.774832] openke: WIFI_SEQ: sleeping 100 ms
+[    1.920633] openke: WIFI_SEQ: WL_REG_ON requested_raw=1 descriptor_raw=1
+[    1.927555] openke: WIFI_SEQ: triggering manual detection
+[    1.933156] openke_msc1_trace:      0 ms WL_REG_ON (gpio 100) = 1
+[    1.949212] openke_msc1_trace:     16 ms first SDHCI_RESPONSE_0 change: 0x00000000 -> 0x20ffff00
+[    2.359954] mmc1: new high speed SDIO card at address 0001
+[    2.366672] x2000-sound sound: ASoC: CPU DAI DMIC not registered
+[    2.374003] x2000-sound sound: snd_soc_register_card failed -517
+[    2.375961] brcmfmac: brcmf_fw_alloc_request: using brcm/brcmfmac43430-sdio for chip BCM43430/1
+[    2.389358] brcmfmac mmc1:0001:1: Direct firmware load for brcm/brcmfmac43430-sdio.ingenic,halley5.bin failed with error -2
+[    2.389826] x2000-sound sound: ASoC: CPU DAI DMIC not registered
+[    2.407530] x2000-sound sound: snd_soc_register_card failed -517
+[    2.409006] brcmfmac mmc1:0001:1: Direct firmware load for brcm/brcmfmac43430-sdio.clm_blob failed with error -2
+[    2.516991] brcmfmac: brcmf_c_process_clm_blob: no clm_blob available (err=-2), device may have limited channels available
+[    2.528459] brcmfmac: brcmf_c_process_txcap_blob: no txcap_blob available (err=-2)
+[    2.536654] brcmfmac: brcmf_c_preinit_dcmds: Firmware: BCM43430/1 wl0: Apr 19 2018 21:18:23 version 7.46.58.13 (r688474 CY) FWID 01-d4334d3d es4.c3.n4
+[    3.933271] WIFI_SEQ: manual insert call returned
+[    3.938164] clk: Disabling unused clocks
+[    3.942339] ALSA device list:
+[    3.945404]   No soundcards found.
+[    3.952043] VFS: Mounted root (squashfs filesystem) readonly on device 179:8.
+[    3.960498] devtmpfs: mounted
+[    3.963762] Freeing unused kernel image (initmem) memory: 316K
+[    3.969788] This architecture does not have kernel memory protection.
+[    3.976469] Run /linuxrc as init process
+[    3.980537]   with arguments:
+[    3.980545]     /linuxrc
+[    3.980551]   with environment:
+[    3.980556]     HOME=/
+[    3.980560]     TERM=linux
+[    3.980565]     lcm_id=0
+[    3.990060] process '/bin/busybox' started with executable stack
+[    4.318392] udevd[555]: starting version 3.2.14
+[    6.550037] random: crng init done
+[    6.591542] udevd[556]: starting eudev-3.2.14
+[    6.732897] max available: 33325056
+[    6.736643] min available: 33325056
+[    6.741139] helix-venc 13200000.helix: V4L2_CID_JPEG_COMPRESSION_QUALITY = 1
+[    6.742960] min available: 33193984
+[    6.748480] helix-venc 13200000.helix: Create instance [0]@7a938366 m2m_ctx=fca02bac
+[    6.752173] h264_decode_init done!
+[    6.767611] Create instance [0]@afc3f4c5 m2m_ctx=5352dca5
+[    6.774577] 13300000.felix vcodec [0]
+[    6.778623] [0] vcodec release
+[    6.785173] total_alloc_cnt: 1, total_alloc_size: 131072, total_free_size:131072, total_free_cnt:1
+[    6.803661] helix-venc 13200000.helix: 13200000.helix vcodec [0]
+[    6.810518] helix-venc 13200000.helix: [0] encoder release
+[   12.160508] x2000-sound sound: ASoC: CPU DAI DMIC not registered
+[   12.167038] x2000-sound sound: snd_soc_register_card failed -517
+[   12.173411] platform sound: deferred probe pending
+[29779.894545] EXT4-fs (mmcblk0p10): mounting ext2 file system using the ext4 subsystem
+[29779.905345] EXT4-fs (mmcblk0p10): mounted filesystem 62df8149-6ed2-4550-b885-f36ee58c5da1 ro without journal. Quota mode: disabled.
+[29779.929210] EXT4-fs (mmcblk0p10): unmounting filesystem 62df8149-6ed2-4550-b885-f36ee58c5da1.

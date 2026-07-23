@@ -1,0 +1,2 @@
+cat: can't open '/proc/tty/driver/serial': No such file or directory
+TIMEOUT_OR_ERROR: '22-tty-serial.txt' did not complete within 8s or exited non-zero

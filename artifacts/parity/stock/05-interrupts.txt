@@ -1,0 +1,24 @@
+           CPU0       CPU1       
+  2:      23098      23662   XBurst2   2  xburst2-intc
+  3:      69657      69978   XBurst2   3  jz-mailbox
+  4:      33182      36693   XBurst2   4  core_timerevent
+  9:          1          0  XBurst2-irqchip   1  13500000.otg_new, 13500000.otg_new, dwc2_hsotg:usb1
+ 11:          0          0  XBurst2-irqchip   3  pdma
+ 12:          0          0  XBurst2-irqchip   4  pdmad
+ 14:          0          0  XBurst2-irqchip   6  pwm
+ 39:       9636       9808  XBurst2-irqchip  31  fb_layer_mixer, jzfb
+ 40:          0          0  XBurst2-irqchip  32  rtc 1Hz and alarm
+ 42:          0          0  XBurst2-irqchip  34  dtrng
+ 44:       7790       3899  XBurst2-irqchip  36  mmc1
+ 45:       4248       7841  XBurst2-irqchip  37  mmc0
+ 51:        283          2  XBurst2-irqchip  43  uart4
+ 52:        804       1353  XBurst2-irqchip  44
+ 54:        315         11  XBurst2-irqchip  46
+ 65:          0          0  XBurst2-irqchip  57  I2C4
+ 67:          0          0  XBurst2-irqchip  59  I2C2
+ 70:          0          0  XBurst2-irqchip  62  13200000.helix
+ 71:          0          0  XBurst2-irqchip  63  13300000.felix
+ 72:          1          1      GPIO   3  bluetooth bthostwake
+ 73:         18        746      GPIO   2  bcmsdh_sdmmc
+ 74:          0          0      GPIO  15  ns2009
+ERR:          0

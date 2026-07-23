@@ -1,0 +1,6 @@
+name		active_count	event_count	wakeup_count	expire_count	active_since	total_time	max_time	last_change	prevent_suspend_time
+mmc1:0001:2 	888		930		0		0		0		2345		1144		212566		0
+wifi_wake_lock	2		2		0		0		203758		204139		203758		10148		0
+10003000.rtc	0		0		0		0		0		0		0		1265		0
+alarmtimer  	0		0		0		0		0		0		0		386		0
+deleted     	0		0		0		0		0		0		0		0		0

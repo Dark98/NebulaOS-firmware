@@ -1,0 +1,20 @@
+gpiochip0: GPIOs 0-31, parent: platform/10010000.pinctrl, GPA:
+ gpio-1   (                    |wifi_bt_power_regula) out lo ACTIVE LOW
+
+gpiochip1: GPIOs 32-63, parent: platform/10010000.pinctrl, GPB:
+ gpio-48  (                    |lcd_rst             ) out hi 
+
+gpiochip2: GPIOs 64-95, parent: platform/10010000.pinctrl, GPC:
+ gpio-64  (                    |ingenic,sdr         ) out hi 
+ gpio-73  (                    |drvvbus             ) out lo 
+ gpio-76  (                    |cd                  ) in  hi IRQ ACTIVE LOW
+ gpio-85  (                    |lcd_vdd_en          ) out hi 
+
+gpiochip3: GPIOs 96-127, parent: platform/10010000.pinctrl, GPD:
+ gpio-100 (                    |wlan-reg-on         ) out hi 
+ gpio-113 (                    |vbus_detect         ) in  hi IRQ ACTIVE LOW
+ gpio-116 (                    |ingenic,reg-on      ) out hi 
+ gpio-117 (                    |ingenic,wake        ) in  hi IRQ 
+
+gpiochip4: GPIOs 128-159, parent: platform/10010000.pinctrl, GPE:
+ gpio-159 (                    |Power               ) in  hi IRQ ACTIVE LOW

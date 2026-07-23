@@ -1,0 +1,55 @@
+GPIOs 0-31, platform/10010000.pinctrl, GPA:
+ gpio-1   (                    |bt_wifi_power       ) out lo    
+
+GPIOs 32-63, platform/10010000.pinctrl, GPB:
+ gpio-32  (                    |TFT_d0              ) in  lo    
+ gpio-33  (                    |TFT_d1              ) in  hi    
+ gpio-34  (                    |TFT_d2              ) in  hi    
+ gpio-35  (                    |TFT_d3              ) in  lo    
+ gpio-36  (                    |TFT_d4              ) in  lo    
+ gpio-37  (                    |TFT_d5              ) in  lo    
+ gpio-38  (                    |TFT_d6              ) in  hi    
+ gpio-39  (                    |TFT_d7              ) in  lo    
+ gpio-40  (                    |TFT_d8              ) in  hi    
+ gpio-41  (                    |TFT_d9              ) in  lo    
+ gpio-42  (                    |TFT_d10             ) in  lo    
+ gpio-43  (                    |TFT_d11             ) in  hi    
+ gpio-44  (                    |TFT_d12             ) in  hi    
+ gpio-45  (                    |TFT_d13             ) in  hi    
+ gpio-46  (                    |TFT_d14             ) in  lo    
+ gpio-47  (                    |TFT_d15             ) in  lo    
+ gpio-48  (                    |lcd_rst             ) in  hi    
+ gpio-54  (                    |i2c2_scl            ) in  hi    
+ gpio-55  (                    |i2c2_sda            ) in  hi    
+ gpio-56  (                    |TFT_pclk            ) in  hi    
+ gpio-57  (                    |TFT_vsync           ) in  lo    
+ gpio-58  (                    |TFT_hsync           ) in  lo    
+ gpio-59  (                    |TFT_de              ) in  hi    
+
+GPIOs 64-95, platform/10010000.pinctrl, GPC:
+ gpio-64  (                    |backlight_pwm0      ) in  hi    
+ gpio-73  (                    |ingenic,drvvbus     ) out hi    
+ gpio-85  (                    |lcd_power_en        ) in  lo    
+ gpio-86  (                    |backlight_pwm0      ) out lo    
+ gpio-89  (                    |i2c4_scl            ) in  hi    
+ gpio-90  (                    |i2c4_sda            ) in  hi    
+
+GPIOs 96-127, platform/10010000.pinctrl, GPD:
+ gpio-100 (                    |wlan_reg_on         ) out hi    
+ gpio-101 (                    |bt_reg_on           ) out hi    
+ gpio-104 (                    |msc1_clk            ) in  lo    
+ gpio-105 (                    |msc1_cmd            ) in  hi    
+ gpio-106 (                    |msc1_d0             ) in  hi    
+ gpio-107 (                    |msc1_d1             ) in  hi    
+ gpio-108 (                    |msc1_d2             ) in  hi    
+ gpio-109 (                    |msc1_d3             ) in  hi    
+
+GPIOs 128-159, platform/10010000.pinctrl, GPE:
+ gpio-129 (                    |host_wake_bt        ) out hi    
+ gpio-130 (                    |bcmdhd              ) in  lo IRQ
+ gpio-131 (                    |bt_wake             ) in  hi IRQ
+ gpio-144 (                    |spi_gpio            ) out hi    
+ gpio-145 (                    |spi_gpio            ) out hi    
+ gpio-146 (                    |spi_gpio            ) in  hi    
+ gpio-149 (                    |spi2.0              ) out hi    
+ gpio-151 (                    |clk32k_out_o        ) in  lo    

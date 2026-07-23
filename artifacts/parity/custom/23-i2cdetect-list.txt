@@ -1,0 +1,1 @@
+i2cdetect: can't open '/sys/class/i2c-dev': No such file or directory

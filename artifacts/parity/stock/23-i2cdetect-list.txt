@@ -1,0 +1,2 @@
+i2c-2	i2c       	i2c2                            	I2C adapter
+i2c-4	i2c       	i2c4                            	I2C adapter

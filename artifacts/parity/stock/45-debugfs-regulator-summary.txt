@@ -1,0 +1,2 @@
+cat: can't open '/sys/kernel/debug/regulator_summary': No such file or directory
+TIMEOUT_OR_ERROR: '45-debugfs-regulator-summary.txt' did not complete within 8s or exited non-zero

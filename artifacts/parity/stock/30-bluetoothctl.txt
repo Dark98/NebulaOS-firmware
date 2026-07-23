@@ -1,0 +1,1 @@
+TIMEOUT_OR_ERROR: '30-bluetoothctl.txt' did not complete within 8s or exited non-zero

@@ -1,0 +1,12 @@
+jz-rot ():
+	/dev/video0
+
+Dummy video device (0x0000) (platform:v4l2loopback-000):
+	/dev/video3
+
+vpu-felix (vpu-felix):
+	/dev/video2
+
+vpu-helix (vpu-helix):
+	/dev/video1
+

@@ -1,0 +1,113 @@
+== /sys/kernel/debug/mmc0/mmc0:0001/ext_csd ==
+000000000000000000000000000000000803800ee90000000000000000000000000101000000000000000000000000000000000000000000000000000a000000000000000000000000000000000000000000000000000000000000000001000200000000000000000000000000000000000000000100000001000001000000000000010000000000000000000000000000000000000000000000000000b50100070100020000151f200000000000000100000000000000000102000d0000000008000200571f0a03dddd0000000a0a0a0a0a0a01800ee90017121707051001030108200007a6a6550300000000dddd00015a0800000000191900100000dd31383230336231392550080808010101000000000000000000000000000000000000000000000000000000000000000000000000001f0100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000001000030300050303013f3f01010100000000000000
+== /sys/kernel/debug/mmc0/mmc0:0001/status ==
+00000900
+== /sys/kernel/debug/mmc0/mmc0:0001/state ==
+0x00000005
+== /sys/kernel/debug/mmc0/err_stats ==
+# Command Timeout Occurred:	 0
+# Command CRC Errors Occurred:	 0
+# Data Timeout Occurred:	 0
+# Data CRC Errors Occurred:	 0
+# Auto-Cmd Error Occurred:	 0
+# ADMA Error Occurred:	 0
+# Tuning Error Occurred:	 0
+# CMDQ RED Errors:	 0
+# CMDQ GCE Errors:	 0
+# CMDQ ICCE Errors:	 0
+# Request Timedout:	 0
+# CMDQ Request Timedout:	 0
+# ICE Config Errors:	 0
+# Controller Timedout errors:	 0
+# Unexpected IRQ errors:	 0
+== /sys/kernel/debug/mmc0/err_state ==
+0
+== /sys/kernel/debug/mmc0/clock ==
+100000000
+== /sys/kernel/debug/mmc0/caps2 ==
+0x00020020
+== /sys/kernel/debug/mmc0/caps ==
+0x439f014f
+== /sys/kernel/debug/mmc0/ios ==
+clock:		100000000 Hz
+actual clock:	100000000 Hz
+vdd:		21 (3.3 ~ 3.4 V)
+bus mode:	2 (push-pull)
+chip select:	0 (don't care)
+power mode:	2 (on)
+bus width:	3 (8 bits)
+timing spec:	9 (mmc HS200)
+signal voltage:	1 (1.80 V)
+driver type:	0 (driver type B)
+== /sys/kernel/debug/mmc1/mmc1:0001/state ==
+0x00000001
+== /sys/kernel/debug/mmc1/err_stats ==
+# Command Timeout Occurred:	 0
+# Command CRC Errors Occurred:	 1
+# Data Timeout Occurred:	 0
+# Data CRC Errors Occurred:	 0
+# Auto-Cmd Error Occurred:	 0
+# ADMA Error Occurred:	 0
+# Tuning Error Occurred:	 0
+# CMDQ RED Errors:	 0
+# CMDQ GCE Errors:	 0
+# CMDQ ICCE Errors:	 0
+# Request Timedout:	 0
+# CMDQ Request Timedout:	 0
+# ICE Config Errors:	 0
+# Controller Timedout errors:	 0
+# Unexpected IRQ errors:	 0
+== /sys/kernel/debug/mmc1/err_state ==
+1
+== /sys/kernel/debug/mmc1/clock ==
+50000000
+== /sys/kernel/debug/mmc1/caps2 ==
+0x00020020
+== /sys/kernel/debug/mmc1/caps ==
+0x439f010f
+== /sys/kernel/debug/mmc1/ios ==
+clock:		50000000 Hz
+actual clock:	50000000 Hz
+vdd:		21 (3.3 ~ 3.4 V)
+bus mode:	2 (push-pull)
+chip select:	0 (don't care)
+power mode:	2 (on)
+bus width:	2 (4 bits)
+timing spec:	2 (sd high-speed)
+signal voltage:	0 (3.30 V)
+driver type:	0 (driver type B)
+== /sys/kernel/debug/mmc2/err_stats ==
+# Command Timeout Occurred:	 0
+# Command CRC Errors Occurred:	 0
+# Data Timeout Occurred:	 0
+# Data CRC Errors Occurred:	 0
+# Auto-Cmd Error Occurred:	 0
+# ADMA Error Occurred:	 0
+# Tuning Error Occurred:	 0
+# CMDQ RED Errors:	 0
+# CMDQ GCE Errors:	 0
+# CMDQ ICCE Errors:	 0
+# Request Timedout:	 0
+# CMDQ Request Timedout:	 0
+# ICE Config Errors:	 0
+# Controller Timedout errors:	 0
+# Unexpected IRQ errors:	 0
+== /sys/kernel/debug/mmc2/err_state ==
+0
+== /sys/kernel/debug/mmc2/clock ==
+0
+== /sys/kernel/debug/mmc2/caps2 ==
+0x00020020
+== /sys/kernel/debug/mmc2/caps ==
+0x439f000f
+== /sys/kernel/debug/mmc2/ios ==
+clock:		0 Hz
+actual clock:	400000 Hz
+vdd:		0 (invalid)
+bus mode:	2 (push-pull)
+chip select:	0 (don't care)
+power mode:	0 (off)
+bus width:	0 (1 bits)
+timing spec:	0 (legacy)
+signal voltage:	0 (3.30 V)
+driver type:	0 (driver type B)

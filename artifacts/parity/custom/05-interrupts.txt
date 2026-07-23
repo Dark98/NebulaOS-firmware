@@ -1,0 +1,37 @@
+           CPU0       CPU1       
+  2:    1962876    2222609   XBurst2   2  xburst2-intc
+  3:    1953206    1058208   XBurst2   3  jz-mailbox
+  4:    5244282    4681361   XBurst2   4  core_timerevent
+  8:          0          0  XBurst2-irqchip   0  as-dma
+  9:          0          0  XBurst2-irqchip   1  13500000.otg, 13500000.otg, dwc2_hsotg:usb1
+ 11:          0          0  XBurst2-irqchip   3  pdma
+ 12:          0          0  XBurst2-irqchip   4  pdmad
+ 14:          0          0  XBurst2-irqchip   6  pwm-interrupt
+ 26:          0          0  XBurst2-irqchip  18  13810000.vic
+ 27:          0          0  XBurst2-irqchip  19  13710000.vic
+ 28:          0          0  XBurst2-irqchip  20  13800000.isp
+ 29:          0          0  XBurst2-irqchip  21  13700000.isp
+ 32:          0          0  XBurst2-irqchip  24  13480000.rsa
+ 35:          0          0  XBurst2-irqchip  27  ingenic-tcu-interrupt
+ 37:          0          0  XBurst2-irqchip  29  13070000.rotate
+ 39:    1111953    1156371  XBurst2-irqchip  31  lcdc-1
+ 40:          0          0  XBurst2-irqchip  32  rtc 1Hz and alarm
+ 44:       8927      20110  XBurst2-irqchip  36  mmc1
+ 45:       2326       2519  XBurst2-irqchip  37  mmc0
+ 51:       3089        478  XBurst2-irqchip  43  uart4
+ 56:          0          0  XBurst2-irqchip  48  mmc2
+ 65:     836581    1043131  XBurst2-irqchip  57  i2c4
+ 66:          0          0  XBurst2-irqchip  58  i2c3
+ 70:          0          0  XBurst2-irqchip  62  13200000.helix
+ 71:          0          0  XBurst2-irqchip  63  13300000.felix
+ 72:          0          0      GPIO  17  vbus_detect
+ 73:          0          0  ingenic-adc   0  ingenic-aux
+ 74:          0          0  ingenic-adc   1  ingenic-aux
+ 75:          0          0  ingenic-adc   2  ingenic-aux
+ 76:          0          0  ingenic-adc   3  ingenic-aux
+ 77:          0          0  ingenic-adc   4  ingenic-aux
+ 78:          0          0  ingenic-adc   5  ingenic-aux
+ 79:          0          0      GPIO  21  bluetooth bthostwake
+ 80:          0          0      GPIO  12  13490000.msc cd
+ 81:          0          0      GPIO  31  Power
+ERR:          0

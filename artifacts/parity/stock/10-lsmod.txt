@@ -1,0 +1,19 @@
+Module                  Size  Used by    Tainted: G  
+soc_watchdog            3100  0 
+soc_efuse               6894  0 
+ns2009_touch            3583  0 
+lcd_general_480x272     2156  0 
+hci_uart_h5_kernel_4_4_94    41702  0 
+cywdhd                927691  0 
+soc_dtrng               2237  0 
+soc_msc                24756  1 cywdhd
+soc_fb                 43958  2 lcd_general_480x272
+soc_fb_layer_mixer     12552  1 soc_fb
+soc_rotator             4013  1 soc_fb
+pwm_backlight           2263  0 
+soc_pwm                13784  1 pwm_backlight
+soc_gpio                4919  0 
+soc_i2c                14192  0 
+soc_utils               2123  1 cywdhd,[permanent]
+rmem_manager            7325  1 soc_fb
+utils                  15541 14 soc_efuse,ns2009_touch,lcd_general_480x272,cywdhd,soc_msc,soc_fb,soc_fb_layer_mixer,soc_rotator,pwm_backlight,soc_pwm,soc_gpio,soc_i2c,soc_utils,rmem_manager

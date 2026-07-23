@@ -131,7 +131,7 @@ Full raw lists: `artifacts/parity/stock/13-platform-devices.txt`,
 
 | Feature | Status |
 |---|---|
-| Printer MCU serial link (`uart1`, per `printer.cfg`'s `/dev/ttyS1`) | BLOCKED_MAINBOARD_NOT_CONNECTED - pinmux-only audit done (kernel fork commit adding `uart1`'s missing pin wiring, sec 43); real communication untested |
+| Printer MCU serial link (`uart1`, per `printer.cfg`'s `/dev/ttyS1`) | BLOCKED_MAINBOARD_NOT_CONNECTED for real communication - but SoC-side software equivalence now `CONNECTION_GATE_PASS_SOFTWARE_EQUIVALENCE` (2026-07-23): pinmux, register semantics, clock/IRQ/MMIO, voltage domain, and protocol identity all confirmed matching stock via `S13mcu_update`/`mcu_util`. See `docs/PRINTER_MAINBOARD_PRECONNECTION_CHECKLIST.md`. |
 | Heaters | BLOCKED_MAINBOARD_NOT_CONNECTED |
 | Thermistors / ADC-based temperature sensing | BLOCKED_MAINBOARD_NOT_CONNECTED |
 | Steppers | BLOCKED_MAINBOARD_NOT_CONNECTED |

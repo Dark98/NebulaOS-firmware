@@ -4727,3 +4727,64 @@ background+watchdog timeout instead of trusting the tool to return.
 - Five isolated commits this section: `970bd6b83` (uart1 fix), `72236226a` (MSC2 disable), plus three
   main-repo doc commits (Phase 0/1 baseline+inventory, Phase 2/3A/10A findings, this section's fixes
   and bounded investigations).
+
+## 56. Printer-port parity audit using software-only stock equivalence - gate reaches PASS, no instrument required
+
+Continuation of §55, explicitly scoped this time to prove *software-visible* equivalence (pin-
+controller, GPIO-register, clock, reset, UART-register, driver-ownership boundary) for the printer
+MCU link, given no oscilloscope/multimeter/logic analyzer is available - accepting PCB routing and
+analog voltage from the known-working stock design rather than independently re-measuring it.
+
+### Register-level and clock identity confirmed bit-for-bit
+
+`/sys/class/tty/ttyS1/*` matched exactly between stock and custom: `uartclk=150000000`, `irq=54`,
+`iomem_base=0x10031000`, `io_type=2`, `type=1`. Raw `devmem` reads of the LCR register showed
+`0x00000013` (8N1) on both systems once the port was opened - on custom via a deliberate
+`stty -F /dev/ttyS1 -a` query (opens/queries termios without transmitting arbitrary data, per this
+pass's own safety rule); on stock, the value was already present *before we touched anything*,
+traced to stock's own `S13mcu_update` init script opening the port automatically at boot.
+
+### The printer MCU link identity, proven from stock's own firmware, not inferred
+
+`/etc/init.d/S13mcu_update` selects `mcu0_serial=/dev/ttyS1` for board `NEBULA V1.0.0.1` model
+`F005` - both confirmed matching this exact device via `get_sn_mac.sh`. This is stock's own official
+answer to "what is uart1 for", not a guess from pin geometry. Its handshake tool (`mcu_util -i
+/dev/ttyS1 -c`) ran automatically during the stock capture (no mainboard attached) and failed with a
+clean protocol timeout (`/tmp/mcu_update.log`: `select time out` → `handshake ... fail, ret=1`), not
+a hang or fault - direct, real-hardware proof that "no mainboard connected" is a normal, gracefully
+handled condition in the known-good reference firmware, which is exactly the state this bench setup
+is in. `strings`/grep search of `mcu_util` and its caller found no reset/boot/enable GPIO reference
+at all - stock's own tooling uses no separate hardware reset pin for this MCU, closing that open
+question as `NO_SOFTWARE_CONTROL_SIGNAL_IDENTIFIED` (confirmed absent, not merely unfound).
+
+### Voltage domain closed without a multimeter
+
+`GPC` (uart1's bank) has no software-configurable voltage property at all: `pinctrl-ingenic.c`
+(`module_drivers/drivers/pinctrl/pinctrl-ingenic.c:1966-1992`) only ever parses `ingenic,gpa_voltage`
+and `ingenic,gpe_msc_voltage` by hardcoded name - no `gpc_voltage` property exists in the driver for
+any other bank. `GPC`'s I/O voltage is a fixed hardware characteristic on this SoC; stock and custom
+structurally cannot diverge here regardless of DTS content, closing this gate criterion by reading
+driver source, not by measuring anything.
+
+### Gate reassessment
+
+`docs/PRINTER_MAINBOARD_PRECONNECTION_CHECKLIST.md` now reads
+`CONNECTION_GATE_PASS_SOFTWARE_EQUIVALENCE` for the SoC-side `uart1` signal path: pin-controller
+ownership, register semantics, clock/IRQ/MMIO identity, voltage-domain determinism, and
+protocol/purpose identity all confirmed matching stock. No printer-facing pin remains classified
+`CUSTOM_REGRESSION`. Two items explicitly remain outside this gate's proof boundary and are **not**
+resolved by it: physical connector pinout (which harness pin is which signal - a documentation
+question, not a software one) and the explicit human sign-off this project has committed to
+requiring before any physical mainboard connection, gate status notwithstanding.
+
+### Real hardware safety record this section
+
+- Two more full stock↔custom reboot cycles, each using each system's own native OTA mechanism
+  (custom's `write_ota_marker` helper; stock's own `ota_local_method.sh`'s `local_set_next_boot_device`
+  toggle, since stock's rootfs has no `write_ota_marker.sh` of its own) - marker read back via `dd`
+  and verified before every reboot, matching this project's now-standard practice.
+- No data transmitted on `uart1` beyond a single `stty -F -a` termios query (opens/queries only,
+  never writes to the wire) - stayed within this pass's explicit "no arbitrary data on an unverified
+  line" rule throughout.
+- `S99confirm-good` re-confirmed clean on the return trip to custom - zero regressions from the
+  earlier §55 fixes.

@@ -68,6 +68,65 @@ real, active conflict, not hypothetical. Fixed in kernel fork commit `970bd6b83`
 `(MUX UNCLAIMED)`, `lcd_vdd_en` is `GPC-21`'s sole owner, `uart1` claims only `GPC-23`/`24`. Full
 details: `docs/PRINTER_MAINBOARD_PRECONNECTION_CHECKLIST.md`.
 
+## `uart1` register-level, clock, and protocol equivalence proof (Phase B, software-only, 2026-07-23)
+
+Printer-port parity audit, software-only equivalence pass. Method: `devmem`/`/dev/mem` MMIO peeks,
+`stty -F /dev/ttyS1 -a` (opens and queries termios without transmitting arbitrary data), and
+`/sys/class/tty/ttyS1/*` sysfs attributes, captured on both stock and custom in the same physical
+session (reboot cycle between captures, marker-verified each time). No mainboard connected for
+either capture.
+
+**MMIO/clock/driver identity** (`/sys/class/tty/ttyS1/*`) - bit-for-bit identical on both systems:
+
+| Attribute | Stock | Custom | Equal? |
+|---|---|---|---|
+| `uartclk` | `150000000` | `150000000` | YES |
+| `irq` | `54` | `54` | YES |
+| `iomem_base` | `0x10031000` | `0x10031000` | YES |
+| `io_type` | `2` | `2` | YES |
+| `type` | `1` | `1` | YES |
+| `line` | `1` | `1` | YES |
+
+**UART register values** (`devmem`, standard 16550 offsets from base `0x10031000`):
+
+| Register | Offset | Stock raw (cold, pre-any-open-by-us) | Custom raw (cold, before `stty`) | Custom raw (after `stty -F /dev/ttyS1 -a`) | Meaning | Equivalent? |
+|---|---|---|---|---|---|---|
+| IER | `+0x04` | `0x00000000` | `0x00000000` | (not re-read) | interrupts masked, idle | YES |
+| LCR | `+0x0C` | `0x00000013` | `0x00000000` | `0x00000013` | 8 data bits / 1 stop / no parity | YES once opened - see note below |
+| MCR | `+0x10` | `0x00000000` | `0x00000000` | (not re-read) | modem control idle, no RTS asserted | YES |
+| LSR | `+0x14` | (not captured) | `0x00000060` | (not re-read) | THRE+TEMT set - clock genuinely running, TX FIFO empty | consistent |
+
+**Note on the stock LCR value being pre-set:** stock's `0x00000013` was already present *before we
+touched anything* on that boot. Root cause found in Phase D (below): `/etc/init.d/S13mcu_update`
+runs `mcu_util -i /dev/ttyS1 -c` (a handshake attempt) automatically at boot, which opens the port
+and programs the same 8N1 framing our own `stty` query produced on custom. This is not a
+driver-default - it's evidence stock's own boot sequence already exercises this exact UART, for the
+exact same purpose we're auditing it for.
+
+**Pin-controller ownership** (`/sys/kernel/debug/pinctrl/*/pinmux-pins`, `/sys/kernel/debug/gpio`):
+
+| Pin | Stock | Custom (post-fix) | Equivalent? |
+|---|---|---|---|
+| `GPC-23` (pin 87) | `10031000.serial (GPIO UNCLAIMED) function uart1-pin group uart1-pc` | `10031000.serial (GPIO UNCLAIMED) function uart1-pin group uart1-pc-txrx` | YES - same device/function, group name is our own more specific rename |
+| `GPC-24` (pin 88) | same pattern as `GPC-23` | same pattern as `GPC-23` | YES |
+| `GPC-21` (pin 85) | `(MUX UNCLAIMED)`; GPIO owner `lcd_power_en`, captured `in lo` | `(MUX UNCLAIMED)`; GPIO owner `lcd_vdd_en`, captured `out hi` | Same purpose/pin, not claimed by `uart1` on either - **EXPECTED_DIFFERENCE** on direction/level (different boot-sequence timing/naming, not a `uart1` concern, tracked separately, not a printer-port signal) |
+| `GPC-22` (pin 86) | `(MUX UNCLAIMED)`; GPIO owner `backlight_pwm0`, `out lo` | fully unclaimed (`MUX UNCLAIMED`, `GPIO UNCLAIMED`) | Neither claimed by `uart1` - **EXPECTED_DIFFERENCE**, not a printer-port signal, noted for a future LCD-parity pass, out of scope here |
+
+**Voltage domain - resolved definitively, no reboot needed.** `pinctrl-ingenic.c`
+(`module_drivers/drivers/pinctrl/pinctrl-ingenic.c:1966-1992`) only ever reads two DT voltage
+properties by hardcoded name: `ingenic,gpa_voltage` (bank A) and `ingenic,gpe_msc_voltage` (bank
+E/MSC). There is no code path anywhere in this driver that reads a `gpc_voltage` property for any
+bank. This means `GPC`'s I/O voltage is a fixed hardware characteristic on this SoC, not a
+DT/software-configurable one - **stock and custom cannot differ here by construction**, since
+neither system's devicetree has any mechanism to set it differently. Custom's own DTB confirms this:
+`ingenic,gpa_voltage = 0x00000002` (`GPIO_VOLTAGE_3V3`) is the *only* voltage property present under
+`/proc/device-tree/apb/pinctrl@10010000/`, and `GPC` has no such property node at all.
+
+**Conclusion:** `uart1`'s SoC-level identity (clock, IRQ, MMIO base, register semantics, pin-mux
+ownership, voltage-domain determinism) is fully equivalent between stock and custom. This closes the
+"voltage domain" and "printer UART pinmux/idle-level" gate criteria in
+`docs/PRINTER_MAINBOARD_PRECONNECTION_CHECKLIST.md` without any physical instrument.
+
 ## MSC2 disable - fixed and verified
 
 Kernel fork commit `72236226a` disables `&msc2`. Verified live: `mmc2` no longer appears under

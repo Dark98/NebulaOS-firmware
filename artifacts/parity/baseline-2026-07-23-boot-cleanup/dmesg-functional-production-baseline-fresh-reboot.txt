@@ -1,0 +1,232 @@
+[    0.000000] Initmem setup node 0 [mem 0x0000000000000000-0x000000000fffffff]
+[    0.000000] percpu: Embedded 11 pages/cpu s14752 r8192 d22112 u45056
+[    0.000000] pcpu-alloc: s14752 r8192 d22112 u45056 alloc=11*4096
+[    0.000000] pcpu-alloc: [0] 0 [0] 1 
+[    0.000000] Kernel command line: console=ttyS4,115200n8  mem=256M@0x0 mem=0M@0x30000000 lcm_id=0  init=/linuxrc root=/dev/mmcblk0p8 rootwait rootfstype=squashfs ro ieee754=relaxed
+[    0.000000] Unknown kernel command line parameters "lcm_id=0", will be passed to user space.
+[    0.000000] Dentry cache hash table entries: 32768 (order: 5, 131072 bytes, linear)
+[    0.000000] Inode-cache hash table entries: 16384 (order: 4, 65536 bytes, linear)
+[    0.000000] Built 1 zonelists, mobility grouping on.  Total pages: 65024
+[    0.000000] mem auto-init: stack:off, heap alloc:off, heap free:off
+[    0.000000] Memory: 212624K/262144K available (9783K kernel code, 747K rwdata, 2984K rodata, 364K init, 379K bss, 49520K reserved, 0K cma-reserved)
+[    0.000000] SLUB: HWalign=32, Order=0-3, MinObjects=0, CPUs=2, Nodes=1
+[    0.000000] rcu: Preemptible hierarchical RCU implementation.
+[    0.000000] rcu: RCU calculated value of scheduler-enlistment delay is 10 jiffies.
+[    0.000000] NR_IRQS: 411
+[    0.000000] core irq setup finished
+[    0.000000] percpu irq inited.
+[    0.000000] rcu: srcu_init: Setting srcu_struct sizes based on contention.
+[    0.000000] x2000 Clock Power Management Unit init!
+[    0.000000] =========== x2000 clocks: =============
+[    0.000000] 	apll     = 1200000000 , mpll     = 1500000000
+[    0.000000] 	cpu_clk  = 1200000000 , l2c_clk  = 600000000
+[    0.000000] 	ahb0_clk = 300000000 , ahb2_clk = 300000000
+[    0.000000] 	apb_clk  = 150000000 , ext_clk  = 24000000
+[    0.000000] 
+[    0.000000] percpu cpu_num:0 timerevent init
+[    0.000000] clockevents_config_and_register success.
+[    0.000000] clocksource: jz_clocksource: mask: 0x7fffffffffffffff max_cycles: 0x588fe9dc0, max_idle_ns: 440795202592 ns
+[    0.000000] sched_clock: 64 bits at 24MHz, resolution 41ns, wraps every 4398046511097ns
+[    0.000000] Console: colour dummy device 80x25
+[    0.000000] Calibrating delay loop... 2393.70 BogoMIPS (lpj=11968512)
+[    0.000000] pid_max: default: 4096 minimum: 301
+[    0.000000] Mount-cache hash table entries: 1024 (order: 0, 4096 bytes, linear)
+[    0.000000] Mountpoint-cache hash table entries: 1024 (order: 0, 4096 bytes, linear)
+[    0.000000] [SMP] Prepare 2 cores., cpu: 0
+[    0.000000] rcu: Hierarchical SRCU implementation.
+[    0.000000] rcu: 	Max phase no-delay instances is 1000.
+[    0.000000] smp: Bringing up secondary CPUs ...
+[    0.000000] [SMP] Booting CPU1 ...
+[    0.000000] Primary instruction cache 32kB, VIVT, 8-way, linesize 32 bytes.
+[    0.000000] Primary data cache 32kB, 8-way, VIPT, no aliases, linesize 32 bytes
+[    0.000000] =======found ...... ingenic sc cache ops ...!, found: 1
+[    0.000000] Unified secondary cache 512kB 16-way, linesize 64 bytes.
+[    0.000000] #### now starting init for cpu : 1
+[    0.000000] percpu cpu_num:1 timerevent init
+[    0.000000] CPU1 revision is: 00132000 (Ingenic XBurst II)
+[    0.000000] FPU revision is: 00f32000
+[    0.000000] MSA revision is: 00002000
+[    0.000000] [SMP] slave cpu1 start up finished.
+[    0.000000] smp: Brought up 1 node, 2 CPUs
+[    0.000000] devtmpfs: initialized
+[    0.000000] clocksource: jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 19112604462750000 ns
+[    0.000000] futex hash table entries: 16 (order: -3, 512 bytes, linear)
+[    0.000000] pinctrl core: initialized pinctrl subsystem
+[    0.000000] NET: Registered PF_NETLINK/PF_ROUTE protocol family
+[    0.000000] gpio gpiochip0: Static allocation of GPIO base is deprecated, use dynamic allocation.
+[    0.000000] genirq: irq_chip XBurst2-irqchip did not update eff. affinity mask of irq 25
+[    0.000000] gpio gpiochip1: Static allocation of GPIO base is deprecated, use dynamic allocation.
+[    0.000000] gpio gpiochip2: Static allocation of GPIO base is deprecated, use dynamic allocation.
+[    0.000000] gpio gpiochip3: Static allocation of GPIO base is deprecated, use dynamic allocation.
+[    0.000000] gpio gpiochip4: Static allocation of GPIO base is deprecated, use dynamic allocation.
+[    0.000000] ingenic pinctrl 10010000.pinctrl: 5 gpio chip add success, pins 160
+[    0.000000] ingenic pinctrl 10010000.pinctrl: ingenic pinctrl probe success
+[    0.000000] dmmu_init 1012 PTRS_PER_PTE = 1024
+[    0.000000] SCSI subsystem initialized
+[    0.000000] usbcore: registered new interface driver usbfs
+[    0.000000] usbcore: registered new interface driver hub
+[    0.000000] usbcore: registered new device driver usb
+[    0.000000] mc: Linux media interface: v0.10
+[    0.000000] videodev: Linux video capture interface: v2.00
+[    0.000000] Advanced Linux Sound Architecture Driver Initialized.
+[    0.000000] Bluetooth: Core ver 2.22
+[    0.000000] NET: Registered PF_BLUETOOTH protocol family
+[    0.000000] Bluetooth: HCI device and connection manager initialized
+[    0.000000] Bluetooth: HCI socket layer initialized
+[    0.000000] Bluetooth: L2CAP socket layer initialized
+[    0.000000] Bluetooth: SCO socket layer initialized
+[    0.000000] ingenic-dma 13420000.dma: error -ENXIO: IRQ pdmam not found
+[    0.000000] ingenic-dma 13420000.dma: INGENIC SoC DMA initialized
+[    0.000000]  (null): set:374  hold:375 dev=150000000 h=750 l=750
+[    0.000000] ingenic-i2c 10053000.i2c: i2c_ingenic_probe success.
+[    0.000000] ingenic-i2c 10054000.i2c: i2c_ingenic_probe success.
+[    0.000017] clocksource: Switched to clocksource jz_clocksource
+[    0.013979] NET: Registered PF_INET protocol family
+[    0.018994] IP idents hash table entries: 4096 (order: 3, 32768 bytes, linear)
+[    0.026757] tcp_listen_portaddr_hash hash table entries: 256 (order: 0, 5120 bytes, linear)
+[    0.035215] Table-perturb hash table entries: 65536 (order: 6, 262144 bytes, linear)
+[    0.043089] TCP established hash table entries: 2048 (order: 1, 8192 bytes, linear)
+[    0.050829] TCP bind hash table entries: 2048 (order: 4, 81920 bytes, linear)
+[    0.058106] TCP: Hash tables configured (established 2048 bind 2048)
+[    0.064558] UDP hash table entries: 128 (order: 0, 6144 bytes, linear)
+[    0.071139] UDP-Lite hash table entries: 128 (order: 0, 6144 bytes, linear)
+[    0.078266] NET: Registered PF_UNIX/PF_LOCAL protocol family
+[    0.086190] Initialise system trusted keyrings
+[    0.090978] workingset: timestamp_bits=30 max_order=16 bucket_order=0
+[    0.097672] squashfs: version 4.0 (2009/01/31) Phillip Lougher
+[    0.103560] jffs2: version 2.2. (NAND) © 2001-2006 Red Hat, Inc.
+[    0.236402] Key type asymmetric registered
+[    0.240494] Asymmetric key parser 'x509' registered
+[    0.245458] io scheduler mq-deadline registered
+[    0.250030] io scheduler kyber registered
+[    0.258299] dwc2 13500000.otg: supply vusb_d not found, using dummy regulator
+[    0.265748] dwc2 13500000.otg: supply vusb_a not found, using dummy regulator
+[    0.600072] dwc2 13500000.otg: EPs: 9, dedicated fifos, 3576 entries in SPRAM
+[    0.607329] dwc2 13500000.otg: DWC OTG Controller
+[    0.612070] dwc2 13500000.otg: new USB bus registered, assigned bus number 1
+[    0.619193] dwc2 13500000.otg: irq 9, io mem 0x13500000
+[    0.624631] usb usb1: New USB device found, idVendor=1d6b, idProduct=0002, bcdDevice= 6.06
+[    0.632963] usb usb1: New USB device strings: Mfr=3, Product=2, SerialNumber=1
+[    0.640323] usb usb1: Product: DWC OTG Controller
+[    0.645045] usb usb1: Manufacturer: Linux 6.6.18-rt23 dwc2_hsotg
+[    0.651149] usb usb1: SerialNumber: 13500000.otg
+[    0.656475] hub 1-0:1.0: USB hub found
+[    0.660254] hub 1-0:1.0: 1 port detected
+[    0.665222] usbcore: registered new interface driver usb-storage
+[    0.671651] mousedev: PS/2 mouse device common for all mice
+[    0.677409] input: ns2009_ts as /devices/platform/apb/10054000.i2c/i2c-4/4-0048/input/input0
+[    0.686666] usbcore: registered new interface driver uvcvideo
+[    0.692730] sdhci: Secure Digital Host Controller Interface driver
+[    0.698935] sdhci: Copyright(c) Pierre Ossman
+[    0.703577] usbcore: registered new interface driver usbkbd
+[    0.709180] usbcore: registered new interface driver usbmouse
+[    0.715889] NET: Registered PF_PACKET protocol family
+[    0.722276] ingenic-trng 10072000.dtrng: ingenic HW dtrng Probe success!
+[    0.729262] copy logo_buf from .init.data section, size=29480
+[    0.735554] ingenic-fb 13050000.dpu: mode->refresh: 60, mode->pixclock: 92962, rate: 10756800, modex->pixclock: 92962
+[    0.746289] ingenic-fb 13050000.dpu: dpu_ctrl_init start!
+[    0.751875] ingenic-fb 13050000.dpu: rdma_desc @ (ptrval) size: 144
+[    0.758163] ingenic-fb 13050000.dpu: composer framedesc @ (ptrval) size 144
+[    0.765243] ingenic-fb 13050000.dpu: composer layerdesc @ (ptrval) size 576
+[    0.772302] ingenic-fb 13050000.dpu: dpu_ctrl_init success
+[    0.778863] ingenic-fb 13050000.dpu: vidmem @ (ptrval) size 1566720
+[    0.811840] ingenic-fb 13050000.dpu: fbdev->rot_angle=0, swap_dims=0
+[    0.819089] start parse remote-endpoint!
+[    0.823642] start parse remote-endpoint!
+[    0.828744] ingenic-rot 13070000.rotate: assigned reserved memory node reserved_mem@6000000
+[    0.837898] ingenic-rot 13070000.rotate: device registered as /dev/video0
+[    0.845455] helix-venc 13200000.helix: assigned reserved memory node reserved_mem@6000000
+[    0.853720] helix-venc 13200000.helix: encoder(helix) registered as /dev/video1
+[    0.861833] felix-vdec 13300000.felix: assigned reserved memory node reserved_mem@6000000
+[    0.870099] felix-vdec 13300000.felix: h264decoder(felix) registered as /dev/video2
+[    0.878989] ingenic SADC driver registeres over!
+[    0.884220] ingenic sadc aux0 probe success
+[    0.888685] ingenic sadc aux1 probe success
+[    0.893150] ingenic sadc aux2 probe success
+[    0.897582] ingenic sadc aux3 probe success
+[    0.902036] ingenic sadc aux4 probe success
+[    0.906470] ingenic sadc aux5 probe success
+[    0.910885] ingenic-tcu 10002000.tcu: error -ENXIO: IRQ index 1 not found
+[    0.917709] ingenic-tcu 10002000.tcu: no trigger-mode IRQ (optional, not used by this board)
+[    0.926333] ingenic-tcu 10002000.tcu: ingenic TCU driver register completed
+[    0.933933] rsa 13480000.rsa: rsa driver probe ok!
+[    0.939912] openke: mmc_of_parse ok, host->mmc->parent=13450000.msc of_node=/ahb2/msc@13450000 pwrseq=00000000
+[    0.980062] mmc0: SDHCI controller on ingenic-sdhci [13450000.msc] using ADMA
+[    0.987873] openke: WLAN_REG_ON GPIO acquired, direction_output_raw(0) ret=0
+[    0.995043] openke: mmc_of_parse ok, host->mmc->parent=13460000.msc of_node=/ahb2/msc@13460000 pwrseq=00000000
+[    1.035721] mmc1: SDHCI controller on ingenic-sdhci [13460000.msc] using ADMA
+[    1.044390] ingenic-pwm 134c0000.pwm: ingenic-x2000 Probe of pwm success!
+[    1.052720] 10031000.serial: ttyS1 at MMIO 0x10031000 (irq = 54, base_baud = 9375000) is a uart1
+[    1.063335] 10034000.serial: ttyS4 at MMIO 0x10034000 (irq = 51, base_baud = 9375000) is a uart4
+[    1.072276] printk: legacy console [ttyS4] enabled
+[    1.082070] printk: legacy bootconsole [early0] disabled
+[    1.096635] rtc-ingenic 10003000.rtc: registered as rtc0
+[    1.102226] rtc-ingenic 10003000.rtc: setting system clock to 2020-03-04T11:06:44 UTC (1583320004)
+[    1.111596] ingenic RTC probe success 
+[    1.116317] ingenic watchdog probe success
+[    1.132003] mmc0: new HS200 MMC card at address 0001
+[    1.139723] Loading compiled-in X.509 certificates
+[    1.140927] mmcblk0: mmc0:0001 DG4008 7.28 GiB
+[    1.151253] Alternate GPT is invalid, using primary GPT.
+[    1.156878]  mmcblk0: p1 p2 p3 p4 p5 p6 p7 p8 p9 p10
+[    1.157700] input: gpio_keys as /devices/platform/gpio_keys/input/input1
+[    1.164370] mmcblk0boot0: mmc0:0001 DG4008 4.00 MiB
+[    1.176587] cfg80211: Loading compiled-in X.509 certificates for regulatory database
+[    1.176630] mmcblk0boot1: mmc0:0001 DG4008 4.00 MiB
+[    1.191272] mmcblk0rpmb: mmc0:0001 DG4008 4.00 MiB, chardev (249:0)
+[    1.191883] Loaded X.509 cert 'wens: 61c038651aabdcf94bd0ac7ff06c7248db18c600'
+[    1.206500] Loaded X.509 cert 'sforshee: 00b28ddf47aef9cea7'
+[    1.216231] WIFI_SEQ: openke_wifi_manual_insert entry
+[    1.221487] openke_wifi_manual_insert: triggering manual SDIO insert on mmc1
+[    1.228765] WIFI_SEQ: wlan power on requested, flag=2
+[    1.234196] wlan power on:2
+[    1.237141] WIFI_SEQ: RTC32K enable requested
+[    1.241679] WIFI_SEQ: RTC32K enable completed
+[    1.246234] WIFI_SEQ: MSC1 clock enable requested
+[    1.251223] WIFI_SEQ: MSC1 clock enable completed
+[    1.256137] WIFI_SEQ: manual insert requested
+[    1.260724] ingenic,sdhci 13460000.msc: card insert manually
+[    1.324489] mmc1: Failed to initialize a non-removable card
+[    1.324519] openke: WIFI_SEQ: WL_REG_ON requested_raw=0 descriptor_raw=0
+[    1.337205] openke: WIFI_SEQ: sleeping 100 ms
+[    1.490604] openke: WIFI_SEQ: WL_REG_ON requested_raw=1 descriptor_raw=1
+[    1.497523] openke: WIFI_SEQ: triggering manual detection
+[    1.503121] openke_msc1_trace:      0 ms WL_REG_ON (gpio 100) = 1
+[    1.519142] openke_msc1_trace:     16 ms first SDHCI_RESPONSE_0 change: 0x00000000 -> 0x20ffff00
+[    1.929915] mmc1: new high speed SDIO card at address 0001
+[    1.939613] brcmfmac: brcmf_fw_alloc_request: using brcm/brcmfmac43430-sdio for chip BCM43430/1
+[    1.956785] brcmfmac mmc1:0001:1: Direct firmware load for brcm/brcmfmac43430-sdio.clm_blob failed with error -2
+[    2.060059] brcmfmac: brcmf_c_process_clm_blob: no clm_blob available (err=-2), device may have limited channels available
+[    2.071526] brcmfmac: brcmf_c_process_txcap_blob: no txcap_blob available (err=-2)
+[    2.079696] brcmfmac: brcmf_c_preinit_dcmds: Firmware: BCM43430/1 wl0: Apr 19 2018 21:18:23 version 7.46.58.13 (r688474 CY) FWID 01-d4334d3d es4.c3.n4
+[    3.503120] WIFI_SEQ: manual insert call returned
+[    3.508012] clk: Disabling unused clocks
+[    3.512183] ALSA device list:
+[    3.515248]   No soundcards found.
+[    3.522772] VFS: Mounted root (squashfs filesystem) readonly on device 179:8.
+[    3.532111] devtmpfs: mounted
+[    3.535401] Freeing unused kernel image (initmem) memory: 364K
+[    3.541450] This architecture does not have kernel memory protection.
+[    3.548108] Run /linuxrc as init process
+[    3.552183]   with arguments:
+[    3.552193]     /linuxrc
+[    3.552199]   with environment:
+[    3.552204]     HOME=/
+[    3.552209]     TERM=linux
+[    3.552213]     lcm_id=0
+[    3.562263] process '/bin/busybox' started with executable stack
+[    3.906382] udevd[530]: starting version 3.2.14
+[    6.470035] random: crng init done
+[    6.512420] udevd[531]: starting eudev-3.2.14
+[    6.676643] max available: 33325056
+[    6.679232] helix-venc 13200000.helix: V4L2_CID_JPEG_COMPRESSION_QUALITY = 1
+[    6.683330] min available: 33325056
+[    6.690911] helix-venc 13200000.helix: Create instance [0]@40f07480 m2m_ctx=b0f79fb5
+[    6.695387] min available: 33193984
+[    6.699265] helix-venc 13200000.helix: 13200000.helix vcodec [0]
+[    6.704179] h264_decode_init done!
+[    6.726575] helix-venc 13200000.helix: [0] encoder release
+[    6.727292] Create instance [0]@91f1b39b m2m_ctx=bb5cec42
+[    6.740887] 13300000.felix vcodec [0]
+[    6.795411] [0] vcodec release
+[    6.810490] total_alloc_cnt: 1, total_alloc_size: 131072, total_free_size:131072, total_free_cnt:1

@@ -47,7 +47,28 @@ upstream naming, e.g. `INGENIC_WDT` not `*_WATCHDOG*`, `PWM_INGENIC_V2` not `PWM
 | Stock module | Real capability | Custom kernel config symbol | Status | Notes |
 |---|---|---|---|---|
 | `soc_watchdog` | Hardware watchdog | `CONFIG_INGENIC_WDT=y` | PARITY_CONFIRMED | Built-in on custom. |
-| `soc_efuse` | eFuse/OTP read | `CONFIG_INGENIC_EFUSE_X2000` **is not set** | **CUSTOM_REGRESSION** | Real gap - the exact driver exists in this kernel tree (`module_drivers/drivers/misc/ingenic_efuse_x2000.c`) but isn't enabled. Read-only eFuse access might reveal board calibration data stock uses; `CONFIG_INGENIC_EFUSE_WRITABLE` is a *separate* option and must stay off (OTP writes are irreversible - see safety rules). |
+| `soc_efuse` | eFuse/OTP read | `CONFIG_INGENIC_EFUSE_X2000` **is not set** | **CUSTOM_REGRESSION** (bounded follow-up done, see below) | Real gap - the exact driver exists in this kernel tree (`module_drivers/drivers/misc/ingenic_efuse_x2000.c`) but isn't enabled. `CONFIG_INGENIC_EFUSE_WRITABLE` is a *separate* option and must stay off (OTP writes are irreversible - see safety rules). |
+
+### eFuse bounded follow-up (real interface confirmed, exact consumer not identified)
+
+On the real, running stock device: `/sys/class/misc/efuse-string-version` is a real `misc_register()`
+device (`/dev/efuse-string-version`, major 10 minor 50, `crw------- root root`), not a plain sysfs
+attribute file - it exposes only the standard misc-device boilerplate (`dev`, `power`, `subsystem`,
+`uevent`), no custom readable attribute. A plain `cat`/read on `/dev/efuse-string-version` returns
+`EINVAL` ("Invalid argument"), meaning the driver expects a structured `ioctl()` call, not a simple
+`read()` - a genuine, purpose-built interface, not something opened casually by a shell script.
+`Modules linked in: ... soc_efuse(O) ...` confirms the module is loaded (tainted, out-of-tree, as
+expected for all of stock's vendor modules). No consumer *binary* was positively identified in this
+bounded pass - a broader userspace `grep -r` repeatedly hit this device's own SSH session timeout and
+did not complete (inconclusive, not negative evidence).
+
+**Classification: real interface exists and behaves like a genuine production consumer would use it
+(ioctl-gated, root-only, named for a specific purpose - a version string), but the exact consumer
+binary is not confirmed.** This is stronger evidence for a real consumer than "interface merely
+exists" and weaker than "consumer binary found and inspected". Default action holds:
+`CONFIG_INGENIC_EFUSE_X2000` stays disabled on custom - the mission's own default conclusion
+("leave disabled unless a real required consumer is proven") is the correct call given what's
+confirmed versus what remains open.
 | `ns2009_touch` | NS2009 resistive touch | `CONFIG_TOUCHSCREEN_NS2009=y` | PARITY_CONFIRMED | |
 | `lcd_general_480x272` | Display panel | `CONFIG_STAGE_OPENKE_GENERAL_480X272=y`, `CONFIG_FB_INGENIC=y` | PARITY_CONFIRMED | |
 | `hci_uart_h5_kernel_4_4_94` | Bluetooth H5 transport | custom's own `openke,bcm4343x-bt` H5 driver (`drivers/bluetooth/hci_h5.c`, this project's addition) | EXPECTED_DIFFERENCE | Different driver, same real transport/chip. BT itself is a documented, real, unfixed hardware pin-conflict with touch (`i2c4` vs. `uart3` share the same two physical pins) - see the kernel fork's `uart3` DTS comment, commit `095970ba2`. |
@@ -120,13 +141,19 @@ Full raw lists: `artifacts/parity/stock/13-platform-devices.txt`,
 
 ## Open items for the next pass
 
-1. Resolve `i2c0`, `uart5`/`6`/`7`, `spi_gpio`, and MSC2's real purpose via the Phase 2 DTB diff
-   (stock live DT vs. custom's packaged DTB) rather than guessing from platform-device names alone.
+1. **Done**: `i2c0`, `uart5`/`6`/`7`, `spi_gpio`, and `MSC2` all resolved via the Phase 2 DTB diff and
+   follow-up bounded investigations - see `docs/DTB_PARITY_REPORT.md` and
+   `docs/PIN_OWNERSHIP_MAP.md`. `MSC2` fixed and verified (`72236226a`).
 2. **Confirmed**: `CONFIG_I2C_CHARDEV` is off (`# CONFIG_I2C_CHARDEV is not set`). This is a
    zero-risk, non-hardware-behavior kernel config change (adds `/dev/i2c-N` chardev nodes only,
    touches no pins/timing/drivers) worth enabling before the Phase 4 I2C bus audit, since that audit
    explicitly prefers device-tree/driver inventory over generic bus probing, but still needs
-   `/dev/i2c-N` to exist for known-address reads.
-3. `gpio_keys` and `ingenic-aux.*` need the pin ownership map (Phase 3) before any conclusions.
-4. The one confirmed regression (`CONFIG_INGENIC_EFUSE_X2000` off) is a candidate for a future,
-   narrowly-scoped, read-only-only enablement - not done in this pass.
+   `/dev/i2c-N` to exist for known-address reads. Not yet done.
+3. `gpio_keys` and `ingenic-aux.*` need the full pin ownership map (Phase 3B, not yet done - only the
+   dispute-specific pins from Phase 3A are mapped so far).
+4. The one confirmed regression (`CONFIG_INGENIC_EFUSE_X2000` off) had its bounded consumer follow-up
+   completed - see the eFuse section above. Default action (leave disabled) holds; a future,
+   narrowly-scoped enablement remains a candidate but isn't justified by what's confirmed so far.
+5. **New from this pass**: `uart1` (printer MCU link) and its real, active conflict with `lcd_vdd_en`
+   - fixed and verified, `970bd6b83`. `bt_reg_on` (`GPD-5`) classified `BT_POWER_REQUIRED` (high
+   confidence) but not implemented on custom.

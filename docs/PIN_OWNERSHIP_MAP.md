@@ -41,10 +41,22 @@ bring-up work (which was scoped to WiFi only, and succeeded without ever needing
 combo chip's BT side apparently doesn't require its own reg-on toggle to at least power up, since
 custom's WiFi works fine without ever touching `GPD-5`). It may explain part of why BT doesn't work
 on custom beyond the already-documented `uart3`/`i2c4` pin-sharing conflict - even if the UART pins
-were freed up, BT might still need this dedicated enable line raised. **Not acted on in this pass** -
-flagged for the Phase 4 audit's Bluetooth feasibility classification. Per the safety rules, this pin
-must not be driven experimentally without first confirming its stock-equivalent idle/active levels
-and whether raising it has any effect independent of the `uart3` conflict.
+were freed up, BT might still need this dedicated enable line raised.
+
+**Follow-up (bounded, read-only investigation, no pin driven on stock)**: on the same real, working
+stock device, `rfkill list` shows a real, unblocked `bluetooth` entry (not soft/hard blocked), and
+`ps` shows live kernel worker threads `btudpwork` and `btfwwork` (Broadcom BT firmware-loading
+workqueues) actively running. `bt_reg_on` was `out hi` at every point checked, from early boot
+through steady state - no toggling observed (though this session's captures were all snapshots, not
+a continuous scope trace).
+
+**Classification: `BT_POWER_REQUIRED` (high confidence, not 100% proven).** The combination of a
+real rfkill device, live BT firmware-loading kernel threads, and a steadily-high dedicated GPIO is
+strong, converging evidence that raising `GPD-5` is a real precondition for BT power, independent of
+`PA01` (the shared rail) and `WL_REG_ON`. **Not implemented on custom in this pass** - per the safety
+rules, this needs correct polarity, power/reset ordering, delay requirements, and UART association
+worked out as a real, separate feature proposal before any pin is driven, not just copying stock's
+raw-HIGH value blind.
 
 ## `uart1` (printer MCU link) - fixed and verified
 

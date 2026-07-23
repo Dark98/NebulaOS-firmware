@@ -44,17 +44,25 @@ not a regression.
 | `uart7` pins | `gpa` (phandle `0x08`) pins 8-9 = `GPA-8`/`GPA-9` (gpio 8/9) | - |
 | Live pinctrl claim (stock) | `10035000.serial ... function uart5-pin group uart5-pc` (and the equivalent for 6/7) - **genuinely, actively claimed** | All six pins: `(MUX UNCLAIMED) (GPIO UNCLAIMED)` |
 
-**Classification: `STOCK_ENABLED_BUT_UNUSED` (pin-level), purpose not yet identified.** Unlike
-`i2c0`, this is **not** vendor-DT residue - each UART has its own real, distinct pin group and the
-live debugfs capture proves the pinctrl core genuinely committed the mux on the real running stock
-device. This is deliberate board wiring, not an inherited-and-ignored reference-board default.
-However, no evidence of an active *consumer* was found in this pass (`/proc/tty/driver/serial`
-doesn't exist on this stock kernel build to check open/usage counts, and no userspace reference was
-found in the captured inventory). Likely candidates: factory test points, a debug header, or
-reserved for a board variant not populated on this SKU. **Do not enable in custom** without a
-positively identified purpose - enabling three real, working UARTs with no known consumer just for
-DT-visual parity is exactly the "configuration-checkbox parity" the mission explicitly says not to
-chase.
+**Classification: `STOCK_ENABLED_PURPOSE_UNKNOWN`** (revised from `STOCK_ENABLED_BUT_UNUSED` - a
+disconnected printer mainboard proves nothing about why stock muxes these pins, only that nothing
+was observed talking over them during this session). Unlike `i2c0`, this is **not** vendor-DT
+residue - each UART has its own real, distinct pin group and the live debugfs capture proves the
+pinctrl core genuinely committed the mux on the real running stock device. Follow-up evidence
+gathered:
+
+- `/proc/interrupts` on stock lists only `uart4`'s IRQ line - `uart5`/`6`/`7` never appear at all.
+  8250-family UART drivers request their IRQ on `open()`, not at probe time, so this means nothing on
+  stock has ever opened `/dev/ttyS5`/`6`/`7` during this session's uptime, not that the hardware can't
+  fire an interrupt.
+- `/dev/ttyS5`, `/dev/ttyS6`, `/dev/ttyS7` all exist as real device nodes (`crw-rw---- dialout`),
+  confirming the driver bound successfully - consistent with "real, working, currently idle", not
+  "broken" or "never initialized".
+
+Likely candidates remain factory test points, a debug header, or reserved for a board variant not
+populated on this SKU - none confirmed. **Do not enable in custom** without a positively identified
+purpose - enabling three real, working UARTs with no known consumer just for DT-visual parity is
+exactly the "configuration-checkbox parity" the mission explicitly says not to chase.
 
 ## `spi_gpio`
 
@@ -64,12 +72,26 @@ chase.
 | Live pinctrl claim | `(MUX UNCLAIMED)` on all four - **expected and correct** for a bit-banged SPI bus, which drives pins as plain GPIO, never through a dedicated SPI alternate function | n/a |
 | Live GPIO claim | All four actively claimed and named: `spi_gpio` (x3) and `spi2.0` (chip-select) - see `40-debugfs-gpio.txt` | n/a |
 
-**Classification: `REAL_STOCK_FUNCTION`, exact child device not yet identified.** The presence of a
-distinctly-named, actively-driven chip-select GPIO (`spi2.0`) is strong evidence of a real, bound SPI
-child device - this is not vendor-DT residue. What it actually talks to isn't identified in this
-pass (would need the DT's `spi@2,0`-style child node inspected directly, not yet located in the
-decoded stock tree by address). Flagged for the Phase 4 SPI/QSPI audit. Per the safety rules, no
-transactions were sent and none should be until the child device is identified.
+**Classification: `FACTORY_TEST_DEVICE` (moderate confidence).** Identified via
+`/sys/bus/spi/devices/spi2.0/uevent` on the real, running stock device:
+
+```
+DRIVER=spidev
+OF_NAME=spidev
+OF_FULLNAME=/spi_gpio/spidev@0
+OF_COMPATIBLE_0=rohm,dh2228fv
+```
+
+`rohm,dh2228fv` is a well-known Linux kernel/vendor idiom: a generic, non-specific compatible string
+used specifically to bind the generic `spidev` driver (raw userspace SPI access via
+`/dev/spidevX.Y`), not a real, function-specific kernel driver. `/dev/spidev2.0` exists, root-only
+(`crw------- root root`). This pattern - a raw userspace-accessible SPI bus, no dedicated driver, and
+root-only access - is the standard shape of a factory calibration/test tool interface, not an
+end-user product feature. No consumer binary was positively identified in this bounded pass (a
+broader `grep -r` across `/etc`/`/usr` repeatedly hit the SSH session's own timeout on this device
+and was not completed - genuinely inconclusive, not negative evidence). Flagged for the Phase 4
+SPI/QSPI audit if a full identification is ever needed. Per the safety rules, no SPI transactions
+were sent and none should be until the child device's real function is confirmed.
 
 ## `MSC2` (`13490000.msc`)
 
@@ -123,7 +145,9 @@ the dedicated Phase 4 audio feasibility study.
 | Item | Classification | Action this pass |
 |---|---|---|
 | `i2c0` | `STOCK_ENABLED_BUT_UNUSED` (vendor-DT residue) | None needed - no real function to preserve |
-| `uart5`/`6`/`7` | `STOCK_ENABLED_BUT_UNUSED` (real pins, unknown consumer) | Leave disabled on custom; documented as a known gap, not a regression |
-| `spi_gpio` | `REAL_STOCK_FUNCTION` (child device confirmed, not identified) | Flagged for Phase 4 SPI audit; no transactions sent |
+| `uart5`/`6`/`7` | `STOCK_ENABLED_PURPOSE_UNKNOWN` (real pins, no IRQ activity, no open tty) | Leave disabled on custom; documented as a known gap, not a regression |
+| `spi_gpio`/`spi2.0` | `FACTORY_TEST_DEVICE` (moderate confidence - generic `spidev`, root-only, no consumer binary found) | Flagged for Phase 4 SPI audit; no transactions sent |
 | `MSC2` | `CUSTOM_REGRESSION_FIXED` - was a confirmed pin conflict with `pwm0`/backlight | **Fixed and verified**, `72236226a` |
 | `as-dmic` (audio) | `AVAILABLE_DISABLED` (already documented) | No change this pass |
+| `bt_reg_on` (`GPD-5`) | `BT_POWER_REQUIRED` (high confidence, see `docs/PIN_OWNERSHIP_MAP.md`) | Not implemented on custom; flagged for BT feasibility work |
+| eFuse (`efuse-string-version`) | Real interface confirmed, consumer binary not identified (see `docs/STOCK_PARITY_MATRIX.md`) | `CONFIG_INGENIC_EFUSE_X2000` stays disabled |

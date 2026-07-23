@@ -12,8 +12,8 @@ at a comparable boot stage on each system per `scripts/parity/capture-state.sh`.
 
 | Pin | Bank/offset | Stock mux claim | Custom mux claim | Stock GPIO owner | Custom GPIO owner | Direction/level (stock) | Direction/level (custom) | Classification |
 |---|---|---|---|---|---|---|---|---|
-| `GPC-0` | `gpc` offset 0 (`gpio-64`) | `(MUX UNCLAIMED)` at capture time (real alt-function pin for `pwm0`, per `x2000-pinctrl.dtsi`'s `pwm0_pc`) | `(MUX UNCLAIMED)` | `backlight_pwm0`, `in hi` | `ingenic,sdr` (MSC2's `ingenic,sdr-gpio`), `out hi` | in, hi | **out, hi** | **CONFLICT** - custom drives as GPIO output what is `pwm0`'s only real pin on this SoC. See MSC2 finding below. |
-| `GPC-12` | `gpc` offset 12 (`gpio-76`) | No claim in stock's capture | `cd` (MSC2's `cd-gpio`), `in hi IRQ ACTIVE LOW` | (none) | `cd` | unclaimed | in, hi, IRQ, active-low | `CUSTOM_ONLY_UNVERIFIED` - MSC2 card-detect. No known physical slot; safety rules forbid probing further without identifying real routing. |
+| `GPC-0` | `gpc` offset 0 (`gpio-64`) | `(MUX UNCLAIMED)` at capture time (real alt-function pin for `pwm0`, per `x2000-pinctrl.dtsi`'s `pwm0_pc`) | **Fixed**: no longer claimed by anything | `backlight_pwm0`, `in hi` | **Fixed**: gone from the live GPIO list entirely | in, hi | unclaimed | **RESOLVED** - MSC2 disabled, `72236226a`, verified live |
+| `GPC-12` | `gpc` offset 12 (`gpio-76`) | No claim in stock's capture | **Fixed**: no longer claimed | (none) | **Fixed**: gone from the live GPIO list entirely | unclaimed | unclaimed | **RESOLVED** - matches stock's unclaimed state |
 | `GPC-5` | `gpc` offset 5 (`gpio-69`) | `10035000.serial` function `uart5-pin` group `uart5-pc` | `(MUX UNCLAIMED)` | (none named) | (none) | muxed to uart5 alt-fn | fully unclaimed | `STOCK_ENABLED_BUT_UNUSED` |
 | `GPC-6` | `gpc` offset 6 (`gpio-70`) | `10035000.serial` function `uart5-pin` group `uart5-pc` | `(MUX UNCLAIMED)` | (none named) | (none) | muxed to uart5 alt-fn | fully unclaimed | `STOCK_ENABLED_BUT_UNUSED` |
 | `GPA-6` | `gpa` offset 6 | `10036000.serial` function `uart6-pin` group `uart6-pa` | `(MUX UNCLAIMED)` | (none named) | (none) | muxed to uart6 alt-fn | fully unclaimed | `STOCK_ENABLED_BUT_UNUSED` |
@@ -56,12 +56,13 @@ real, active conflict, not hypothetical. Fixed in kernel fork commit `970bd6b83`
 `(MUX UNCLAIMED)`, `lcd_vdd_en` is `GPC-21`'s sole owner, `uart1` claims only `GPC-23`/`24`. Full
 details: `docs/PRINTER_MAINBOARD_PRECONNECTION_CHECKLIST.md`.
 
-## MSC2 disable recommendation (from `DTB_PARITY_REPORT.md`)
+## MSC2 disable - fixed and verified
 
-`GPC-0` and `GPC-12` are the two pins at stake. Disabling `&msc2` should return both to stock's own
-unclaimed/PWM-alt-function state. The exact verification steps (before connecting anything else)
-belong in a dedicated commit, not this document - see the "Required next checkpoint report" for the
-proposed isolated commit and its post-rebuild verification checklist.
+Kernel fork commit `72236226a` disables `&msc2`. Verified live: `mmc2` no longer appears under
+`/sys/bus/mmc/devices` (only `mmc0`/`mmc1`), `GPC-0` and `GPC-12` no longer appear anywhere in the
+GPIO claim list, `mmc0`/`mmc1` probe identically to before, and the pre-existing
+`gpiod_set_value_cansleep: invalid GPIO (errorpointer)` warnings are unchanged - confirming they
+were never MSC2-related.
 
 ## Not yet covered (Phase 3B)
 

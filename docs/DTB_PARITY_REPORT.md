@@ -99,14 +99,15 @@ this is not itself conclusive, but the *identity* of the pin is: it's the one an
 this SoC). On custom, `GPC-0` is claimed *exclusively* by MSC2's `ingenic,sdr-gpio` property, driven
 as a plain GPIO output HIGH - there is no separate `backlight_pwm0`-named claim on custom at all.
 
-**Classification: `CUSTOM_ONLY_UNVERIFIED`, real pin conflict with a working peripheral
-(backlight PWM).** This matches the mission's own leading hypothesis (inherited Halley5
-reference-board MSC2 definition, no physical slot on this board, no stock usage) and adds concrete,
-structural evidence beyond "no card responds": the `sd-gpios`/`sdr-gpio` placeholder-that-isn't-
-actually-a-placeholder is actively claiming a pin a real, working subsystem needs. **Recommendation:
-disable MSC2** (`&msc2 { status = "disabled"; };`) as an isolated commit, then verify eMMC/WiFi/
-backlight are all unaffected and the `GPC-0`/`GPC-12` pins return to stock-equivalent unclaimed
-state. See `docs/PIN_OWNERSHIP_MAP.md` for the full pin table.
+**Classification: `CUSTOM_ONLY_CONFLICTING` → `CUSTOM_REGRESSION_FIXED`.** Kernel fork commit
+`72236226a` disables `&msc2` (`status = "disable"`, matching this codebase's own convention). Verified
+on real hardware after rebuild+reflash: `mmc2` no longer appears under `/sys/bus/mmc/devices` (only
+`mmc0`/`mmc1`), `GPC-0` and `GPC-12` no longer appear anywhere in the live GPIO claim list, `mmc0`
+(eMMC) and `mmc1` (WiFi) probe identically to before with byte-for-byte the same trace evidence, and
+WiFi/Moonraker/SQLite/OTA-auto-confirm all remain healthy. One important negative result: the
+pre-existing `gpiod_set_value_cansleep: invalid GPIO (errorpointer)` dmesg warnings are **unchanged**
+after this fix - confirmed, not assumed, that they were never MSC2-related. See
+`docs/PIN_OWNERSHIP_MAP.md` for the full pin table.
 
 ## Audio DMIC (`134da000.as-dmic`)
 
@@ -124,5 +125,5 @@ the dedicated Phase 4 audio feasibility study.
 | `i2c0` | `STOCK_ENABLED_BUT_UNUSED` (vendor-DT residue) | None needed - no real function to preserve |
 | `uart5`/`6`/`7` | `STOCK_ENABLED_BUT_UNUSED` (real pins, unknown consumer) | Leave disabled on custom; documented as a known gap, not a regression |
 | `spi_gpio` | `REAL_STOCK_FUNCTION` (child device confirmed, not identified) | Flagged for Phase 4 SPI audit; no transactions sent |
-| `MSC2` | `CUSTOM_ONLY_UNVERIFIED`, confirmed pin conflict with `pwm0`/backlight | **Recommend disabling** - see `docs/PIN_OWNERSHIP_MAP.md` |
+| `MSC2` | `CUSTOM_REGRESSION_FIXED` - was a confirmed pin conflict with `pwm0`/backlight | **Fixed and verified**, `72236226a` |
 | `as-dmic` (audio) | `AVAILABLE_DISABLED` (already documented) | No change this pass |

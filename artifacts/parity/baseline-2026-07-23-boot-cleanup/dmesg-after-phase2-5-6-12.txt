@@ -1,0 +1,120 @@
+dmesg; echo ___ENDLOG___
+[    0.000000] videodev: Linux video capture interface: v2.00
+[    0.000000] Advanced Linux Sound Architecture Driver Initialized.
+[    0.000000] Bluetooth: Core ver 2.22
+[    0.000000] NET: Registered PF_BLUETOOTH protocol family
+[    0.000000] Bluetooth: HCI device and connection manager initialized
+[    0.000000] Bluetooth: HCI socket layer initialized
+[    0.000000] Bluetooth: L2CAP socket layer initialized
+[    0.000000] Bluetooth: SCO socket layer initialized
+[    0.000000] ingenic-dma 13420000.dma: error -ENXIO: IRQ pdmam not found
+[    0.000000] ingenic-dma 13420000.dma: INGENIC SoC DMA initialized
+[    0.000000]  (null): set:374  hold:375 dev=150000000 h=750 l=750
+[    0.000000] ingenic-i2c 10053000.i2c: i2c_ingenic_probe success.
+[    0.000000]  (null): set:374  hold:375 dev=150000000 h=750 l=750
+[    0.000000] ingenic-i2c 10054000.i2c: i2c_ingenic_probe success.
+[    0.000018] clocksource: Switched to clocksource jz_clocksource
+[    0.013959] NET: Registered PF_INET protocol family
+[    0.018966] IP idents hash table entries: 4096 (order: 3, 32768 bytes, linear)
+[    0.026735] tcp_listen_portaddr_hash hash table entries: 256 (order: 0, 5120 bytes, linear)
+[    0.035195] Table-perturb hash table entries: 65536 (order: 6, 262144 bytes, linear)
+[    0.043063] TCP established hash table entries: 2048 (order: 1, 8192 bytes, linear)
+[    0.050808] TCP bind hash table entries: 2048 (order: 4, 81920 bytes, linear)
+[    0.058085] TCP: Hash tables configured (established 2048 bind 2048)
+[    0.064540] UDP hash table entries: 128 (order: 0, 6144 bytes, linear)
+[    0.071114] UDP-Lite hash table entries: 128 (order: 0, 6144 bytes, linear)
+[    0.078249] NET: Registered PF_UNIX/PF_LOCAL protocol family
+[    0.086208] Initialise system trusted keyrings
+[    0.091370] workingset: timestamp_bits=30 max_order=16 bucket_order=0
+[    0.098024] squashfs: version 4.0 (2009/01/31) Phillip Lougher
+[    0.103908] jffs2: version 2.2. (NAND) © 2001-2006 Red Hat, Inc.
+[    0.236814] Key type asymmetric registered
+[    0.240909] Asymmetric key parser 'x509' registered
+[    0.245871] io scheduler mq-deadline registered
+[    0.250443] io scheduler kyber registered
+[    0.258958] dwc2 13500000.otg: supply vusb_d not found, using dummy regulator
+[    0.266404] dwc2 13500000.otg: supply vusb_a not found, using dummy regulator
+[    0.600071] dwc2 13500000.otg: EPs: 9, dedicated fifos, 3576 entries in SPRAM
+[    0.607335] dwc2 13500000.otg: DWC OTG Controller
+[    0.612072] dwc2 13500000.otg: new USB bus registered, assigned bus number 1
+[    0.619199] dwc2 13500000.otg: irq 9, io mem 0x13500000
+[    0.624633] usb usb1: New USB device found, idVendor=1d6b, idProduct=0002, bcdDevice= 6.06
+[    0.632964] usb usb1: New USB device strings: Mfr=3, Product=2, SerialNumber=1
+[    0.640323] usb usb1: Product: DWC OTG Controller
+[    0.645046] usb usb1: Manufacturer: Linux 6.6.18-rt23 dwc2_hsotg
+[    0.651150] usb usb1: SerialNumber: 13500000.otg
+[    0.656479] hub 1-0:1.0: USB hub found
+[    0.660260] hub 1-0:1.0: 1 port detected
+[    0.665019] usbcore: registered new interface driver usb-storage
+[    0.671549] mousedev: PS/2 mouse device common for all mice
+[    0.677311] input: ns2009_ts as /devices/platform/apb/10054000.i2c/i2c-4/4-0048/input/input0
+[    0.686438] usbcore: registered new interface driver uvcvideo
+[    0.692743] sdhci: Secure Digital Host Controller Interface driver
+[    0.698942] sdhci: Copyright(c) Pierre Ossman
+[    0.703867] usbcore: registered new interface driver usbkbd
+[    0.709532] usbcore: registered new interface driver usbmouse
+[    0.716420] NET: Registered PF_PACKET protocol family
+[    0.721897] as-platform 134d0000.as-platform: probe success!!!
+[    0.728163] as-dsp 134d4000.as-dsp: probe success!!
+[    0.733399] as-mixer 134dc000.as-mixer: amixer platform probe success
+[    0.740856] as-baic 134d5000.as-baic: baic platform probe success
+[    0.747419] as-spdif 134db000.as-spdif: spdif platform probe success
+[    0.754259] as-virtual-fe 0.as-virtual-fe: probe success!!!
+[    0.760147]  alcl_gain = 0x1f hpoutl_gain = 0x0 micbias = 0x0
+[    0.765910] icodec 10020000.icodec: component icodec platfrom probe success
+[    0.773586] x2000-sound sound: ASoC: CPU DAI DMIC not registered
+[    0.779902] x2000-sound sound: snd_soc_register_card failed -517
+[    0.786268] ingenic-trng 10072000.dtrng: ingenic HW dtrng Probe success!
+[    0.793255] copy logo_buf from .init.data section, size=29480
+[    0.799521] ingenic-fb 13050000.dpu: mode->refresh: 60, mode->pixclock: 92962, rate: 10756800, modex->pixclock: 92962
+[    0.810248] ingenic-fb 13050000.dpu: dpu_ctrl_init start!
+[    0.815815] ingenic-fb 13050000.dpu: rdma_desc @ (ptrval) size: 144
+[    0.822120] ingenic-fb 13050000.dpu: composer framedesc @ (ptrval) size 144
+[    0.829164] ingenic-fb 13050000.dpu: composer layerdesc @ (ptrval) size 576
+[    0.836242] ingenic-fb 13050000.dpu: dpu_ctrl_init success
+[    0.842810] ingenic-fb 13050000.dpu: vidmem @ (ptrval) size 1566720
+[    0.875779] ingenic-fb 13050000.dpu: fbdev->rot_angle=0, swap_dims=0
+[    0.882184] ingenic-fb 13050000.dpu: fbdev get swap param error! please check dts.
+[    0.891192] start parse remote-endpoint!
+[    0.895911] start parse remote-endpoint!
+[    0.900652] ingenic-mscaler 13702300.mscaler: error -ENXIO: IRQ index 0 not found
+[    0.908184] ingenic-mscaler 13702300.mscaler: No MScaler IRQ specified
+[    0.914966] ingenic-mscaler 13802300.mscaler: error -ENXIO: IRQ index 0 not found
+[    0.922507] ingenic-mscaler 13802300.mscaler: No MScaler IRQ specified
+[    0.930704] ingenic-rot 13070000.rotate: assigned reserved memory node reserved_mem@6000000
+[    0.939349] ingenic-rot 13070000.rotate: device registered as /dev/video0
+[    0.946909] helix-venc 13200000.helix: assigned reserved memory node reserved_mem@6000000
+[    0.955164] helix-venc 13200000.helix: encoder(helix) registered as /dev/video1
+[    0.963299] felix-vdec 13300000.felix: assigned reserved memory node reserved_mem@6000000
+[    0.971555] felix-vdec 13300000.felix: h264decoder(felix) registered as /dev/video2
+[    0.980181] ingenic SADC driver registeres over!
+[    0.985528] ingenic sadc aux0 probe success
+[    0.990046] ingenic sadc aux1 probe success
+[    0.994499] ingenic sadc aux2 probe success
+[    0.998931] ingenic sadc aux3 probe success
+[    1.003388] ingenic sadc aux4 probe success
+[    1.007814] ingenic sadc aux5 probe success
+[    1.012223] ingenic-tcu 10002000.tcu: error -ENXIO: IRQ index 1 not found
+[    1.019045] ingenic-tcu 10002000.tcu: not support irq trigger function
+[    1.025717] ingenic-tcu 10002000.tcu: ingenic TCU driver register completed
+[    1.033338] rsa 13480000.rsa: rsa driver probe ok!
+[    1.039358] openke: mmc_of_parse ok, host->mmc->parent=13450000.msc of_node=/ahb2/msc@13450000 pwrseq=00000000
+[    1.080769] mmc0: SDHCI controller on ingenic-sdhci [13450000.msc] using ADMA
+[    1.088587] ingenic_gpio_request: GP:GPD  used_pins_bitmap: 0X07FE3F3C
+[    1.095179] CPU: 0 PID: 1 Comm: swapper/0 Not tainted 6.6.18-rt23 #2
+[    1.101587] Stack : 81640820 00000004 8100bea0 81460364 81451af4 00000000 80d90000 80ba55bc
+[    1.110060]         814603f0 80d2e2e3 80d9458c 00000000 00000000 00000001 81451aa0 814669a0
+[    1.118536]         00000000 00000000 80ba55bc 814519a0 fffffdff 8145199c 00000000 00000000
+[    1.127013]         05ac538e 814518b5 ffffffff ffffffff 80ba55bc 00000001 815c04f4 815c04f4
+[    1.135489]         fffffff0 80abafcc 81451cc0 00000008 00000000 80012620 00000000 80d90000
+[    1.143965]         ...
+[    1.146436] Call Trace:
+[    1.148908] [<8001e998>] show_stack+0x28/0xf0
+[    1.153326] [<80991b1c>] dump_stack_lvl+0x5c/0x7c
+[    1.158091] [<8093c828>] ingenic_gpio_request+0x74/0x94
+[    1.163390] [<80387b78>] gpiod_request_commit+0x104/0x1cc
+[    1.168863] [<80388c2c>] gpiod_request+0x8c/0x17c
+[    1.173632] [<80389e54>] gpiod_find_and_request+0xb8/0x4c8
+[    1.179193] [<8038a304>] gpiod_get_index+0x64/0x98
+[    1.184050] [<8038bc1c>] devm_gpiod_get_index+0x1c/0xbc
+[ 

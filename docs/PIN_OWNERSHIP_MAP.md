@@ -135,6 +135,49 @@ GPIO claim list, `mmc0`/`mmc1` probe identically to before, and the pre-existing
 `gpiod_set_value_cansleep: invalid GPIO (errorpointer)` warnings are unchanged - confirming they
 were never MSC2-related.
 
+## `GPD-4`/`GPD-5` also claimed by BAIC4 audio - real two-device conflict, root-caused, not fixed
+
+Boot-cleanup mission Phase 3A/3B (2026-07-23): the `ingenic_gpio_request: GP:GPD ... gpio functions
+has redefinition` warning with a full kernel backtrace, present in every boot log since the first
+capture, was root-caused via temporary instrumentation (kernel fork `41598d0b3`, reverted
+`8d4756c62` once the finding was confirmed - see `docs/BOOT_WARNING_AUDIT.md`).
+
+**The mechanism**: `pinctrl-ingenic.c` tracks pin ownership in a per-bank `used_pins_bitmap` two
+different ways - once inside `ingenic_gpio_request()` (the plain-GPIO consumer path, e.g.
+`devm_gpiod_get_optional()`), and independently inside the pinmux-group-parsing path
+(`jzgc->used_pins_bitmap |= grp->pinmux_bitmap;`, fired whenever ANY device's `pinctrl-N` property
+references a group covering that bank - not gated behind any conflict check at all). Only the first
+path prints a warning; the second silently sets the same bits.
+
+**The conflict**: `&as_be_baic` (a real, enabled, successfully-probing audio device - confirmed live:
+`as-baic 134d5000.as-baic: baic platform probe success`) sets `pinctrl-0 = <&baic4_pd>;`
+(`halley5_v30.dts:721-724`). `baic4_pd`'s own definition is `ingenic,pinmux = <&gpd 2 5>;`
+(`x2000-pinctrl.dtsi:576`) - covering `GPD-2` through `GPD-5`, which **includes `GPD-4`/`GPD-5`**,
+the exact same pins already documented above as `wlan_reg_on`/`bt_reg_on`. `as_be_baic` probes early
+(around the same window as the display/audio subsystem, well before `msc1`'s own probe), marking
+`GPD-4`/`GPD-5` "used" via the pinmux-group path. When `msc1`'s `sdhci_ingenic_probe()` later
+acquires `wlan-reg-on-gpios` (`&gpd 4 ...`, `halley5_v30.dts:513`) as a plain GPIO, it finds the bit
+already set and prints the warning + backtrace - confirmed directly via instrumented logging:
+`OPENKE-DIAG: SECOND/CONFLICTING request for GPD-4 (global gpio 100)`, immediately followed by
+`wlan-reg-on -> acquired` (the underlying `pinctrl_gpio_request()` call happens regardless of the
+warning and succeeds every time).
+
+**Classification: `REAL_TWO_DEVICE_PIN_CONFLICT`** (not a bookkeeping false-positive, not a duplicate
+request from the same device) - the SoC's own pin multiplexer genuinely offers `GPD-4`/`GPD-5` as
+either plain GPIO or part of BAIC4's audio group, and this board's DTS references both uses on
+different nodes. Both currently work (WiFi/BT reg-on GPIOs end up correctly acquired; `as_be_baic`
+probes successfully) - this is presently a noisy-but-harmless warning, not a functional break, unlike
+the earlier `uart1`/`lcd_vdd_en` conflict this project already fixed (which had a real behavioral
+consequence).
+
+**Not fixed this pass.** Disabling `&as_be_baic`'s pin claim would require positive evidence it
+serves no real product audio function on this board - the project's own confirmed, working audio
+path is via `icodec`/speaker (`x2000-sound sound: Sound Card successed`), a different interface, but
+that doesn't by itself prove BAIC4 is unused. Per the mission's own explicit guardrails ("do not
+release a pin owned by another device," "do not disable a controller until stock behavior and
+product use are known"), this is documented and left alone pending a dedicated, separate
+investigation into BAIC4's actual product role - not bundled into this boot-cleanup cycle.
+
 ## Not yet covered (Phase 3B)
 
 This pass only covers the pins in dispute. The full board pin map (eMMC, WiFi SDIO, display, touch,

@@ -1,0 +1,118 @@
+dmesg | sed -n '90,240p'; echo ___ENDLOG2___
+[    0.915594] ingenic-mscaler 13802300.mscaler: No MScaler IRQ specified
+[    0.923718] ingenic-rot 13070000.rotate: assigned reserved memory node reserved_mem@6000000
+[    0.932393] ingenic-rot 13070000.rotate: device registered as /dev/video0
+[    0.939916] helix-venc 13200000.helix: assigned reserved memory node reserved_mem@6000000
+[    0.948174] helix-venc 13200000.helix: encoder(helix) registered as /dev/video1
+[    0.956325] felix-vdec 13300000.felix: assigned reserved memory node reserved_mem@6000000
+[    0.964582] felix-vdec 13300000.felix: h264decoder(felix) registered as /dev/video2
+[    0.973497] ingenic SADC driver registeres over!
+[    0.978725] ingenic sadc aux0 probe success
+[    0.983234] ingenic sadc aux1 probe success
+[    0.987673] ingenic sadc aux2 probe success
+[    0.992135] ingenic sadc aux3 probe success
+[    0.996559] ingenic sadc aux4 probe success
+[    1.001016] ingenic sadc aux5 probe success
+[    1.005408] ingenic-tcu 10002000.tcu: error -ENXIO: IRQ index 1 not found
+[    1.012245] ingenic-tcu 10002000.tcu: not support irq trigger function
+[    1.018881] ingenic-tcu 10002000.tcu: ingenic TCU driver register completed
+[    1.026539] rsa 13480000.rsa: rsa driver probe ok!
+[    1.032594] openke: mmc_of_parse ok, host->mmc->parent=13450000.msc of_node=/ahb2/msc@13450000 pwrseq=00000000
+[    1.072618] mmc0: SDHCI controller on ingenic-sdhci [13450000.msc] using ADMA
+[    1.080469] ingenic_gpio_request: GP:GPD  used_pins_bitmap: 0X07FE3F3C
+[    1.087054] CPU: 0 PID: 1 Comm: swapper/0 Not tainted 6.6.18-rt23 #2
+[    1.093472] Stack : 81642080 00000004 8101bea0 81460364 81451af4 00000000 80da0000 80ba6d8c
+[    1.101945]         814603f0 80d302e3 80da458c 00000000 00000000 00000001 81451aa0 814669a0
+[    1.110421]         00000000 00000000 80ba6d8c 814519a0 fffffdff 8145199c 00000000 00000000
+[    1.118896]         05305970 814518b5 ffffffff ffffffff 80ba6d8c 00000001 815c04f4 815c04f4
+[    1.127373]         fffffff0 80abc78c 81451cc0 00000008 00000000 80012620 00000000 80da0000
+[    1.135849]         ...
+[    1.138320] Call Trace:
+[    1.140793] [<8001e998>] show_stack+0x28/0xf0
+[    1.145209] [<80991b1c>] dump_stack_lvl+0x5c/0x7c
+[    1.149975] [<8093c838>] ingenic_gpio_request+0x74/0x94
+[    1.155275] [<80387b78>] gpiod_request_commit+0x104/0x1cc
+[    1.160748] [<80388c2c>] gpiod_request+0x8c/0x17c
+[    1.165514] [<80389e54>] gpiod_find_and_request+0xb8/0x4c8
+[    1.171079] [<8038a304>] gpiod_get_index+0x64/0x98
+[    1.175933] [<8038bc1c>] devm_gpiod_get_index+0x1c/0xbc
+[    1.181232] [<8038c210>] devm_gpiod_get_optional+0x14/0x44
+[    1.186793] [<8092d660>] sdhci_ingenic_probe+0x304/0x6d4
+[    1.192180] [<80400ab8>] platform_probe+0x6c/0xcc
+[    1.196946] [<803fd714>] really_probe+0xec/0x468
+[    1.201627] [<803fdb3c>] __driver_probe_device+0xac/0x270
+[    1.207099] [<803fdd48>] driver_probe_device+0x48/0x110
+[    1.212399] [<803fe0b8>] __driver_attach+0x14c/0x200
+[    1.217430] [<803fb1c0>] bus_for_each_dev+0x70/0xbc
+[    1.222376] [<803fc6f8>] bus_add_driver+0x110/0x234
+[    1.227319] [<803ff12c>] driver_register+0x88/0x15c
+[    1.232264] [<80010500>] do_one_initcall+0x40/0x290
+[    1.237208] [<80d45f00>] kernel_init_freeable+0x1fc/0x29c
+[    1.242683] [<80992984>] kernel_init+0x24/0x118
+[    1.247272] [<80017ccc>] ret_from_kernel_thread+0x14/0x1c
+[    1.252749] 
+[    1.254292] module_drivers/drivers/pinctrl/pinctrl-ingenic.c:gpio functions has redefinition
+[    1.262869] openke: WLAN_REG_ON GPIO acquired, direction_output_raw(0) ret=0
+[    1.270058] openke: mmc_of_parse ok, host->mmc->parent=13460000.msc of_node=/ahb2/msc@13460000 pwrseq=00000000
+[    1.309455] mmc1: SDHCI controller on ingenic-sdhci [13460000.msc] using ADMA
+[    1.318078] ingenic-pwm 134c0000.pwm: ingenic-x2000 Probe of pwm success!
+[    1.326188] 10031000.serial: ttyS1 at MMIO 0x10031000 (irq = 54, base_baud = 9375000) is a uart1
+[    1.335854] ingenic pinctrl 10010000.pinctrl: pin GPC-25 already requested by 10054000.i2c; cannot claim for 10033000.serial
+[    1.347248] ingenic pinctrl 10010000.pinctrl: pin-89 (10033000.serial) status -22
+[    1.354850] ingenic pinctrl 10010000.pinctrl: could not request pin 89 (GPC-25) from group uart3-pc  on device ingenic pinctrl
+[    1.366395] ingenic-uart 10033000.serial: Error applying setting, reverse things back
+[    1.374901] 10034000.serial: ttyS4 at MMIO 0x10034000 (irq = 51, base_baud = 9375000) is a uart4
+[    1.383832] printk: legacy console [ttyS4] enabled
+[    1.393609] printk: legacy bootconsole [early0] disabled
+[    1.410566] mmc0: new HS200 MMC card at address 0001
+[    1.416323] mmcblk0: mmc0:0001 DG4008 7.28 GiB
+[    1.422814] Alternate GPT is invalid, using primary GPT.
+[    1.428400]  mmcblk0: p1 p2 p3 p4 p5 p6 p7 p8 p9 p10
+[    1.437417] mmcblk0boot0: mmc0:0001 DG4008 4.00 MiB
+[    1.440188] rtc-ingenic 10003000.rtc: registered as rtc0
+[    1.448152] rtc-ingenic 10003000.rtc: setting system clock to 2020-03-04T06:24:22 UTC (1583303062)
+[    1.448809] mmcblk0boot1: mmc0:0001 DG4008 4.00 MiB
+[    1.457539] ingenic RTC probe success 
+[    1.467588] mmcblk0rpmb: mmc0:0001 DG4008 4.00 MiB, chardev (249:0)
+[    1.468135] ingenic watchdog probe success
+[    1.488209] Loading compiled-in X.509 certificates
+[    1.511187] x2000-sound sound: ASoC: CPU DAI DMIC not registered
+[    1.517803] x2000-sound sound: snd_soc_register_card failed -517
+[    1.525144] x2000-sound sound: ASoC: CPU DAI DMIC not registered
+[    1.531765] x2000-sound sound: snd_soc_register_card failed -517
+[    1.539051] input: gpio_keys as /devices/platform/gpio_keys/input/input1
+[    1.546687] cfg80211: Loading compiled-in X.509 certificates for regulatory database
+[    1.550639] x2000-sound sound: ASoC: CPU DAI DMIC not registered
+[    1.557135] Loaded X.509 cert 'wens: 61c038651aabdcf94bd0ac7ff06c7248db18c600'
+[    1.561605] x2000-sound sound: snd_soc_register_card failed -517
+[    1.569829] Loaded X.509 cert 'sforshee: 00b28ddf47aef9cea7'
+[    1.584729] WIFI_SEQ: openke_wifi_manual_insert entry
+[    1.589950] openke_wifi_manual_insert: triggering manual SDIO insert on mmc1
+[    1.597281] WIFI_SEQ: wlan power on requested, flag=2
+[    1.602532] wlan power on:2
+[    1.605415] WIFI_SEQ: RTC32K enable requested
+[    1.609916] WIFI_SEQ: RTC32K enable completed
+[    1.614518] WIFI_SEQ: MSC1 clock enable requested
+[    1.619477] WIFI_SEQ: MSC1 clock enable completed
+[    1.624347] WIFI_SEQ: manual insert requested
+[    1.628946] ingenic,sdhci 13460000.msc: card insert manually
+[    1.647358] mmc1: Failed to initialize a non-removable card
+[    1.647386] openke: WIFI_SEQ: WL_REG_ON requested_raw=0 descriptor_raw=0
+[    1.660075] openke: WIFI_SEQ: sleeping 100 ms
+[    1.810607] openke: WIFI_SEQ: WL_REG_ON requested_raw=1 descriptor_raw=1
+[    1.817528] openke: WIFI_SEQ: triggering manual detection
+[    1.823142] openke_msc1_trace:      0 ms WL_REG_ON (gpio 100) = 1
+[    1.837713] openke_msc1_trace:     14 ms first SDHCI_RESPONSE_0 change: 0x00000000 -> 0x20ffff00
+[    2.248543] mmc1: new high speed SDIO card at address 0001
+[    2.255096] x2000-sound sound: ASoC: CPU DAI DMIC not registered
+[    2.263954] x2000-sound sound: snd_soc_register_card failed -517
+[    2.271120] brcmfmac: brcmf_fw_alloc_request: using brcm/brcmfmac43430-sdio for chip BCM43430/1
+[    2.280806] x2000-sound sound: ASoC: CPU DAI DMIC not registered
+[    2.287349] x2000-sound sound: snd_soc_register_card failed -517
+[    2.288549] brcmfmac mmc1:0001:1: Direct firmware load for brcm/brcmfmac43430-sdio.clm_blob failed with error -2
+[    2.396710] brcmfmac: brcmf_c_process_clm_blob: no clm_blob available (err=-2), device may have limited channels available
+[    2.408168] brcmfmac: brcmf_c_process_txcap_blob: no txcap_blob available (err=-2)
+[    2.416354] brcmfmac: brcmf_c_preinit_dcmds: Firmware: BCM43430/1 wl0: Apr 19 2018 21:18:23 version 7.46.58.13 (r688474 CY) FWID 01-d4334d3d es4.c3.n4
+[    3.823193] WIFI_SEQ: manual insert call returned
+[    3.828097] clk: Disabling unused clocks
+[    3.83

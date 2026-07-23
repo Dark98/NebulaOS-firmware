@@ -4788,3 +4788,115 @@ requiring before any physical mainboard connection, gate status notwithstanding.
   line" rule throughout.
 - `S99confirm-good` re-confirmed clean on the return trip to custom - zero regressions from the
   earlier §55 fixes.
+
+## 57. Final cleanup mission: ASoC mux topology, speaker-enable path, UART3/Bluetooth Path A, MScaler, TCU logging, and exact wireless-blob provenance - four real fixes plus a bonus resolution, all verified live
+
+Closing pass over the remaining boot-log items from the ongoing audit: the LO0-LO11_MUX ASoC
+warnings, the GPIO 34/`Speaker_en` control's real role, UART3's guaranteed-fail pinctrl claim, both
+MScaler instances, TCU's optional trigger-IRQ log severity, and (definitively, this time) the exact
+provenance of the CLM/TxCap wireless blobs.
+
+### Dead vendor code, found and enabled: LO_MUX warnings gone
+
+`as-dsp.c`'s DAPM widget construction had `dapm_widgets[i].kcontrol_news`/`.num_kcontrols` wrapped in
+`#if 0`/`#endif` - already-correct, already-sized kcontrol wiring (`lomux_enum[]`/`lomux_controls[]`,
+`LOMUX_SOC_DAPM_ENUM_EXT(0)`-`(15)`) that mainline's stricter `dapm_new_mux()` (which requires
+`num_kcontrols == 1` for `snd_soc_dapm_mux` widgets) was rejecting outright. Removed the dead-code
+wrapper (`4579e3803`). Confirmed via DT that `as_fe_dsp`'s `ingenic,lo-port = <0 1 2 3 4 5 6 7 8 9 10
+11>` matches the observed 12-warning count exactly. Live, post-reflash: the "incorrect number of
+controls" messages are completely gone. A new, different, and expected message appeared in their
+place (`mux LOn_MUX has no paths`, standard DAPM informational severity) - this just means the mux
+widgets are now correctly registered but have no routes wired to them, a separate and harmless
+pre-existing condition, not a regression from this fix.
+
+### GPIO 34/`Speaker_en`: real software, hardware presence still unconfirmed - left alone
+
+Traced both DTS occurrences of `ingenic,spken-gpio = <&gpb 2 ...>` to their actual consumers:
+`&icodec`'s copy is dead (the compiled codec driver, `icdc_inno.c` v1, never reads this property -
+only the uncompiled v2 does); the `sound` node's copy is live, read by this board's own machine
+driver (`halley5_v20.c`) and wired to a real ALSA "Speaker Enable" control. Live boot log confirms
+exactly one clean claim, no conflict: `Speaker enable pin(34) request ok`. Stock's own live DTB has
+zero speaker/sound nodes and no stock init script touches ALSA, but stock is a different kernel
+generation that could plausibly configure audio outside devicetree, so this isn't conclusive either
+way. No boot-log symptom drives a change here, and no PCB-level evidence was available to confirm or
+rule out a real amp/speaker on this SKU. Classified `UNKNOWN_REQUIRES_PCB_EVIDENCE`, DTS left
+unchanged - per this mission's own rule against disabling a real product function without evidence.
+Confirmed independent of the already-proven PWM beeper (different GPIO bank, bypasses ALSA entirely).
+
+### UART3: Path A taken, guaranteed-fail noise eliminated
+
+`uart3_pc` (`GPC-25/26`) is the same physical pin group as `i2c4_pc` (touch), a real hardware
+pin-sharing design already fully investigated in an earlier pass - touch always wins the static
+devicetree race, so `uart3` in its "okay" state was *guaranteed*, not merely likely, to fail its own
+pinctrl claim every single boot. Since a real Bluetooth transport (Path B) would require stock's own
+dynamic runtime pin hand-off mechanism, a substantially larger effort outside this pass's scope, Path
+A was taken: `uart3` disabled (`51b8ecedd`), all prior investigation preserved verbatim in the DTS
+comment. Live: zero `uart3`/`GPC-25`/`10033000.serial` matches anywhere in the post-boot log.
+
+### Both MScaler instances disabled: reference-design block, zero consumer
+
+`mscaler0`/`mscaler1` register only as `v4l2_subdev` ISP-pipeline components, not `/dev/videoN`
+capture devices - confirmed zero userspace consumer anywhere on the rootfs (grepped live for
+"mscaler"/`VIDIOC` usage) and no `mscaler`-specific node under `/sys/class/video4linux`. The real,
+working camera path (USB UVC via `ustreamer`) and rotation/H.264 encode/decode (`/dev/video0-2`,
+separate SoC blocks) are unaffected. Both disabled (`69d8655d0`). Live: zero `mscaler` matches
+anywhere in the post-boot log; rotation/encode/decode still register exactly as before.
+
+### TCU trigger-IRQ: severity fixed, not a real error
+
+Verified via source read that `ret` (set from the failed, optional second `platform_get_irq(pdev,
+1)`) is unconditionally overwritten a few lines later by the *primary*, always-present IRQ's
+`request_irq()` result before it's ever checked - this optional trigger-mode IRQ has zero effect on
+probe success or failure, confirming the prior `dev_err` was cosmetically wrong. Downgraded to
+`dev_info` with an accurate message (`5ac124ac6`). Live: `no trigger-mode IRQ (optional, not used by
+this board)` now appears in place of the old `not support irq trigger function` error-level line.
+
+### CLM/TxCap: conclusively closed, confirmed absent from stock itself
+
+Extracted stock's actual rootfs from a full raw device backup (`vendor/device-backups/
+nebula_system_backup.bin`) using only userspace tools - `sgdisk -p` read the GPT even from a truncated
+backup file (main header intact), `dd` pulled partition 7 (`rootfs`, real Squashfs, 500MiB) out
+directly, `unsquashfs` listed and selectively extracted files with no root/mount required. SHA256
+confirmed our currently-deployed `brcmfmac43430-sdio.bin`/`.txt` are byte-identical to stock's own
+`cyw43438-7.46.58.13.bin`/`nvram_azw372.txt`. Stock's own `S43wifi_bcm_init_config`/`S44wifi_bcm_up`
+contain zero "clm"/"txcap" references, and no such file exists anywhere in stock's shipped rootfs.
+This closes the question definitively as "confirmed absent upstream," not "not yet found" - per the
+mission's own provenance-priority framework, no public/generic-chip-family candidate was ever
+installed, since none would be proven to originate from this exact device.
+
+### Wi-Fi premature scan: reaffirmed, unchanged
+
+`mmc1: Failed to initialize a non-removable card` remains classified `KNOWN_BENIGN_PREPOWER_SCAN` -
+already established and tracked; the manual, power-sequenced insert immediately afterward always
+succeeds. No new work needed; re-confirmed present and unchanged in this pass's own live capture.
+
+### Bonus: the GPD-4/BAIC4 pin conflict, root-caused two missions ago, is now actually gone
+
+The earlier boot-cleanup mission root-caused (via temporary instrumentation) but deliberately left
+unfixed a real two-device pin conflict: `&as_be_baic`'s `pinctrl-0 = <&baic4_pd>` claim covered
+`GPD-4`/`GPD-5`, the same pins `wlan_reg_on`/`bt_reg_on` use as plain GPIO, producing a full backtrace
+on every boot (harmless - both devices worked regardless - but noisy). The separate BAIC4/DMIC
+investigation (§ see `docs/BAIC4_AUDIO_INVESTIGATION.md`) removed that pinctrl claim entirely for an
+unrelated reason (BAIC4's DAI links were confirmed unreachable dead references), and this pass's live
+verification is the first confirmation that it also closed the pin conflict as a side effect: a full
+post-boot `dmesg` (234 lines) on the rebuilt image has zero matches for `redefinition`,
+`used_pins_bitmap`, `GPD`, `conflict`, `already requested`, `Call Trace`, or `backtrace`.
+
+### Full build/flash/validate cycle, real hardware
+
+Built via the standard `02` through `06` pipeline (`06-verify.sh`'s own `CONFIG_EXTRA_FIRMWARE` check
+was a stale exact-string match left over from before the regulatory.db/board-alias work landed -
+tightened to a prefix match rather than leaving a permanent false alarm in the project's own tooling).
+Manifest: `git_commit_kernel=69d8655d0`, `git_dirty_kernel=no` - confirms the build used exactly the
+four new commits, nothing uncommitted. Found the device already sitting on the *custom* slot
+(`/dev/mmcblk0p8`) from an earlier session's validated build - flipped the OTA marker back to stock,
+rebooted, confirmed `root=/dev/mmcblk0p7`/`Linux 4.4.94`, transferred the new images over `scp`,
+flashed the spare slot (`flash-spare-slot.sh`, manifest-verified size+SHA256 on both files before any
+write, md5 write-back verified after), flipped the marker forward, rebooted into the new build.
+Confirmed live: `git_commit_kernel` timestamp in `uname -a` matches the new build exactly; all four
+target fixes present and correct; the bonus GPD-4/BAIC4 resolution; zero regressions across eMMC (all
+10 partitions), WiFi (firmware loads, real chip version string), ALSA (`halley5_v30` card registers),
+display/rotation/encode/decode, touch (`ns2009_ts`), RTC, watchdog, PWM, USB, the PWM beeper
+(`guppybeep click`, RC=0), and the full app stack (Klipper connected, Moonraker `/server/info`
+responding, GuppyScreen running). `S99confirm-good` had already flipped the marker forward on its own
+by the time validation began, confirming the app stack was detected healthy without intervention.

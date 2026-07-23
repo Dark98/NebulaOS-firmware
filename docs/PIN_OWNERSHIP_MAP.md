@@ -178,6 +178,58 @@ release a pin owned by another device," "do not disable a controller until stock
 product use are known"), this is documented and left alone pending a dedicated, separate
 investigation into BAIC4's actual product role - not bundled into this boot-cleanup cycle.
 
+**Update (2026-07-23, beeper/BAIC4 investigation mission): resolved as a side effect, not a direct
+fix.** The separate BAIC4 audio investigation (`docs/BAIC4_AUDIO_INVESTIGATION.md`) removed
+`&as_be_baic`'s `pinctrl-0 = <&baic4_pd>` claim entirely (kernel fork `cafd5986c`) once it was
+confirmed the DMIC/BAIC4 DAI links were unreachable dead references, unrelated to this pin-conflict
+question at the time. Verified live on the final cleanup mission's rebuilt/reflashed image
+(2026-07-23): a full post-boot `dmesg` (234 lines) has **zero** matches for `redefinition`,
+`used_pins_bitmap`, `GPD`, `conflict`, `already requested`, `Call Trace`, or `backtrace` - the
+warning is completely gone, not merely quieter. `wlan_reg_on`/`bt_reg_on` (`GPD-4`/`GPD-5`) now claim
+cleanly with no contention, and `as_be_baic` no longer touches those pins at all (confirmed via
+current DTS: `&as_be_baic {};`, empty override). Classification upgraded from
+`REAL_TWO_DEVICE_PIN_CONFLICT` (root-caused, not fixed) to **`RESOLVED`**.
+
+## `GPB-2` / `Speaker_en` - real software wiring, hardware presence unconfirmed
+
+Final cleanup mission Phase 2 (2026-07-23): `ingenic,spken-gpio = <&gpb 2 GPIO_ACTIVE_HIGH
+INGENIC_GPIO_NOBIAS>;` appears twice in `halley5_v30.dts` - once on `&icodec` (line 779) and once on
+the standalone `sound` node (line 812), both resolving to global GPIO 34.
+
+**Only one of the two is live.** `CONFIG_SND_ASOC_INGENIC_ICDC_INNO=y` selects `icdc_inno.c` (v1) as
+the compiled codec driver; that file never reads `ingenic,spken-gpio` from its own `of_node` at all
+(only the uncompiled `icdc_inno_v2.c` does). The `&icodec` node's property is dead by construction,
+confirmed via source read, not inference. The `sound` node's copy of the same property **is** read,
+by this board's own machine driver (`halley5_v20.c`, `CONFIG_SND_ASOC_INGENIC_HALLEY5_V20=y`), and is
+the one behind the single boot-log line `Speaker enable pin(34) request ok` (confirmed in
+`artifacts/parity/baseline-2026-07-23-boot-cleanup/dmesg-final-beeper-baic4-fix-part1.txt:114`,
+immediately followed by `x2000-sound sound: Sound Card successed`) - no conflict, no error, no
+duplicate-claim warning anywhere in the log.
+
+`halley5_v20.c` wires this pin to a real, functional ALSA control (`SOC_SINGLE_BOOL_EXT("Speaker
+Enable", 0, spken_get, spken_put)`) - this is live software, not vendor dead code like the LO_MUX
+case. Live device state: `gpio-34 ( |Speaker_en ) out lo` (claimed, driven low/disabled at the time
+checked; `amixer` isn't installed on the custom rootfs, so the control was inspected via `/sys/kernel/
+debug/gpio`, not exercised live).
+
+**Stock-side evidence is entirely negative but not conclusive**, because stock is a different kernel
+generation (4.4.94) that may configure audio outside devicetree: stock's own live, decoded DTB
+(`vendor/device-backups/stock-live-device-tree-decoded.dts`, 1726 lines) has zero `spken`/`speaker`
+matches and no `sound {` node at all; stock's real rootfs (extracted from `vendor/device-backups/
+nebula_system_backup.bin` via `sgdisk`+`dd`+`unsquashfs`, no root required) ships `amixer`/`aplay`/
+`alsamixer` binaries but its init scripts (`S97webrtc`, `S13board_init`, `S70cx_ai_middleware`,
+`S99start_app`) never invoke them. A generic reference-tree search (`vendor/x2000_kernel`, a
+non-Ingenic-specific mainline-style source tree with no board-file evidence either way) was
+inconclusive and added nothing.
+
+**Classification: `UNKNOWN_REQUIRES_PCB_EVIDENCE`.** The GPIO claims cleanly and causes zero boot
+noise, so there is no warning driving a change, and no positive evidence a physical amp/speaker
+exists on this specific SKU (the printer's confirmed, working, and entirely separate audio device is
+the PWM-driven piezo beeper - see `docs/BEEPER_CONTROL_PATH.md` - not this codec/ALSA path). Per this
+mission's own guardrail against disabling a real product function without evidence, **left unchanged
+in the DTS**. Do not conflate this with the beeper; they are provably independent hardware paths
+(different GPIO banks, different subsystems, beeper bypasses ALSA/kernel-PWM entirely via `/dev/mem`).
+
 ## Not yet covered (Phase 3B)
 
 This pass only covers the pins in dispute. The full board pin map (eMMC, WiFi SDIO, display, touch,

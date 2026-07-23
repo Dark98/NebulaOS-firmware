@@ -46,6 +46,16 @@ flagged for the Phase 4 audit's Bluetooth feasibility classification. Per the sa
 must not be driven experimentally without first confirming its stock-equivalent idle/active levels
 and whether raising it has any effect independent of the `uart3` conflict.
 
+## `uart1` (printer MCU link) - fixed and verified
+
+Not in this map's original scope, but found during the same audit and fixed before this document
+was finalized: `uart1` claimed a 4-pin group (`GPC-21..24`) where stock only claims 2
+(`GPC-23`/`24`), and `GPC-21` was simultaneously claimed by `lcd_vdd_en` as a plain GPIO output - a
+real, active conflict, not hypothetical. Fixed in kernel fork commit `970bd6b83` (new board-local
+`uart1_pc_txrx` group, `gpc 23-24` only) and verified live: `GPC-21`/`GPC-22` now read
+`(MUX UNCLAIMED)`, `lcd_vdd_en` is `GPC-21`'s sole owner, `uart1` claims only `GPC-23`/`24`. Full
+details: `docs/PRINTER_MAINBOARD_PRECONNECTION_CHECKLIST.md`.
+
 ## MSC2 disable recommendation (from `DTB_PARITY_REPORT.md`)
 
 `GPC-0` and `GPC-12` are the two pins at stake. Disabling `&msc2` should return both to stock's own

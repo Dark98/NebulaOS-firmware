@@ -5,10 +5,27 @@ own instruction, ahead of the full board audit). The printer mainboard is physic
 for this entire document - every row below is configuration/idle-state analysis, not a live
 communication test.
 
-**Status: NOT CLEAR TO CONNECT.** One real, active pin conflict was found on the printer-facing
-UART's pin group. See "Blocking finding" below before anything else.
+**Status: `uart1` pin conflict FIXED AND VERIFIED (2026-07-23). Still NOT CLEAR TO CONNECT** -
+several other gate criteria (voltage domain re-check, TX idle waveform, connector power/ground
+identification) remain undone. See "Gate criteria" at the bottom for the current full list.
 
-## Blocking finding: `uart1` (the printer MCU link) actively conflicts with `lcd_vdd_en` on custom
+## RESOLVED: `uart1` (the printer MCU link) no longer conflicts with `lcd_vdd_en`
+
+Kernel fork commit `970bd6b83` narrows `uart1`'s `pinctrl-0` to a new board-local 2-pin group
+(`uart1_pc_txrx`, `gpc 23-24` only), matching stock exactly. Verified on real hardware after
+rebuild+reflash:
+
+- `GPC-23`/`GPC-24`: claimed only by `uart1` (`function uart1-pin group uart1-pc-txrx`).
+- `GPC-21`: `(MUX UNCLAIMED)` - no longer touched by `uart1`. Live GPIO dump confirms `lcd_vdd_en`
+  is its sole owner.
+- `GPC-22`: fully unclaimed by anything, matching stock.
+- Zero regressions: WiFi re-associated (real DHCP lease), Moonraker `/server/info` healthy,
+  `PRAGMA integrity_check` returns `ok`, `S99confirm-good` auto-confirmed the boot.
+
+The original finding (kept below for the record) remains accurate as a description of what was
+wrong and why it mattered.
+
+## Original finding (now fixed): `uart1` actively conflicted with `lcd_vdd_en` on custom
 
 `printer.cfg`'s `[mcu] serial: /dev/ttyS1` is `uart1`. Live evidence, captured this session:
 
@@ -36,20 +53,16 @@ lockdep-relevant double-claim on a live board, whose safe-by-luck-not-by-design 
 with any future kernel/driver update, and `lcd_vdd_en` is a *power rail enable* line, not something
 to leave ambiguous.
 
-**Required before connecting the printer mainboard**: narrow custom's `uart1` `pinctrl-0` to match
-stock's real 2-pin group (`GPC-23`/`GPC-24` only), as an isolated DT commit, then re-verify via this
-same live-capture method that `GPC-21`/`GPC-22` return to stock's unclaimed state and `lcd_vdd_en`
-is the pin's sole owner. This is real, board-specific work (finding or deriving the correct narrower
-pinctrl group) that hasn't been done as of this audit pass.
+**Fixed and verified** - see "RESOLVED" above.
 
 ## Printer connector signal inventory (what's known so far)
 
 | Signal | Purpose | Pin (SoC) | Stock idle state | Custom idle state | Status |
 |---|---|---|---|---|---|
-| UART TX | MCU serial, host→MCU | `GPC-24` (part of `uart1_pc`) | Muxed to `uart1` alt-fn, not separately GPIO-claimed | Muxed to `uart1` alt-fn, not separately GPIO-claimed | Matches stock |
-| UART RX | MCU serial, MCU→host | `GPC-23` (part of `uart1_pc`) | Muxed to `uart1` alt-fn | Muxed to `uart1` alt-fn | Matches stock |
-| UART RTS or CTS (unconfirmed) | Hardware flow control (unused by Klipper's protocol) | `GPC-22` | Unclaimed on stock | Muxed to `uart1` alt-fn on custom - **not stock-matched** | **Blocking - see above** |
-| UART RTS or CTS (unconfirmed) | Hardware flow control | `GPC-21` | Unclaimed on stock | Muxed to `uart1` alt-fn on custom, **and** separately GPIO-claimed as `lcd_vdd_en` | **Blocking - active conflict, see above** |
+| UART TX | MCU serial, host→MCU | `GPC-24` (`uart1_pc_txrx`) | Muxed to `uart1` alt-fn, not separately GPIO-claimed | Muxed to `uart1` alt-fn (`uart1_pc_txrx`), not separately GPIO-claimed | Matches stock |
+| UART RX | MCU serial, MCU→host | `GPC-23` (`uart1_pc_txrx`) | Muxed to `uart1` alt-fn | Muxed to `uart1` alt-fn (`uart1_pc_txrx`) | Matches stock |
+| (was mistakenly claimed by `uart1`) | Hardware flow control (unused by Klipper's protocol) | `GPC-22` | Unclaimed on stock | **Fixed**: fully unclaimed, matches stock | Resolved |
+| `lcd_vdd_en` | LCD power enable | `GPC-21` | n/a on stock (pin unused by stock's `uart1`) | **Fixed**: `lcd_vdd_en` is the sole owner, no more `uart1` contention | Resolved |
 | Ground | - | Not a SoC pin - board-level | n/a | n/a | Not yet identified (needs schematic/PCB inspection, out of scope for register-level audit) |
 | Power (connector supply rail) | - | Not a SoC pin | n/a | n/a | Not yet identified |
 | Reset/boot/enable (if any) | MCU reset or bootloader-select | Not found | No pin in either system's capture is labelled `reset`/`boot`/`mcu` | Same | `UNKNOWN` - either this board has no such line (a plausible, common design for a simple UART-connected MCU) or it exists but isn't visible as a named GPIO consumer in this capture. Not resolved this pass. |
@@ -68,18 +81,19 @@ rather than assumed by analogy to `GPA`. Not done in this pass.
 
 | Criterion | Status |
 |---|---|
-| printer UART pinmux matches stock | **NO** - see blocking finding above |
-| printer UART idle level matches stock | Partially checked - TX/RX pins match; RTS/CTS pins do not (custom claims what stock leaves alone) |
+| printer UART pinmux matches stock | **YES** - fixed and verified, `970bd6b83` |
+| printer UART idle level matches stock | **YES** for TX/RX (the only pins now claimed) |
 | printer UART voltage domain confirmed | **Not done this pass** |
-| no conflicting driver owns those pins | **NO** - `uart1` and `lcd_vdd_en` both claim `GPC-21` on custom right now |
+| no conflicting driver owns those pins | **YES** - fixed and verified, `GPC-21` is `lcd_vdd_en`-only now |
 | no unexpected TX activity present | Not measured this pass (would need a scope/logic analyzer capture, not attempted) |
 | reset/boot/control pins match stock idle state | No such pin identified in either system yet - `UNKNOWN`, not `PASS` |
 | connector power/ground pins identified | **Not done this pass** - needs schematic or physical PCB inspection |
-| connector pinout documented | Partial - UART TX/RX/RTS/CTS pins identified at the SoC level; physical connector pin numbering not mapped |
-| custom DTB matches intended configuration | **NO** - the `uart1` 4-pin group is the DTB not matching intended (stock-parity) configuration |
+| connector pinout documented | Partial - UART TX/RX pins identified and verified at the SoC level; physical connector pin numbering not mapped |
+| custom DTB matches intended configuration | **YES** for `uart1` specifically |
 | stock/custom live pin-state comparison complete | Complete for the UART pins specifically; connector-level (ground/power) not done |
 
-**Conclusion: do not connect the printer mainboard yet.** Two of the ten gate criteria are hard
-failures (pinmux mismatch, active pin conflict), and several others are simply not yet done
-(voltage domain re-check, TX idle waveform capture, connector power/ground identification). This
-document should be re-run and re-updated after the `uart1` pin-group fix lands and is verified.
+**Conclusion: still do not connect the printer mainboard.** The pinmux/conflict criteria (the two
+hard failures from the previous pass) are now resolved and verified. Four criteria remain
+undone: voltage domain re-check, TX idle waveform capture, reset/boot pin identification, and
+connector power/ground identification - none of these were in scope for a register/debugfs-level
+audit and need either a scope/multimeter or PCB/schematic access.

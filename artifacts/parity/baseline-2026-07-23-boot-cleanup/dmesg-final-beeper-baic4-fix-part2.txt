@@ -1,0 +1,113 @@
+dmesg | sed -n '85,231p'; echo ___ENDLOG2___
+[    0.657616] input: ns2009_ts as /devices/platform/apb/10054000.i2c/i2c-4/4-0048/input/input0
+[    0.666627] usbcore: registered new interface driver uvcvideo
+[    0.672704] sdhci: Secure Digital Host Controller Interface driver
+[    0.678915] sdhci: Copyright(c) Pierre Ossman
+[    0.683857] usbcore: registered new interface driver usbkbd
+[    0.689522] usbcore: registered new interface driver usbmouse
+[    0.696456] NET: Registered PF_PACKET protocol family
+[    0.701910] as-platform 134d0000.as-platform: probe success!!!
+[    0.708172] as-dsp 134d4000.as-dsp: probe success!!
+[    0.713407] as-mixer 134dc000.as-mixer: amixer platform probe success
+[    0.720783] as-baic 134d5000.as-baic: baic platform probe success
+[    0.727317] as-spdif 134db000.as-spdif: spdif platform probe success
+[    0.734140] as-virtual-fe 0.as-virtual-fe: probe success!!!
+[    0.739975]  alcl_gain = 0x1f hpoutl_gain = 0x0 micbias = 0x0
+[    0.745759] icodec 10020000.icodec: component icodec platfrom probe success
+[    0.753534] icodec 10020000.icodec: icodec probe enter
+[    0.793103] as-dsp 134d4000.as-dsp: ASoC: mux LO0_MUX has incorrect number of controls
+[    0.801116] as-dsp 134d4000.as-dsp: ASoC: mux LO1_MUX has incorrect number of controls
+[    0.809119] as-dsp 134d4000.as-dsp: ASoC: mux LO2_MUX has incorrect number of controls
+[    0.817166] as-dsp 134d4000.as-dsp: ASoC: mux LO3_MUX has incorrect number of controls
+[    0.825204] as-dsp 134d4000.as-dsp: ASoC: mux LO4_MUX has incorrect number of controls
+[    0.833232] as-dsp 134d4000.as-dsp: ASoC: mux LO5_MUX has incorrect number of controls
+[    0.841268] as-dsp 134d4000.as-dsp: ASoC: mux LO6_MUX has incorrect number of controls
+[    0.849291] as-dsp 134d4000.as-dsp: ASoC: mux LO7_MUX has incorrect number of controls
+[    0.857338] as-dsp 134d4000.as-dsp: ASoC: mux LO8_MUX has incorrect number of controls
+[    0.865372] as-dsp 134d4000.as-dsp: ASoC: mux LO9_MUX has incorrect number of controls
+[    0.873405] as-dsp 134d4000.as-dsp: ASoC: mux LO10_MUX has incorrect number of controls
+[    0.881533] as-dsp 134d4000.as-dsp: ASoC: mux LO11_MUX has incorrect number of controls
+[    0.892195] Speaker enable pin(34) request ok
+[    0.896546] x2000-sound sound: Sound Card successed
+[    0.901989] ingenic-trng 10072000.dtrng: ingenic HW dtrng Probe success!
+[    0.908985] copy logo_buf from .init.data section, size=29480
+[    0.915271] ingenic-fb 13050000.dpu: mode->refresh: 60, mode->pixclock: 92962, rate: 10756800, modex->pixclock: 92962
+[    0.925997] ingenic-fb 13050000.dpu: dpu_ctrl_init start!
+[    0.931579] ingenic-fb 13050000.dpu: rdma_desc @ (ptrval) size: 144
+[    0.937871] ingenic-fb 13050000.dpu: composer framedesc @ (ptrval) size 144
+[    0.944941] ingenic-fb 13050000.dpu: composer layerdesc @ (ptrval) size 576
+[    0.952005] ingenic-fb 13050000.dpu: dpu_ctrl_init success
+[    0.958522] ingenic-fb 13050000.dpu: vidmem @ (ptrval) size 1566720
+[    0.991491] ingenic-fb 13050000.dpu: fbdev->rot_angle=0, swap_dims=0
+[    0.999145] start parse remote-endpoint!
+[    1.003912] start parse remote-endpoint!
+[    1.008577] ingenic-mscaler 13702300.mscaler: error -ENXIO: IRQ index 0 not found
+[    1.016127] ingenic-mscaler 13702300.mscaler: No MScaler IRQ specified
+[    1.022893] ingenic-mscaler 13802300.mscaler: error -ENXIO: IRQ index 0 not found
+[    1.030435] ingenic-mscaler 13802300.mscaler: No MScaler IRQ specified
+[    1.038565] ingenic-rot 13070000.rotate: assigned reserved memory node reserved_mem@6000000
+[    1.047237] ingenic-rot 13070000.rotate: device registered as /dev/video0
+[    1.054810] helix-venc 13200000.helix: assigned reserved memory node reserved_mem@6000000
+[    1.063066] helix-venc 13200000.helix: encoder(helix) registered as /dev/video1
+[    1.071191] felix-vdec 13300000.felix: assigned reserved memory node reserved_mem@6000000
+[    1.079430] felix-vdec 13300000.felix: h264decoder(felix) registered as /dev/video2
+[    1.088359] ingenic SADC driver registeres over!
+[    1.093566] ingenic sadc aux0 probe success
+[    1.098016] ingenic sadc aux1 probe success
+[    1.102513] ingenic sadc aux2 probe success
+[    1.106954] ingenic sadc aux3 probe success
+[    1.111408] ingenic sadc aux4 probe success
+[    1.115829] ingenic sadc aux5 probe success
+[    1.120177] ingenic-tcu 10002000.tcu: error -ENXIO: IRQ index 1 not found
+[    1.127007] ingenic-tcu 10002000.tcu: not support irq trigger function
+[    1.133678] ingenic-tcu 10002000.tcu: ingenic TCU driver register completed
+[    1.141273] rsa 13480000.rsa: rsa driver probe ok!
+[    1.147004] openke: mmc_of_parse ok, host->mmc->parent=13450000.msc of_node=/ahb2/msc@13450000 pwrseq=00000000
+[    1.188403] mmc0: SDHCI controller on ingenic-sdhci [13450000.msc] using ADMA
+[    1.196214] openke: WLAN_REG_ON GPIO acquired, direction_output_raw(0) ret=0
+[    1.203384] openke: mmc_of_parse ok, host->mmc->parent=13460000.msc of_node=/ahb2/msc@13460000 pwrseq=00000000
+[    1.244053] mmc1: SDHCI controller on ingenic-sdhci [13460000.msc] using ADMA
+[    1.252829] ingenic-pwm 134c0000.pwm: ingenic-x2000 Probe of pwm success!
+[    1.261231] 10031000.serial: ttyS1 at MMIO 0x10031000 (irq = 54, base_baud = 9375000) is a uart1
+[    1.271141] ingenic pinctrl 10010000.pinctrl: pin GPC-25 already requested by 10054000.i2c; cannot claim for 10033000.serial
+[    1.282519] ingenic pinctrl 10010000.pinctrl: pin-89 (10033000.serial) status -22
+[    1.290163] ingenic pinctrl 10010000.pinctrl: could not request pin 89 (GPC-25) from group uart3-pc  on device ingenic pinctrl
+[    1.301734] ingenic-uart 10033000.serial: Error applying setting, reverse things back
+[    1.310508] 10034000.serial: ttyS4 at MMIO 0x10034000 (irq = 51, base_baud = 9375000) is a uart4
+[    1.319460] printk: legacy console [ttyS4] enabled
+[    1.329244] printk: legacy bootconsole [early0] disabled
+[    1.346727] mmc0: new HS200 MMC card at address 0001
+[    1.352543] rtc-ingenic 10003000.rtc: registered as rtc0
+[    1.352842] mmcblk0: mmc0:0001 DG4008 7.28 GiB
+[    1.358063] rtc-ingenic 10003000.rtc: setting system clock to 2020-03-04T07:08:50 UTC (1583305730)
+[    1.372047] ingenic RTC probe success 
+[    1.372335] Alternate GPT is invalid, using primary GPT.
+[    1.381605]  mmcblk0: p1 p2 p3 p4 p5 p6 p7 p8 p9 p10
+[    1.386911] ingenic watchdog probe success
+[    1.389247] mmcblk0boot0: mmc0:0001 DG4008 4.00 MiB
+[    1.398278] mmcblk0boot1: mmc0:0001 DG4008 4.00 MiB
+[    1.404842] mmcblk0rpmb: mmc0:0001 DG4008 4.00 MiB, chardev (249:0)
+[    1.418465] Loading compiled-in X.509 certificates
+[    1.435462] input: gpio_keys as /devices/platform/gpio_keys/input/input1
+[    1.443663] cfg80211: Loading compiled-in X.509 certificates for regulatory database
+[    1.453901] Loaded X.509 cert 'wens: 61c038651aabdcf94bd0ac7ff06c7248db18c600'
+[    1.462624] Loaded X.509 cert 'sforshee: 00b28ddf47aef9cea7'
+[    1.469249] WIFI_SEQ: openke_wifi_manual_insert entry
+[    1.478182] openke_wifi_manual_insert: triggering manual SDIO insert on mmc1
+[    1.485590] WIFI_SEQ: wlan power on requested, flag=2
+[    1.490885] wlan power on:2
+[    1.493771] WIFI_SEQ: RTC32K enable requested
+[    1.498275] WIFI_SEQ: RTC32K enable completed
+[    1.502788] WIFI_SEQ: MSC1 clock enable requested
+[    1.507647] WIFI_SEQ: MSC1 clock enable completed
+[    1.512510] WIFI_SEQ: manual insert requested
+[    1.517009] ingenic,sdhci 13460000.msc: card insert manually
+[    1.545033] mmc1: Failed to initialize a non-removable card
+[    1.545063] openke: WIFI_SEQ: WL_REG_ON requested_raw=0 descriptor_raw=0
+[    1.557744] openke: WIFI_SEQ: sleeping 100 ms
+[    1.710626] openke: WIFI_SEQ: WL_REG_ON requested_raw=1 descriptor_raw=1
+[    1.717546] openke: WIFI_SEQ: triggering manual detection
+[    1.723160] openke_msc1_trace:      0 ms WL_REG_ON (gpio 100) = 1
+[    1.737733] openke_msc1_trace:     14 ms first SDHCI_RESPONSE_0 change: 0x00000000 -> 0x20ffff00
+[    2.148519] mmc1: new high speed SDIO card at address 0001
+[    2.157966] brcmfmac: brcmf_fw_alloc_request: using brcm/brcmf

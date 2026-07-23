@@ -1,0 +1,118 @@
+dmesg; echo ___ENDLOG___
+[    0.000000] smp: Bringing up secondary CPUs ...
+[    0.000000] [SMP] Booting CPU1 ...
+[    0.000000] Primary instruction cache 32kB, VIVT, 8-way, linesize 32 bytes.
+[    0.000000] Primary data cache 32kB, 8-way, VIPT, no aliases, linesize 32 bytes
+[    0.000000] =======found ...... ingenic sc cache ops ...!, found: 1
+[    0.000000] 
+[    0.000000] Unified secondary cache 512kB 16-way, linesize 64 bytes.
+[    0.000000] #### now starting init for cpu : 1
+[    0.000000] percpu irq inited.
+[    0.000000] percpu cpu_num:1 timerevent init
+[    0.000000] clockevents_config_and_register success.
+[    0.000000] CPU1 revision is: 00132000 (Ingenic XBurst II)
+[    0.000000] FPU revision is: 00f32000
+[    0.000000] MSA revision is: 00002000
+[    0.000000] [SMP] slave cpu1 start up finished.
+[    0.000000] smp: Brought up 1 node, 2 CPUs
+[    0.000000] devtmpfs: initialized
+[    0.000000] clocksource: jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 19112604462750000 ns
+[    0.000000] futex hash table entries: 16 (order: -3, 512 bytes, linear)
+[    0.000000] pinctrl core: initialized pinctrl subsystem
+[    0.000000] NET: Registered PF_NETLINK/PF_ROUTE protocol family
+[    0.000000] gpio gpiochip0: Static allocation of GPIO base is deprecated, use dynamic allocation.
+[    0.000000] genirq: irq_chip XBurst2-irqchip did not update eff. affinity mask of irq 25
+[    0.000000] gpio gpiochip1: Static allocation of GPIO base is deprecated, use dynamic allocation.
+[    0.000000] gpio gpiochip2: Static allocation of GPIO base is deprecated, use dynamic allocation.
+[    0.000000] gpio gpiochip3: Static allocation of GPIO base is deprecated, use dynamic allocation.
+[    0.000000] gpio gpiochip4: Static allocation of GPIO base is deprecated, use dynamic allocation.
+[    0.000000] ingenic pinctrl 10010000.pinctrl: 5 gpio chip add success, pins 160
+[    0.000000] ingenic pinctrl 10010000.pinctrl: ingenic pinctrl probe success
+[    0.000000] dmmu_init 1012 PTRS_PER_PTE = 1024
+[    0.000000] SCSI subsystem initialized
+[    0.000000] usbcore: registered new interface driver usbfs
+[    0.000000] usbcore: registered new interface driver hub
+[    0.000000] usbcore: registered new device driver usb
+[    0.000000] mc: Linux media interface: v0.10
+[    0.000000] videodev: Linux video capture interface: v2.00
+[    0.000000] Advanced Linux Sound Architecture Driver Initialized.
+[    0.000000] Bluetooth: Core ver 2.22
+[    0.000000] NET: Registered PF_BLUETOOTH protocol family
+[    0.000000] Bluetooth: HCI device and connection manager initialized
+[    0.000000] Bluetooth: HCI socket layer initialized
+[    0.000000] Bluetooth: L2CAP socket layer initialized
+[    0.000000] Bluetooth: SCO socket layer initialized
+[    0.000000] ingenic-dma 13420000.dma: error -ENXIO: IRQ pdmam not found
+[    0.000000] ingenic-dma 13420000.dma: INGENIC SoC DMA initialized
+[    0.000000]  (null): set:374  hold:375 dev=150000000 h=750 l=750
+[    0.000000] ingenic-i2c 10053000.i2c: i2c_ingenic_probe success.
+[    0.000000]  (null): set:374  hold:375 dev=150000000 h=750 l=750
+[    0.000000] ingenic-i2c 10054000.i2c: i2c_ingenic_probe success.
+[    0.000017] clocksource: Switched to clocksource jz_clocksource
+[    0.013867] NET: Registered PF_INET protocol family
+[    0.018881] IP idents hash table entries: 4096 (order: 3, 32768 bytes, linear)
+[    0.026654] tcp_listen_portaddr_hash hash table entries: 256 (order: 0, 5120 bytes, linear)
+[    0.035120] Table-perturb hash table entries: 65536 (order: 6, 262144 bytes, linear)
+[    0.042983] TCP established hash table entries: 2048 (order: 1, 8192 bytes, linear)
+[    0.050726] TCP bind hash table entries: 2048 (order: 4, 81920 bytes, linear)
+[    0.058005] TCP: Hash tables configured (established 2048 bind 2048)
+[    0.064450] UDP hash table entries: 128 (order: 0, 6144 bytes, linear)
+[    0.071025] UDP-Lite hash table entries: 128 (order: 0, 6144 bytes, linear)
+[    0.078156] NET: Registered PF_UNIX/PF_LOCAL protocol family
+[    0.086088] Initialise system trusted keyrings
+[    0.090872] workingset: timestamp_bits=30 max_order=16 bucket_order=0
+[    0.097542] squashfs: version 4.0 (2009/01/31) Phillip Lougher
+[    0.103425] jffs2: version 2.2. (NAND) © 2001-2006 Red Hat, Inc.
+[    0.215852] jitterentropy: Initialization failed with host not compliant with requirements: 9
+[    0.224450] Key type asymmetric registered
+[    0.228584] Asymmetric key parser 'x509' registered
+[    0.233576] io scheduler mq-deadline registered
+[    0.238120] io scheduler kyber registered
+[    0.246549] dwc2 13500000.otg: supply vusb_d not found, using dummy regulator
+[    0.253984] dwc2 13500000.otg: supply vusb_a not found, using dummy regulator
+[    0.580069] dwc2 13500000.otg: EPs: 9, dedicated fifos, 3576 entries in SPRAM
+[    0.587328] dwc2 13500000.otg: DWC OTG Controller
+[    0.592064] dwc2 13500000.otg: new USB bus registered, assigned bus number 1
+[    0.599191] dwc2 13500000.otg: irq 9, io mem 0x13500000
+[    0.604634] usb usb1: New USB device found, idVendor=1d6b, idProduct=0002, bcdDevice= 6.06
+[    0.612964] usb usb1: New USB device strings: Mfr=3, Product=2, SerialNumber=1
+[    0.620288] usb usb1: Product: DWC OTG Controller
+[    0.625045] usb usb1: Manufacturer: Linux 6.6.18-rt23 dwc2_hsotg
+[    0.631147] usb usb1: SerialNumber: 13500000.otg
+[    0.636421] hub 1-0:1.0: USB hub found
+[    0.640244] hub 1-0:1.0: 1 port detected
+[    0.645500] usbcore: registered new interface driver usb-storage
+[    0.651846] mousedev: PS/2 mouse device common for all mice
+[    0.657616] input: ns2009_ts as /devices/platform/apb/10054000.i2c/i2c-4/4-0048/input/input0
+[    0.666627] usbcore: registered new interface driver uvcvideo
+[    0.672704] sdhci: Secure Digital Host Controller Interface driver
+[    0.678915] sdhci: Copyright(c) Pierre Ossman
+[    0.683857] usbcore: registered new interface driver usbkbd
+[    0.689522] usbcore: registered new interface driver usbmouse
+[    0.696456] NET: Registered PF_PACKET protocol family
+[    0.701910] as-platform 134d0000.as-platform: probe success!!!
+[    0.708172] as-dsp 134d4000.as-dsp: probe success!!
+[    0.713407] as-mixer 134dc000.as-mixer: amixer platform probe success
+[    0.720783] as-baic 134d5000.as-baic: baic platform probe success
+[    0.727317] as-spdif 134db000.as-spdif: spdif platform probe success
+[    0.734140] as-virtual-fe 0.as-virtual-fe: probe success!!!
+[    0.739975]  alcl_gain = 0x1f hpoutl_gain = 0x0 micbias = 0x0
+[    0.745759] icodec 10020000.icodec: component icodec platfrom probe success
+[    0.753534] icodec 10020000.icodec: icodec probe enter
+[    0.793103] as-dsp 134d4000.as-dsp: ASoC: mux LO0_MUX has incorrect number of controls
+[    0.801116] as-dsp 134d4000.as-dsp: ASoC: mux LO1_MUX has incorrect number of controls
+[    0.809119] as-dsp 134d4000.as-dsp: ASoC: mux LO2_MUX has incorrect number of controls
+[    0.817166] as-dsp 134d4000.as-dsp: ASoC: mux LO3_MUX has incorrect number of controls
+[    0.825204] as-dsp 134d4000.as-dsp: ASoC: mux LO4_MUX has incorrect number of controls
+[    0.833232] as-dsp 134d4000.as-dsp: ASoC: mux LO5_MUX has incorrect number of controls
+[    0.841268] as-dsp 134d4000.as-dsp: ASoC: mux LO6_MUX has incorrect number of controls
+[    0.849291] as-dsp 134d4000.as-dsp: ASoC: mux LO7_MUX has incorrect number of controls
+[    0.857338] as-dsp 134d4000.as-dsp: ASoC: mux LO8_MUX has incorrect number of controls
+[    0.865372] as-dsp 134d4000.as-dsp: ASoC: mux LO9_MUX has incorrect number of controls
+[    0.873405] as-dsp 134d4000.as-dsp: ASoC: mux LO10_MUX has incorrect number of controls
+[    0.881533] as-dsp 134d4000.as-dsp: ASoC: mux LO11_MUX has incorrect number of controls
+[    0.892195] Speaker enable pin(34) request ok
+[    0.896546] x2000-sound sound: Sound Card successed
+[    0.901989] ingenic-trng 10072000.dtrng: ingenic HW dtrng Probe success!
+[    0.908985] copy logo_buf from .init.data section, size=29480
+[    0.915271] ingenic-fb 13050000.dpu: mode->refresh: 60, mode->pixclock: 92962, rate: 10756800, modex->p

@@ -1,0 +1,124 @@
+dmesg | wc -l; dmesg; echo ___ENDLOG2___
+241
+[    0.986766] ingenic-fb 13050000.dpu: rdma_desc @ (ptrval) size: 144
+[    0.993069] ingenic-fb 13050000.dpu: composer framedesc @ (ptrval) size 144
+[    1.000122] ingenic-fb 13050000.dpu: composer layerdesc @ (ptrval) size 576
+[    1.007182] ingenic-fb 13050000.dpu: dpu_ctrl_init success
+[    1.013759] ingenic-fb 13050000.dpu: vidmem @ (ptrval) size 1566720
+[    1.046731] ingenic-fb 13050000.dpu: fbdev->rot_angle=0, swap_dims=0
+[    1.053134] ingenic-fb 13050000.dpu: fbdev get swap param error! please check dts.
+[    1.062111] start parse remote-endpoint!
+[    1.066851] start parse remote-endpoint!
+[    1.071569] ingenic-mscaler 13702300.mscaler: error -ENXIO: IRQ index 0 not found
+[    1.079100] ingenic-mscaler 13702300.mscaler: No MScaler IRQ specified
+[    1.085890] ingenic-mscaler 13802300.mscaler: error -ENXIO: IRQ index 0 not found
+[    1.093433] ingenic-mscaler 13802300.mscaler: No MScaler IRQ specified
+[    1.101602] ingenic-rot 13070000.rotate: assigned reserved memory node reserved_mem@6000000
+[    1.110280] ingenic-rot 13070000.rotate: device registered as /dev/video0
+[    1.117812] helix-venc 13200000.helix: assigned reserved memory node reserved_mem@6000000
+[    1.126068] helix-venc 13200000.helix: encoder(helix) registered as /dev/video1
+[    1.134221] felix-vdec 13300000.felix: assigned reserved memory node reserved_mem@6000000
+[    1.142483] felix-vdec 13300000.felix: h264decoder(felix) registered as /dev/video2
+[    1.151412] ingenic SADC driver registeres over!
+[    1.156645] ingenic sadc aux0 probe success
+[    1.161166] ingenic sadc aux1 probe success
+[    1.165605] ingenic sadc aux2 probe success
+[    1.170065] ingenic sadc aux3 probe success
+[    1.174517] ingenic sadc aux4 probe success
+[    1.178957] ingenic sadc aux5 probe success
+[    1.183363] ingenic-tcu 10002000.tcu: error -ENXIO: IRQ index 1 not found
+[    1.190202] ingenic-tcu 10002000.tcu: not support irq trigger function
+[    1.196840] ingenic-tcu 10002000.tcu: ingenic TCU driver register completed
+[    1.204471] rsa 13480000.rsa: rsa driver probe ok!
+[    1.209616] OPENKE-DIAG: first claim of GPD-20 (global gpio 116):
+[    1.215755] CPU: 0 PID: 1 Comm: swapper/0 Not tainted 6.6.18-rt23 #2
+[    1.222175] Stack : 00000000 00000004 80c40000 800997a4 81451b04 00000000 80d90000 80ba55bc
+[    1.230648]         814603f0 80d2e2e3 80d9458c 00000000 00000000 00000001 81451ab0 814669a0
+[    1.239123]         00000000 00000000 80ba55bc 814519b0 fffffdff 814519ac 00000000 00000000
+[    1.247600]         0cdc2c0b 814518c5 ffffffff ffffffff 80ba55bc 00000001 00000014 00000074
+[    1.256076]         00000000 815c05b4 80d43094 00000008 00000000 80012620 00000000 80d90000
+[    1.264552]         ...
+[    1.267023] Call Trace:
+[    1.269495] [<8001e998>] show_stack+0x28/0xf0
+[    1.273914] [<80991c7c>] dump_stack_lvl+0x5c/0x7c
+[    1.278678] [<8093c9ac>] ingenic_gpio_request+0x108/0x110
+[    1.284154] [<80387b78>] gpiod_request_commit+0x104/0x1cc
+[    1.289627] [<80388c2c>] gpiod_request+0x8c/0x17c
+[    1.294396] [<80389e54>] gpiod_find_and_request+0xb8/0x4c8
+[    1.299957] [<8038a304>] gpiod_get_index+0x64/0x98
+[    1.304813] [<8038bc1c>] devm_gpiod_get_index+0x1c/0xbc
+[    1.310111] [<8038c210>] devm_gpiod_get_optional+0x14/0x44
+[    1.315673] [<8092c684>] bt_power_probe+0x5c/0x208
+[    1.320530] [<80400ab8>] platform_probe+0x6c/0xcc
+[    1.325297] [<803fd714>] really_probe+0xec/0x468
+[    1.329975] [<803fdb3c>] __driver_probe_device+0xac/0x270
+[    1.335451] [<803fdd48>] driver_probe_device+0x48/0x110
+[    1.340749] [<803fe0b8>] __driver_attach+0x14c/0x200
+[    1.345780] [<803fb1c0>] bus_for_each_dev+0x70/0xbc
+[    1.350726] [<803fc6f8>] bus_add_driver+0x110/0x234
+[    1.355669] [<803ff12c>] driver_register+0x88/0x15c
+[    1.360614] [<80010500>] do_one_initcall+0x40/0x290
+[    1.365557] [<80d43f00>] kernel_init_freeable+0x1fc/0x29c
+[    1.371033] [<80992ae4>] kernel_init+0x24/0x118
+[    1.375623] [<80017ccc>] ret_from_kernel_thread+0x14/0x1c
+[    1.381099] 
+[    1.382657] OPENKE-DIAG: first claim of GPD-21 (global gpio 117):
+[    1.388779] CPU: 0 PID: 1 Comm: swapper/0 Not tainted 6.6.18-rt23 #2
+[    1.395224] Stack : 00000000 00000004 80c40000 800997a4 81451b04 00000000 80d90000 80ba55bc
+[    1.403699]         814603f0 80d2e2e3 80d9458c 00000000 00000000 00000001 81451ab0 814669a0
+[    1.412176]         00000000 00000000 80ba55bc 814519b0 fffffdff 814519ac 00000000 00000000
+[    1.420651]         172c4d16 814518c5 ffffffff ffffffff 80ba55bc 00000001 00000015 00000075
+[    1.429127]         00000000 815c05b4 80d43094 00000008 00000000 80012620 00000000 80d90000
+[    1.437604]         ...
+[    1.440076] Call Trace:
+[    1.442547] [<8001e998>] show_stack+0x28/0xf0
+[    1.446962] [<80991c7c>] dump_stack_lvl+0x5c/0x7c
+[    1.451731] [<8093c9ac>] ingenic_gpio_request+0x108/0x110
+[    1.457205] [<80387b78>] gpiod_request_commit+0x104/0x1cc
+[    1.462679] [<80388c2c>] gpiod_request+0x8c/0x17c
+[    1.467446] [<80389e54>] gpiod_find_and_request+0xb8/0x4c8
+[    1.473010] [<8038a304>] gpiod_get_index+0x64/0x98
+[    1.477864] [<8038bc1c>] devm_gpiod_get_index+0x1c/0xbc
+[    1.483163] [<8038c210>] devm_gpiod_get_optional+0x14/0x44
+[    1.488724] [<8092c6a8>] bt_power_probe+0x80/0x208
+[    1.493582] [<80400ab8>] platform_probe+0x6c/0xcc
+[    1.498348] [<803fd714>] really_probe+0xec/0x468
+[    1.503028] [<803fdb3c>] __driver_probe_device+0xac/0x270
+[    1.508502] [<803fdd48>] driver_probe_device+0x48/0x110
+[    1.513800] [<803fe0b8>] __driver_attach+0x14c/0x200
+[    1.518831] [<803fb1c0>] bus_for_each_dev+0x70/0xbc
+[    1.523777] [<803fc6f8>] bus_add_driver+0x110/0x234
+[    1.528720] [<803ff12c>] driver_register+0x88/0x15c
+[    1.533666] [<80010500>] do_one_initcall+0x40/0x290
+[    1.538609] [<80d43f00>] kernel_init_freeable+0x1fc/0x29c
+[    1.544084] [<80992ae4>] kernel_init+0x24/0x118
+[    1.548674] [<80017ccc>] ret_from_kernel_thread+0x14/0x1c
+[    1.554150] 
+[    1.556452] ingenic,sdhci 13450000.msc: OPENKE-DIAG: ingenic,sdr -> NULL (absent)
+[    1.564008] ingenic,sdhci 13450000.msc: OPENKE-DIAG: ingenic,pwr -> NULL (absent)
+[    1.571594] ingenic,sdhci 13450000.msc: OPENKE-DIAG: ingenic,rst -> NULL (absent)
+[    1.579224] ingenic,sdhci 13450000.msc: OPENKE-DIAG: wlan-reg-on -> NULL (absent)
+[    1.586813] openke: mmc_of_parse ok, host->mmc->parent=13450000.msc of_node=/ahb2/msc@13450000 pwrseq=00000000
+[    1.628135] mmc0: SDHCI controller on ingenic-sdhci [13450000.msc] using ADMA
+[    1.635836] ingenic,sdhci 13460000.msc: OPENKE-DIAG: ingenic,sdr -> NULL (absent)
+[    1.643403] ingenic,sdhci 13460000.msc: OPENKE-DIAG: ingenic,pwr -> NULL (absent)
+[    1.651012] ingenic,sdhci 13460000.msc: OPENKE-DIAG: ingenic,rst -> NULL (absent)
+[    1.658647] ingenic_gpio_request: GP:GPD  used_pins_bitmap: 0X07FE3F3C
+[    1.665243] OPENKE-DIAG: SECOND/CONFLICTING request for GPD-4 (global gpio 100):
+[    1.672728] CPU: 0 PID: 1 Comm: swapper/0 Not tainted 6.6.18-rt23 #2
+[    1.679147] Stack : 816428a0 00000004 8100bea0 81460364 81451aec 00000000 80d90000 80ba55bc
+[    1.687621]         814603f0 80d2e2e3 80d9458c 00000000 00000000 00000001 81451a98 814669a0
+[    1.696096]         00000000 00000000 80ba55bc 81451998 fffffdff 81451994 00000000 00000000
+[    1.704573]         281904dd 814518ad ffffffff ffffffff 80ba55bc 00000001 00000004 00000064
+[    1.713048]         00000000 815c05b4 81451cc0 00000008 00000000 80012620 00000000 80d90000
+[    1.721525]         ...
+[    1.723996] Call Trace:
+[    1.726468] [<8001e998>] show_stack+0x28/0xf0
+[    1.730886] [<80991c7c>] dump_stack_lvl+0x5c/0x7c
+[    1.735651] [<8093c974>] ingenic_gpio_request+0xd0/0x110
+[    1.741038] [<80387b78>] gpiod_request_commit+0x104/0x1cc
+[    1.746511] [<80388c2c>] gpiod_request+0x8c/0x17c
+[    1.751280] [<80389e54>] gpiod_find_and_request+0xb8/0x4c8
+[    1.756842] [<8038a304>] gpiod_get_index+0x64/0x98
+[    1.761699] [<8038bc1c>] devm_gpiod_get_index+0x1c/0xbc
+[ 

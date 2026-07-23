@@ -26,6 +26,14 @@ artifacts/buildroot-halley5-image/uImage
 scripts/build/overlay/lib/firmware/brcm/brcmfmac43430-sdio.bin
 scripts/build/overlay/lib/firmware/brcm/brcmfmac43430-sdio.txt
 
+# wireless-regdb (ISC-licensed, but still fetched-and-verified rather than
+# committed, so a version bump is a reviewable diff to the fetch script, not
+# a silent binary swap in git history) - scripts/firmware/fetch-wireless-regdb.sh.
+# Re-run after a fresh checkout.
+scripts/build/overlay/lib/firmware/regulatory.db
+scripts/build/overlay/lib/firmware/regulatory.db.p7s
+scripts/build/overlay/lib/firmware/regulatory.db.LICENSE
+
 # build-stage exclusive lock (scripts/build/0[2-5]-*.sh) - local, per-checkout
 .openke-build.lock
 

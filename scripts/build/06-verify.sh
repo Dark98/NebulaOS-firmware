@@ -49,7 +49,7 @@ if [ -f "$KERNEL_CONFIG" ]; then
 	# firmware in the kernel image itself is what actually makes WiFi work,
 	# not just having the files present in rootfs.ext2 (checked separately
 	# below - both need to be true).
-	if grep -q "^CONFIG_EXTRA_FIRMWARE=\"brcm/brcmfmac43430-sdio.bin brcm/brcmfmac43430-sdio.txt\"$" "$KERNEL_CONFIG"; then
+	if grep -q '^CONFIG_EXTRA_FIRMWARE="brcm/brcmfmac43430-sdio\.bin brcm/brcmfmac43430-sdio\.txt' "$KERNEL_CONFIG"; then
 		echo "OK   CONFIG_EXTRA_FIRMWARE set (WiFi firmware embedded in the kernel image)"
 	else
 		echo "MISS CONFIG_EXTRA_FIRMWARE not set as expected - did fetch-wifi-firmware.sh run before 02-configure-buildroot.sh?"

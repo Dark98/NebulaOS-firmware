@@ -9,17 +9,28 @@
 #
 # Run this ON the device, from the currently-running stock OS, e.g.:
 #   scp flash-spare-slot.sh root@<printer-ip>:/tmp/
-#   ssh root@<printer-ip> 'sh /tmp/flash-spare-slot.sh /path/to/xImage /path/to/rootfs.squashfs'
+#   ssh root@<printer-ip> 'sh /tmp/flash-spare-slot.sh /path/to/xImage /path/to/rootfs.squashfs [/path/to/build-manifest.txt]'
 #
 # Every check below aborts loudly rather than guessing or proceeding on a
 # mismatch - this script is the one place where a silent mistake could
 # overrun into a neighboring partition, so nothing here is allowed to be
 # approximate.
+#
+# 2026-07-23: the optional 3rd argument (build-manifest.txt, produced by
+# 05-final-build.sh) is checked against BEFORE writing anything, closing a
+# real gap found this session - a 55MB rootfs transfer got killed mid-flight
+# by an over-tight SCP wrapper timeout once, leaving a truncated file on the
+# device that this script's own write-verify loop couldn't have caught (it
+# only proves the device matches whatever local file it was given, not that
+# the local file matches what the build host actually produced). Strongly
+# recommended; the script still runs without it (matching every previous
+# real use this session) but skips this specific class of check.
 
 set -e
 
 KERNEL_IMG="$1"
 ROOTFS_IMG="$2"
+MANIFEST="$3"
 
 KERNEL_DEV=/dev/mmcblk0p6
 ROOTFS_DEV=/dev/mmcblk0p8
@@ -69,6 +80,40 @@ ROOTFS_SIZE=$(wc -c < "$ROOTFS_IMG")
 
 echo "xImage:          $KERNEL_SIZE / $KERNEL_PART_BYTES bytes ($(( KERNEL_SIZE * 100 / KERNEL_PART_BYTES ))% full)"
 echo "rootfs.squashfs: $ROOTFS_SIZE / $ROOTFS_PART_BYTES bytes ($(( ROOTFS_SIZE * 100 / ROOTFS_PART_BYTES ))% full)"
+
+# 4. If a build manifest was given, verify the transferred files match the
+#    build host's own recorded size+sha256 exactly - catches truncated or
+#    otherwise corrupted transfers before they ever reach a real partition.
+if [ -n "$MANIFEST" ]; then
+	[ -f "$MANIFEST" ] || die "manifest $MANIFEST does not exist"
+	get_field() { grep "^$1=" "$MANIFEST" | cut -d= -f2-; }
+
+	EXPECT_KERNEL_SIZE=$(get_field xImage_size)
+	EXPECT_KERNEL_SHA256=$(get_field xImage_sha256)
+	EXPECT_ROOTFS_SIZE=$(get_field rootfs_squashfs_size)
+	EXPECT_ROOTFS_SHA256=$(get_field rootfs_squashfs_sha256)
+
+	[ -n "$EXPECT_KERNEL_SIZE" ] && [ -n "$EXPECT_KERNEL_SHA256" ] || \
+		die "manifest $MANIFEST missing xImage_size/xImage_sha256"
+	[ -n "$EXPECT_ROOTFS_SIZE" ] && [ -n "$EXPECT_ROOTFS_SHA256" ] || \
+		die "manifest $MANIFEST missing rootfs_squashfs_size/rootfs_squashfs_sha256"
+
+	[ "$KERNEL_SIZE" = "$EXPECT_KERNEL_SIZE" ] || \
+		die "xImage size $KERNEL_SIZE does not match manifest ($EXPECT_KERNEL_SIZE) - transfer likely truncated or wrong file"
+	[ "$ROOTFS_SIZE" = "$EXPECT_ROOTFS_SIZE" ] || \
+		die "rootfs.squashfs size $ROOTFS_SIZE does not match manifest ($EXPECT_ROOTFS_SIZE) - transfer likely truncated or wrong file"
+
+	ACTUAL_KERNEL_SHA256=$(sha256sum "$KERNEL_IMG" | awk '{print $1}')
+	ACTUAL_ROOTFS_SHA256=$(sha256sum "$ROOTFS_IMG" | awk '{print $1}')
+	[ "$ACTUAL_KERNEL_SHA256" = "$EXPECT_KERNEL_SHA256" ] || \
+		die "xImage sha256 $ACTUAL_KERNEL_SHA256 does not match manifest ($EXPECT_KERNEL_SHA256)"
+	[ "$ACTUAL_ROOTFS_SHA256" = "$EXPECT_ROOTFS_SHA256" ] || \
+		die "rootfs.squashfs sha256 $ACTUAL_ROOTFS_SHA256 does not match manifest ($EXPECT_ROOTFS_SHA256)"
+
+	echo "Manifest verified OK: both files match $MANIFEST exactly (size + sha256)"
+else
+	echo "WARNING: no build manifest given - skipping transfer-integrity verification against the build host" >&2
+fi
 
 write_and_verify() {
 	src="$1"

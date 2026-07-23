@@ -222,13 +222,16 @@ nebula_system_backup.bin` via `sgdisk`+`dd`+`unsquashfs`, no root required) ship
 non-Ingenic-specific mainline-style source tree with no board-file evidence either way) was
 inconclusive and added nothing.
 
-**Classification: `UNKNOWN_REQUIRES_PCB_EVIDENCE`.** The GPIO claims cleanly and causes zero boot
-noise, so there is no warning driving a change, and no positive evidence a physical amp/speaker
-exists on this specific SKU (the printer's confirmed, working, and entirely separate audio device is
-the PWM-driven piezo beeper - see `docs/BEEPER_CONTROL_PATH.md` - not this codec/ALSA path). Per this
-mission's own guardrail against disabling a real product function without evidence, **left unchanged
-in the DTS**. Do not conflate this with the beeper; they are provably independent hardware paths
-(different GPIO banks, different subsystems, beeper bypasses ALSA/kernel-PWM entirely via `/dev/mem`).
+**Classification (superseded): was `UNKNOWN_REQUIRES_PCB_EVIDENCE`, now `RESOLVED`.** At the time
+this was written, the GPIO claimed cleanly with zero boot noise and no positive evidence either way.
+The functional production-baseline mission (2026-07-23) resolved the underlying question directly:
+Phase 1 booted the exact stock firmware and found stock never uses ALSA at all (`ALSA device list:
+No soundcards found.`, empty `/proc/asound`, and stock's real production stack - Klipper/GuppyScreen
+- has zero audio consumer). Phase 2 disabled the entire PCM/ALSA graph as a result, which removes
+this GPIO's only live consumer (the `sound` node's `ingenic,spken-gpio` property) along with it - the
+pin is no longer requested at all. Do not conflate this with the beeper; they were always provably
+independent hardware paths (different GPIO banks, different subsystems, beeper bypasses ALSA/
+kernel-PWM entirely via `/dev/mem`), and the beeper is completely unaffected by this disable.
 
 ## Not yet covered (Phase 3B)
 

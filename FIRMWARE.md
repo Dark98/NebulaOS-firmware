@@ -4900,3 +4900,100 @@ display/rotation/encode/decode, touch (`ns2009_ts`), RTC, watchdog, PWM, USB, th
 (`guppybeep click`, RC=0), and the full app stack (Klipper connected, Moonraker `/server/info`
 responding, GuppyScreen running). `S99confirm-good` had already flipped the marker forward on its own
 by the time validation began, confirming the app stack was detected healthy without intervention.
+
+## 58. Functional production-baseline mission: booting stock to settle the ALSA question for good, disabling the whole unused audio graph, and a second off-by-one found by its own twin
+
+Closing pass explicitly scoped to a *functional* production baseline (not manufacturing/reliability/
+security hardening): one clean build, one verified flash, one reboot, one complete smoke test - not
+another open-ended investigation cycle.
+
+### Phase 0-1: freeze the baseline, then answer the ALSA question directly instead of guessing again
+
+Tagged the prior mission's validated state on both repos (`baseline-2026-07-23-cleanup-mission`)
+before touching anything. Then, rather than keep treating GPIO 34/BAIC0/icodec as an open question,
+booted the *exact stock firmware* and checked directly: `dmesg` says `ALSA device list: No soundcards
+found.` verbatim, `/proc/asound/cards` says `--- no soundcards ---`, `/proc/asound/pcm` is empty, and
+`/dev/snd` contains only the generic ALSA sequencer timer (card-independent, always present). Stock
+does ship a real, carefully-tuned volume-control script (`/usr/bin/audio_setting.sh`, real dB-step
+arrays) and a dedicated `audio-server` binary that references it - but `audio-server` is not running,
+is not started by any `/etc/init.d/S*` script, and stock's actual production stack is Klipper +
+GuppyScreen (`S55klipper_service`, `S56moonraker_service`, `S99guppyscreen`) - the whole `app-server`/
+`audio-server`/`display-server`/`master-server`/`web-server`/`wifi-server` family is inactive
+legacy-reference code from an earlier internal architecture, present on the shared rootfs image but
+never wired into this product's own boot sequence. Presence on disk is not evidence of use.
+
+### Phase 2: the whole PCM/ALSA graph disabled, GPIO 34 closed as a side effect
+
+Disabled `as-platform`, `as-virtual-fe`, `as-fmtcov`, `as-dsp`, `as-baic`, `as-dmic`, `as-mixer`,
+`as-spdif`, `icodec`, and the top-level `sound` machine-driver node (`0ad06fa0e`) - the complete
+dependency graph, not just the card entry point, so no component driver probes at all anymore. This
+also closes GPIO 34/`Speaker_en` (previously `UNKNOWN_REQUIRES_PCB_EVIDENCE`): the `sound` node's
+`ingenic,spken-gpio` property was its only live consumer (confirmed earlier that `icodec`'s own copy
+of the same property was already dead - the compiled `icdc_inno.c` v1 driver never reads it), so the
+pin is no longer requested at all. The PWM beeper (`GPC-3`, `guppybeep`, direct `/dev/mem` MMIO) needs
+none of this and is entirely unaffected - confirmed live post-reboot (`guppybeep click` → RC=0).
+
+### Phase 3: a real off-by-one, found once, then found again by its own twin
+
+Root-caused `parse cpu-ost-iomap, ost number define in dt is too large!`: `ingenic_core_ost.c` parses
+`cpu-ost-map` as a flat u32 array into pairs, incrementing an index and checking `index > NR_CPUS * 2
+- 1` *after* storing each value. For this board's fully correct, minimal DT (`<0 0x000>, <1 0x100>` -
+exactly `NR_CPUS` (2) pairs), that check fires on the post-increment value of the *last legitimate*
+entry, after every real value was already stored correctly - a genuine off-by-one, not excess DT data
+(removing an entry would have broken CPU1's timer). Fixed by checking the target pair index against
+the real `cpu_ost_map[NR_CPUS]` array bound *before* writing, not after the fact against a flat value
+count - strictly safer for a genuinely-oversized DT too (the original could perform one out-of-bounds
+write before its own check caught up).
+
+The very next full boot-log review (required by this mission's own Phase 7, "one complete boot-log
+review") turned up a second, previously-unnoticed instance of the identical pattern: `parse
+cpu-intc-iomap, intc define in dt is too large!`, in the interrupt controller driver
+(`irq-ingenic-chip.c`), parsing `cpu-intc-map` into `cpu_intc_map[NR_CPUS]` with byte-for-byte the
+same off-by-one. Same fix applied (`e123bb14f`). Both messages are gone in the final boot log.
+
+### Phase 4: DT capability assertions added to the verify pipeline
+
+`06-verify.sh` now decompiles the real, packaged, fully-resolved production DTB (via the `dtc` host
+tool Buildroot already builds - no Docker/network needed) and asserts every intentionally-disabled
+reference-design block (`mac1`, `msc2`, `sfc`, both MScalers, `uart3`, and now the whole PCM/ALSA
+graph) stays disabled, and every required product device (eMMC, WiFi SDIO, `uart1`, `uart4` console,
+touch, display, PWM/beeper, USB, RTC, watchdog) stays enabled - checking the real compiled artifact
+rather than reimplementing DTS override-precedence against the layered source. Catches a future
+accidental status flip at verify time instead of on a live boot.
+
+### Phases 5-6: reaffirmed, no new work needed
+
+CLM/TxCap: already conclusively closed (confirmed absent from stock's own shipped rootfs, not merely
+unfound). TCU trigger-IRQ: already downgraded to `dev_info` in an earlier pass, reaffirmed unchanged.
+`pdmam` IRQ, jitterentropy, USB dummy regulators, static GPIO base allocation, IRQ affinity warning,
+alternate GPT: all already correctly documented as accepted, harmless, architecture-level
+characteristics with zero product impact - no code changes needed or made.
+
+### Phase 7: one real build/flash/reboot/smoke-test cycle (two, once the second off-by-one was found)
+
+Built via the standard `02`-`06` pipeline, `06-verify.sh` 100% clean both times (zero MISS lines,
+including all new DTB assertions). Found the device already on the custom slot from the prior
+mission - cycled to stock, transferred the new images, flashed the spare slot (manifest-verified
+size+SHA256 before write, md5 write-back verified after), flipped the marker, rebooted. The
+boot-log review then surfaced the `cpu-intc-map` twin bug, so - rather than freeze a baseline with a
+known, understood, but unapplied fix - did one more complete cycle: fixed it, rebuilt, reflashed,
+rebooted a second time. Final smoke test: eMMC (10 partitions), WiFi SDIO + real firmware version
+string, USB, display/touch/rotation/encode/decode, RTC, watchdog, PWM beeper (RC=0), Klipper
+connected to Moonraker, GuppyScreen running, `S99confirm-good` already flipped the marker forward on
+its own (confirming the app stack was detected healthy without intervention), fallback metadata
+intact. Final boot-log review: zero stack traces, zero GPIO conflicts, zero failed mandatory probes,
+zero repeated deferred-probe churn, `ALSA device list: No soundcards found.` byte-for-byte matching
+stock, both "too large" messages gone. See `docs/BOOT_WARNING_AUDIT.md`'s final-gate note and
+`docs/BOARD_CAPABILITY_MATRIX.md` for the complete capability disposition.
+
+### Real hardware safety record this section
+
+- A serial-automation script bug (marker-detection matching the shell's local echo of the typed
+  command instead of only its actual output) caused a boot-completion poll to spin silently for
+  longer than it should have - caught, root-caused, and fixed mid-session, not worked around.
+- Every reboot cycle used the project's own established mechanisms (`write_ota_marker`,
+  `flash-spare-slot.sh`'s own manifest/size/SHA256/md5 verification chain, never touching the
+  currently-booted slot) - no ad-hoc partition writes.
+- Classification: **`FUNCTIONAL_PRODUCTION_BASELINE`** - explicitly not manufacturing-qualified,
+  reliability-validated, security-hardened, or Bluetooth-complete. See
+  `docs/BOARD_CAPABILITY_MATRIX.md`.

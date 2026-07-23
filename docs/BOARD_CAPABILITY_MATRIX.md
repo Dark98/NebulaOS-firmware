@@ -1,0 +1,50 @@
+# Board Capability Matrix
+
+The functional production baseline's capability disposition for the Nebula Pad / Ender-3 V3 KE
+custom Linux 6.6.18-rt23 image, as of the "functional production-baseline mission"
+(2026-07-23). This is a snapshot of what's *supported*, *not supported*, or *unpopulated* -
+not a manufacturing reliability or security-hardening statement (see the classification note
+at the bottom).
+
+| Capability | Status | Notes |
+|---|---|---|
+| eMMC storage | supported | `msc0` (`13450000.msc`), all 10 partitions enumerate, OTA A/B slots both proven |
+| Wi-Fi | supported | `msc1` (`13460000.msc`), BCM43430/1, firmware 7.46.58.13, byte-identical to stock's own; scan/association/DHCP all proven live |
+| Bluetooth | not supported in this baseline | `uart3` (the real transport pins) guaranteed-conflicts with `i2c4`/touch and is disabled (Path A); a real transport needs stock's dynamic pin hand-off mechanism - separate, future mission |
+| Display | supported | DPU (`13050000.dpu`), confirmed live, GuppyScreen renders |
+| Backlight | supported | PWM0-driven, confirmed live |
+| Touchscreen | supported | `i2c4`, `ns2009_ts`, confirmed live |
+| PWM beeper | supported | GPC-3/PWM channel 3, `guppybeep`, direct `/dev/mem` MMIO - entirely independent of ALSA/kernel-PWM-subsystem, unaffected by the audio-graph disable below |
+| ALSA/PCM audio | intentionally disabled | stock's own dmesg says "No soundcards found," `/proc/asound` is empty, and stock's real production stack (Klipper/GuppyScreen) has zero consumer for it - the whole graph (as-platform, as-virtual-fe, as-fmtcov, as-dsp, as-baic, as-dmic, as-mixer, as-spdif, icodec, the machine-driver `sound` node) is disabled; see `docs/BOOT_WARNING_AUDIT.md` |
+| USB | supported | `dwc2` OTG, storage/HID/camera all proven live |
+| Camera | supported | USB UVC webcam via `ustreamer`, confirmed live |
+| Rotation | supported | `/dev/video0`, confirmed live |
+| H.264 encoder | supported | `/dev/video1`, confirmed live |
+| H.264 decoder | supported | `/dev/video2`, confirmed live |
+| MScaler (ISP scaler) | unused | `v4l2_subdev`-only, zero userspace consumer, disabled |
+| Ethernet | not populated | no RJ45 on this product; `mac1` disabled (real GPIO conflict with `lcd_rst` besides) |
+| Extra MMC (MSC2) | not populated | reference-board-only controller, no product storage device, disabled |
+| SFC flash | not populated | no MTD device on stock or custom, no consumer, disabled |
+| DMIC | not present / not used | no product microphone array; already disabled for a real `GPC-21`/`uart1` conflict, additionally covered by the full audio-graph disable now |
+| eFuse | disabled | no production consumer, avoids OTP write risk |
+| RTC | supported | confirmed live |
+| Watchdog | supported | confirmed live |
+| Klipper | supported | confirmed live, connects to MCU over `uart1` |
+| Moonraker | supported | confirmed live, `/server/info` responds |
+| GuppyScreen | supported | confirmed live |
+| A/B OTA fallback | supported | `S00revert-safety`/`S99confirm-good`, proven across many real reboot cycles this project |
+
+## Classification
+
+This baseline is: **`FUNCTIONAL_PRODUCTION_BASELINE`**
+
+It is explicitly **not**:
+
+- manufacturing qualified
+- long-term reliability validated
+- security hardened
+- Bluetooth complete
+
+Those are separate, later milestones - see `FIRMWARE.md`'s own running log for the mission that
+produced each capability's disposition, and `docs/BOOT_WARNING_AUDIT.md` for the full per-message
+boot-log audit trail behind every "supported"/"not supported"/"unused" verdict above.

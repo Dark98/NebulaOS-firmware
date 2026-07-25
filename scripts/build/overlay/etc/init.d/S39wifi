@@ -1,19 +1,20 @@
 #!/bin/sh
 #
 # OpenKE addition (FIRMWARE.md sec 17/18): starts wpa_supplicant on wlan0
-# against the real credentials fetched from the live device
-# (/usr/data/wpa_supplicant.conf there - the stock /etc/wpa_supplicant.conf
-# is an unused empty template, confirmed via the live wpa_supplicant
-# process's own /proc/<pid>/cmdline). Numbered S39 - runs before
-# S40network's `ifup -a`, so wlan0 has already associated by the time
-# udhcpc tries it (this script also explicitly re-runs `ifup wlan0` itself
-# after associating, as a real belt-and-suspenders rather than relying on
-# ordering alone).
+# against real credentials. Numbered S39 - runs before S40network's
+# `ifup -a`, so wlan0 has already associated by the time udhcpc tries it
+# (this script also explicitly re-runs `ifup wlan0` itself after associating,
+# as a real belt-and-suspenders rather than relying on ordering alone).
 #
 # ctrl_interface=/var/run/wpa_supplicant in the config already matches what
 # GuppyScreen's own guppyconfig.json expects for its WiFi panel.
+#
+# Lives under /usr/data/openke/ (S01persistent-datastore) rather than
+# /usr/data/wpa_supplicant.conf directly - real, persistent storage now
+# (mmcblk0p10), kept in this build's own isolated subdirectory rather than
+# the shared partition's top level, same as everything else this build owns.
 
-CONF=/usr/data/wpa_supplicant.conf
+CONF=/usr/data/openke/wpa_supplicant.conf
 PIDFILE=/var/run/wpa_supplicant-wlan0.pid
 
 start() {

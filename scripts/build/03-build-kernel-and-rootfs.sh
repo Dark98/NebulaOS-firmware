@@ -99,6 +99,20 @@ apt-get install -y -qq python3 bc cpio rsync unzip bison flex libncurses5-dev fi
 	libjpeg-dev libpng-dev libtiff-dev libwebp-dev libopenjp2-7-dev >/dev/null 2>&1
 make linux-dirclean
 make wpa_supplicant-dirclean
+# Same staleness class as the two dircleans above (FIRMWARE.md sec 28): a
+# plain incremental make only rebuilds a package whose stamp is missing or
+# whose config hash changed, and toggling a Kconfig option alone does not
+# invalidate an already-built package stamp. Hit this for real chasing a
+# matplotlib build failure - host-python3 kept silently reusing its original
+# SSL-less build across multiple BR2_PACKAGE_HOST_PYTHON3_SSL config-flip
+# rebuilds, so pip inside it could never actually reach the network no
+# matter what else changed. Fixed with one `make host-python3-dirclean`
+# (not kept here permanently - a real, one-time transition, not an ongoing
+# one like the two dircleans above; host-python3 does not need forcing on
+# every build once it is correctly built once). If the host-python3
+# BR2_PACKAGE_HOST_PYTHON3_* options change again later, this needs a
+# manual `make host-python3-dirclean` before the next build, same as any
+# other already-built package whose Kconfig options changed.
 make gcc-final-reinstall
 make
 '

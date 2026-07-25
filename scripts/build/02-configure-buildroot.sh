@@ -21,6 +21,31 @@
 # this script is what syncs the template into. A rebuild after only touching
 # the template, without re-running this first, silently uses whatever this
 # script last copied there.
+#
+# IMPORTANT: renaming or deleting a file from scripts/build/overlay/ does NOT
+# remove it from a real build - a genuinely separate bug from the one above,
+# found for real deleting S01tmpfs-datastore in favor of
+# S01persistent-datastore (the GuppyScreen persistent-storage work): this
+# script re-syncs the overlay TEMPLATE cleanly every time (the rm -rf above),
+# but Buildroot's own output/target/ staging directory only ever gets files
+# ADDED or OVERWRITTEN by the rootfs-overlay step, never removed, and
+# accumulates across every build since the last full clean. Both
+# S01tmpfs-datastore (deleted from the overlay days earlier) and
+# S01persistent-datastore (its replacement) ended up in the same built image
+# at once - actively dangerous here specifically, since the stale script
+# re-mounted tmpfs right after the new one finished setting up real
+# persistent storage, silently undoing it. Buildroot has no cheap way to
+# selectively re-sync output/target/ (its package install stamps live
+# elsewhere and do not get invalidated by removing target files directly, so
+# deleting output/target/ alone leaves it mostly empty instead of clean) - a
+# renamed or deleted overlay file must also be removed by hand from
+# vendor/buildroot-x2000/output/target/ before the next 05-final-build.sh, or
+# the build needs a full clean. 06-verify.sh also cannot catch this on its
+# own: it only inspects rootfs.ext2, and both rootfs.ext2 and rootfs.squashfs
+# are built from this same stale output/target/, so a leftover file is wrong
+# in both images identically - checking the actual packaged rootfs.squashfs
+# directly (e.g. via unsquashfs) is the only real way to confirm a removed
+# file is genuinely gone.
 set -e
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
@@ -79,6 +104,10 @@ cp -r "/repo/scripts/build/overlay/." "/repo/vendor/buildroot-x2000/board/halley
 mkdir -p "/repo/vendor/buildroot-x2000/board/halley5-openke-overlay/opt/printer_data/comms" \
          "/repo/vendor/buildroot-x2000/board/halley5-openke-overlay/opt/printer_data/logs" \
          "/repo/vendor/buildroot-x2000/board/halley5-openke-overlay/opt/printer_data/gcodes"
+rm -rf "/repo/vendor/buildroot-x2000/board/halley5-openke-wheels"
+mkdir -p "/repo/vendor/buildroot-x2000/board/halley5-openke-wheels"
+cp "/repo/scripts/build/vendor-wheels/"*.whl "/repo/vendor/buildroot-x2000/board/halley5-openke-wheels/"
+cp "/repo/scripts/build/vendor-patches/python-matplotlib/python-matplotlib.mk" "/repo/vendor/buildroot-x2000/package/python-matplotlib/python-matplotlib.mk"
 '
 
 # Hand the overlay tree back to the host user - real bug found 2026-07-23:

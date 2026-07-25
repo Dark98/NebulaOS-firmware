@@ -66,6 +66,15 @@ cp -r "$VENDOR/klipper/klippy" "$OVERLAY/opt/klipper/"
 find "$OVERLAY/opt/klipper" -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 rm -f "$OVERLAY/opt/klipper/klippy/chelper"/*.o "$OVERLAY/opt/klipper/klippy/chelper"/*.a
 
+# This repo's own klippy_extras/ (prtouch_v2.py, z_compensate.py,
+# guppy_module_loader.py, etc.) was a real, pre-existing gap - written and
+# referenced by printer.cfg's own comments, but never actually copied
+# anywhere by this pipeline, since only vendor Klipper's own klippy/extras/
+# ever made it into the overlay above. Layered on top (never replacing
+# vendor Klipper's own extras), same as everything else in this stage.
+cp "$REPO_ROOT/klippy_extras/"*.py "$OVERLAY/opt/klipper/klippy/extras/"
+rm -rf "$OVERLAY/opt/klipper/klippy/extras/__pycache__"
+
 ### 2. Moonraker: source + its Python dependency chain
 echo "== copying Moonraker source =="
 mkdir -p "$OVERLAY/opt/moonraker"

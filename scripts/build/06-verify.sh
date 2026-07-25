@@ -225,10 +225,10 @@ echo "=== SSH/console/recovery (FIRMWARE.md sec 18/21/22/24) ==="
 check /usr/sbin/dropbear
 check /usr/sbin/wpa_cli
 check /etc/init.d/S00revert-safety
-check /etc/init.d/S01tmpfs-datastore
+check /etc/init.d/S01persistent-datastore
 check /etc/init.d/S99confirm-good
 check /etc/ota_marker.sh
-check /usr/data/printer_data/config/GuppyScreen/scripts/static_ip.py
+check /opt/printer_data/config/GuppyScreen/scripts/static_ip.py
 '
 
 echo "=== architecture spot-checks (host objdump has no MIPS backend - using the k1-bash-build toolchain) ==="

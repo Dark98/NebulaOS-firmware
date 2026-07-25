@@ -1,0 +1,113 @@
+#!/bin/sh
+#
+# Real, persistent writable storage for this build, replacing the tmpfs
+# stand-in from FIRMWARE.md sec 24 (S01tmpfs-datastore). That script was a
+# deliberate, temporary safety choice for an untested custom image: /usr/data
+# (mmcblk0p10) is a real ext4 partition physically shared with stock (not
+# duplicated per A/B slot), so it mounted plain tmpfs over it instead, at the
+# cost of losing all state - WiFi credentials, printer.cfg SAVE_CONFIG,
+# GuppyScreen touch calibration - on every single reboot.
+#
+# Now that the kernel side is a tagged, proven production baseline
+# (functional-production-baseline-2026-07-23) with working A/B fallback, this
+# mounts the real partition - but everything this build writes lives under
+# its own /usr/data/openke/ subdirectory, never touching whatever else
+# already exists on that shared partition from stock. First-boot-only seeding
+# (checked via existence, not reseeded every boot like the tmpfs version had
+# to be) means real user state - WiFi creds, calibration, SAVE_CONFIG -
+# survives reboots from here on.
+#
+# Runs after S00revert-safety, before anything that needs to read/write these
+# paths - webcam/klipper/moonraker/guppyscreen (S50+) all come later.
+#
+# /usr/data itself must exist as a real (if empty) directory baked into the
+# image - scripts/build/overlay/usr/data/.keep is what guarantees that. The
+# root filesystem is squashfs (read-only), so mkdir -p /usr/data below can
+# only ever succeed if that directory already exists on disk to mount over;
+# a genuinely brand-new top-level directory can never be created here at
+# runtime. Found for real: an earlier overlay cleanup pass removed the only
+# file that used to live under usr/data/ in the overlay source (moved to its
+# correct /opt/printer_data location), which silently stopped baking in the
+# usr/data directory itself as a side effect - this whole script then failed
+# every mkdir/mount/cp call in sequence, and GuppyScreen never even started.
+
+DATA_ROOT=/usr/data/openke
+PDATA=$DATA_ROOT/printer_data
+GUPPY_STATE=$DATA_ROOT/guppyscreen
+
+seed_once() {
+	src="$1"
+	dst="$2"
+	[ -e "$dst" ] && return 0
+	mkdir -p "$(dirname "$dst")"
+	cp -a "$src" "$dst"
+}
+
+start() {
+	mkdir -p /usr/data
+	mount -t ext4 /dev/mmcblk0p10 /usr/data
+
+	mkdir -p "$DATA_ROOT"
+
+	# Seed real defaults from the squashfs's baked-in copies, once ever -
+	# a real device's SAVE_CONFIG/calibration/credentials must never be
+	# clobbered by a later boot just because this script runs again.
+	seed_once /opt/printer_data "$PDATA"
+	mkdir -p "$PDATA/config/GuppyScreen/scripts"
+	seed_once /opt/guppyscreen/guppyconfig.json "$GUPPY_STATE/guppyconfig.json"
+
+	# /opt/printer_data ships baked-in defaults on the read-only squashfs
+	# (printer.cfg, moonraker.conf) for the seed step above - bind-mounting
+	# the real persistent copy over it is what makes Klipper/Moonraker's
+	# hardcoded /opt/printer_data paths (S55klipper, S56moonraker) actually
+	# writable and persistent, without changing either service's config.
+	mount --bind "$PDATA" /opt/printer_data
+
+	# GuppyScreen hardcodes its own config path as
+	# /proc/self/exe's-directory/guppyconfig.json (main.cpp) - i.e.
+	# /opt/guppyscreen/guppyconfig.json, on the read-only squashfs, not
+	# reachable via any override flag. A single-file bind mount is the only
+	# way to make just this one file persistent without also having to
+	# duplicate the guppyscreen/guppybeep binaries or themes/ into real
+	# storage. Without this, touch_calibrated (sysinfo_panel.cpp) can never
+	# actually save - not just "resets every boot," writes fail outright,
+	# which is why GuppyScreen was stuck showing the recalibration wizard.
+	mount --bind "$GUPPY_STATE/guppyconfig.json" /opt/guppyscreen/guppyconfig.json
+
+	# GuppyScreen's static_ip_panel.cpp separately hardcodes
+	# /usr/data/printer_data/config/GuppyScreen/scripts/static_ip.py (a
+	# stock-Creality-style absolute path, not configurable) - point it at the
+	# same real printer_data tree as everything else instead of a second,
+	# disconnected copy.
+	#
+	# CRITICAL: only create these two top-level links if nothing already
+	# exists there - real incident, found live testing on this project's
+	# actual test device: /usr/data (mmcblk0p10) is the SAME physical
+	# partition stock uses, and this device already had a real, previously-
+	# installed GuppyScreen there from real prior use (themes, calibration,
+	# backups, and a real ~6MB guppyscreen binary). `ln -sf SRC DST` treats
+	# an existing DST *directory* as "create the link inside it using SRC's
+	# basename" instead of replacing DST - so `ln -sf /opt/guppyscreen
+	# /usr/data/guppyscreen` did not create /usr/data/guppyscreen as a
+	# symlink (it already existed as a real directory); it silently landed
+	# inside it and overwrote the real guppyscreen binary with a symlink to
+	# a path that only exists on the custom image, breaking stock's own
+	# GuppyScreen outright. The printer_data case was the same mechanism but
+	# landed on a name nothing already used, so it only left a harmless
+	# stray extra entry rather than destroying anything. Recovered by hand
+	# from a real backup the device owner had made; both are now guarded so
+	# this can never happen again on a device with real stock content on
+	# this partition - if either path already has ANY content, real or
+	# leftover from us, this leaves it alone rather than guessing.
+	[ -e /usr/data/printer_data ] || ln -s /opt/printer_data /usr/data/printer_data
+	[ -e /usr/data/guppyscreen ] || ln -s /opt/guppyscreen /usr/data/guppyscreen
+}
+
+case "$1" in
+	start)
+		start
+		;;
+	*)
+		;;
+esac
+exit 0

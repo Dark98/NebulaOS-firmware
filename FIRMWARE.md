@@ -4997,3 +4997,85 @@ stock, both "too large" messages gone. See `docs/BOOT_WARNING_AUDIT.md`'s final-
 - Classification: **`FUNCTIONAL_PRODUCTION_BASELINE`** - explicitly not manufacturing-qualified,
   reliability-validated, security-hardened, or Bluetooth-complete. See
   `docs/BOARD_CAPABILITY_MATRIX.md`.
+
+## 59. GUI workstream: display and touch root-cause fixes, functional GUI baseline
+
+Closing pass for display quality and touch input - the two remaining userspace-facing defects left
+open at the kernel handoff. Both root-caused and fixed with direct hardware evidence, not guessed;
+one guessed intermediate (display bus mode, twice) was tested and reverted before the real value was
+obtained by reading it directly off stock's own running hardware.
+
+### Display: RGB565, proven from stock's own live register, not guessed
+
+The panel driver had defaulted to `TFT_LCD_MODE_PARALLEL_888`, an explicitly unconfirmed assumption
+flagged in the driver's own header comment since it was first written. Two isolated experiments
+(`PARALLEL_666` alone, then `PARALLEL_666` with the reference template's own dithering) were tested
+and reverted - both produced a color tint or a different, still-wrong artifact, not a fix. Rather
+than guess a third bus width, cache/DMA coherency and DPU FIFO/underrun were ruled out first with
+live evidence (a full-frame-rewrite experiment while GuppyScreen ran physically changed nothing; the
+DPU's own interrupt counters showed zero underruns across tens of thousands of real interrupts with
+GuppyScreen active), then the real `DC_TFT_CFG` register was read directly off stock while it was
+booted and running (`devmem 0x13059010 32` → `0x00000102`, decoding to `MODE=0b010=PARALLEL_565`
+under this driver's own `dpu_reg.h` bitfield definitions). Custom's own live read of the same
+register (`0x00000000`, matching its then-current `PARALLEL_888` config exactly) validated the read
+methodology before trusting the stock value. Setting `PARALLEL_565` was physically confirmed fixed:
+grain removed, gradients smooth, blended content and text clean, matching stock.
+
+GPIO 85/PC21 (the earlier, separately-confirmed dark-panel fix) was frozen and not reopened. Two
+other real register divergences found along the way - `DC_SYNC_DL` (stock=1, custom=0) and a
+separate CGU pixel-clock-inversion bit at physical `0x10000064` bit 26 (stock=1, custom=0) - were
+deliberately left untouched: the display was already fixed, and changing a working configuration
+solely for register parity would only add risk.
+
+### Touch: the kernel driver generated zero coordinate events, root-caused via disassembly of stock's real driver
+
+The reported symptom (touch wakes the display but never activates on-screen controls) turned out to
+undersell the real defect. A native diagnostic tool (`inputdiag`, built with this project's own MIPS
+toolchain) proved custom's touch driver generated *zero* raw coordinate events even with GuppyScreen
+fully stopped and no other process holding the device open - not a mapping or calibration problem,
+a complete absence of events. Temporary rate-limited kernel instrumentation showed why: the generic
+upstream `ns2009.c` driver gates touch detection on the NS2009 chip's Z1 pressure ADC channel, which
+reads exactly `0` on every single poll on this real board regardless of touch state.
+
+Pulling and disassembling stock's closed `ns2009_touch.ko` (relocation-verified, not string-guessed)
+showed a completely different architecture: interrupt-driven via `gpio_to_desc(79)` →
+`gpiod_to_irq()` → `devm_request_threaded_irq()`, corroborated by a real `Unbalanced enable for IRQ
+74` kernel warning captured live during stock's own `ns2009_open()` earlier in this project's own
+history. Stock's I2C read commands for X/Y were byte-identical to custom's - only the press-detection
+mechanism differed. GPIO 79 decodes to GPIOC pin 15 under this project's own established
+`bank*32+pin` convention (the same one that identified GPIO 85 as PC21).
+
+Added an optional `pendown-gpios` DT property (`&gpc 15`, active-low) and modified `ns2009.c` to gate
+touch detection on it when present, falling back to the original Z1-only behavior unchanged for any
+other board using this driver. A live register snapshot during a confirmed touch initially showed no
+change and the fix was reverted as a false negative - but the actual GuppyScreen behavior (not yet
+checked at that point) was already correct on that exact build. Re-tested against the real
+acceptance criterion (does GuppyScreen respond accurately) rather than trusting the diagnostic
+snapshot alone, confirmed working, and re-applied. Physically validated twice: all four corners and
+center activate accurately, matching stock, both on the initial fix and again on the final build
+after removing the temporary diagnostic logging.
+
+A separate, real bug was also found and fixed along the way: custom's `guppyconfig.json` touch
+calibration coefficients were wildly wrong (magnitudes 9-380x off stock's), corrected to match
+stock's proven values via a verified backup and atomic write. This alone did not fix touch - the
+deeper defect was zero events reaching userspace at all - but is a necessary, low-risk correction now
+that real events flow.
+
+### Real hardware safety record this section
+
+- Every register read used `devmem` against MMIO bases and offsets proven from this project's own
+  driver source (`dpu_reg.h`, `pinctrl-ingenic.c`), never a speculative address.
+- Stock's `ns2009_touch.ko` and `soc_fb.ko` were pulled read-only (`scp`) and disassembled with this
+  project's own MIPS toolchain - never patched, never loaded onto custom, never modified on stock.
+- Stock's own `guppyconfig.json` was hash-verified unchanged before and after the calibration fix on
+  custom's copy.
+- Every reboot cycle used the project's own established mechanisms (`write_ota_marker`,
+  `flash-spare-slot.sh`'s own manifest/size/SHA256/md5 verification chain), never touching the
+  currently-booted slot.
+- One isolated bus-mode guess (`PARALLEL_666`, twice) and one isolated touch-GPIO fix were each
+  tested, and kept or reverted strictly on physical result - never stacked with another unproven
+  change in the same experiment.
+- Classification: **`FUNCTIONAL_GUI_BASELINE`**, **`DISPLAY_DRIVER_FUNCTIONAL_BASELINE`**,
+  **`TOUCH_DRIVER_FUNCTIONAL_BASELINE`**, **`USERSPACE_GUI_FUNCTIONAL`** - display root cause and
+  touch root cause both confirmed and fixed; stock data integrity and A/B recovery preserved;
+  application stack healthy. See `docs/GUI_WORKSTREAM_HANDOFF.md`.

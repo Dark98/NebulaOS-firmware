@@ -1,25 +1,53 @@
 #!/bin/sh
 #
-# OpenKE addition (FIRMWARE.md sec 17/18): starts wpa_supplicant on wlan0
-# against real credentials. Numbered S39 - runs before S40network's
+# OpenKE addition (FIRMWARE.md sec 17/18, sec 60): starts wpa_supplicant on
+# wlan0 against real credentials. Numbered S39 - runs before S40network's
 # `ifup -a`, so wlan0 has already associated by the time udhcpc tries it
 # (this script also explicitly re-runs `ifup wlan0` itself after associating,
 # as a real belt-and-suspenders rather than relying on ordering alone).
 #
 # ctrl_interface=/var/run/wpa_supplicant in the config already matches what
-# GuppyScreen's own guppyconfig.json expects for its WiFi panel.
+# GuppyScreen's own guppyconfig.json expects for its WiFi panel (confirmed
+# directly from its own config key and wpa_event.cpp's directory-scan logic,
+# not guessed).
 #
 # Lives under /usr/data/openke/ (S01persistent-datastore) rather than
 # /usr/data/wpa_supplicant.conf directly - real, persistent storage now
 # (mmcblk0p10), kept in this build's own isolated subdirectory rather than
 # the shared partition's top level, same as everything else this build owns.
+#
+# GUI workstream sec 60: the original version of this script skipped
+# starting wpa_supplicant entirely when $CONF didn't exist yet - correct
+# for a placeholder-safety default on an untested image, but backwards for
+# a device meant to be configured through GuppyScreen's own WiFi panel: the
+# daemon must be running (with no saved network) before GuppyScreen can
+# scan, and SAVE_CONFIG (which GuppyScreen sends after ADD_NETWORK/
+# SET_NETWORK/ENABLE_NETWORK - confirmed from wifi_panel.cpp) silently does
+# nothing unless update_config=1 is already in the config file. Seeds a
+# minimal, credential-free default config on first boot only (never
+# overwrites a real saved config) - structurally modeled on stock's own
+# real, live /usr/data/wpa_supplicant.conf (ctrl_interface + update_config
+# confirmed identical directives; stock's real SSID/PSK/country entries are
+# this device owner's private data and are deliberately not reproduced
+# here - a fresh device ships with zero saved networks, exactly like stock
+# does out of the box).
 
 CONF=/usr/data/openke/wpa_supplicant.conf
 PIDFILE=/var/run/wpa_supplicant-wlan0.pid
 
+seed_default_conf() {
+	[ -e "$CONF" ] && return 0
+	mkdir -p "$(dirname "$CONF")"
+	cat > "$CONF" <<-EOF
+	ctrl_interface=/var/run/wpa_supplicant
+	update_config=1
+	EOF
+}
+
 start() {
+	seed_default_conf
 	if [ ! -f "$CONF" ]; then
-		echo "S45wifi: $CONF not present, skipping"
+		echo "S39wifi: $CONF not present, skipping"
 		return 0
 	fi
 	echo "Starting wpa_supplicant on wlan0"

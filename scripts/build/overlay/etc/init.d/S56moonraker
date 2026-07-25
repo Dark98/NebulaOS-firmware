@@ -1,13 +1,30 @@
 #!/bin/sh
 #
 # OpenKE addition (FIRMWARE.md sec 13): starts Moonraker. Must come after
-# S55klipper - connects to klippy's API-server Unix socket as a client.
-
+# S55klipper - connects to klippy's API-server Unix socket as a client via
+# moonraker.conf's [server] klippy_uds_address, which already correctly
+# points at klippy.sock.
+#
+# UNIXSOCKET below is a completely different thing: moonraker.py's own
+# -u/--unixsocket flag sets its *own* "extensions" agent-socket server
+# (components/extensions.py's create_unix_server), unrelated to the
+# klippy connection. This previously pointed at klippy.sock itself, which
+# made Moonraker bind a second listening socket directly on top of
+# Klipper's own socket path - moonraker's own extensions server replaced
+# Klipper's real socket file, so any *new* connection attempt to that path
+# (including moonraker's own klippy_connection reconnect logic) landed on
+# moonraker's extensions listener instead of real Klipper, producing a
+# continuous flood of "JSON-RPC Request Error -32600, Invalid Request" and
+# "Unknown method received: notify_proc_stat_update" and leaving Moonraker
+# permanently stuck before the Klippy-ready handshake (GuppyScreen/Mainsail
+# stuck on "waiting for printer to initialize" forever, even though Klipper
+# itself was fully connected to the real MCU). Fixed by giving Moonraker's
+# own extensions socket its own separate path.
 MOONRAKER=/opt/moonraker/moonraker/moonraker.py
 CONFIG=/opt/printer_data/config/moonraker.conf
 DATAPATH=/opt/printer_data
 LOGFILE=/opt/printer_data/logs/moonraker.log
-UNIXSOCKET=/opt/printer_data/comms/klippy.sock
+UNIXSOCKET=/opt/printer_data/comms/moonraker.sock
 PIDFILE=/var/run/moonraker.pid
 
 start() {

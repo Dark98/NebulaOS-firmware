@@ -66,6 +66,20 @@ cp -r "$VENDOR/klipper/klippy" "$OVERLAY/opt/klipper/"
 find "$OVERLAY/opt/klipper" -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 rm -f "$OVERLAY/opt/klipper/klippy/chelper"/*.o "$OVERLAY/opt/klipper/klippy/chelper"/*.a
 
+# Stock-parity fix (FIRMWARE.md sec 13): only klippy/ was ever staged here,
+# so Moonraker's file_manager always registered "config_examples" ->
+# /opt/klipper/config and "docs" -> /opt/klipper/docs (its own unconditional
+# behavior, not custom-specific), and both warned "invalid path" every boot
+# since neither existed. Stock's real Klipper install (/usr/share/klipper)
+# ships the full upstream checkout, config/ and docs/ included, which is
+# why stock never showed this warning - not a different Moonraker behavior,
+# just real content actually being present. Our own vendor/klipper is a
+# full checkout too; it was just never copied. Packaging the exact same
+# revision's reference content here, not fabricated placeholder content.
+rm -rf "$OVERLAY/opt/klipper/config" "$OVERLAY/opt/klipper/docs"
+cp -r "$VENDOR/klipper/config" "$OVERLAY/opt/klipper/"
+cp -r "$VENDOR/klipper/docs" "$OVERLAY/opt/klipper/"
+
 # This repo's own klippy_extras/ (prtouch_v2.py, z_compensate.py,
 # guppy_module_loader.py, etc.) was a real, pre-existing gap - written and
 # referenced by printer.cfg's own comments, but never actually copied

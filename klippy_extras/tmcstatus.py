@@ -18,7 +18,15 @@ class TMCStatus:
                 # hardcoded 2209-only table before, which broke i_rms on 2208).
                 self.sense_resistor[name] = n.getfloat('sense_resistor', None)
 
-        self.handle_connect()
+        # Deferred to klippy:connect (fired once every config section has
+        # been loaded) rather than called here directly - a synchronous
+        # lookup_object() in __init__ depends on config-file section order
+        # and broke a real boot (Config error: Unknown config object
+        # 'tmc2208 stepper_x') the first time this ran against a real
+        # motherboard, since [tmcstatus] loaded before the driver sections
+        # it references.
+        self.printer.register_event_handler("klippy:connect",
+                                             self.handle_connect)
 
     def handle_connect(self):
         for s in self.configured_steppers:

@@ -1,0 +1,146 @@
+#!/bin/sh
+#
+# NebulaOS mutable-runtime mission, Phase 3: idempotent creation of the
+# /usr/data/nebulaos namespace (mutable apps, envs, printer state, updates,
+# backups, maintenance) and a controlled, development-only migration of
+# useful data out of the old /usr/data/openke/printer_data tree.
+#
+# IMPORTANT - this script does NOT cut any running service over to the new
+# namespace. S01persistent-datastore's existing bind mounts
+# (/usr/data/openke/printer_data -> /opt/printer_data) are untouched, and
+# Klipper/Moonraker/GuppyScreen keep running exactly as before. Activating
+# the new namespace's paths is Phase 5's activation manager - this script
+# only ever creates the structure and copies data into it, so it is safe to
+# run on every boot without affecting anything currently in production.
+#
+# Must run after S01persistent-datastore (needs /usr/data already mounted)
+# and before anything that might depend on the namespace existing later
+# (nothing does yet - reserved numbering for that future dependency).
+
+NEBULAOS_ROOT=/usr/data/nebulaos
+OLD_ROOT=/usr/data/openke
+SCHEMA_VERSION=1
+MIGRATION_MARKER="$NEBULAOS_ROOT/system/.openke-migration-complete"
+
+log() {
+	echo "S02nebulaos-namespace: $1"
+}
+
+create_layout() {
+	mkdir -p \
+		"$NEBULAOS_ROOT/apps/klipper" \
+		"$NEBULAOS_ROOT/apps/moonraker" \
+		"$NEBULAOS_ROOT/apps/mainsail" \
+		"$NEBULAOS_ROOT/apps/guppyscreen" \
+		"$NEBULAOS_ROOT/envs/moonraker" \
+		"$NEBULAOS_ROOT/printer_data/config/GuppyScreen/scripts" \
+		"$NEBULAOS_ROOT/printer_data/logs" \
+		"$NEBULAOS_ROOT/printer_data/database" \
+		"$NEBULAOS_ROOT/printer_data/certs" \
+		"$NEBULAOS_ROOT/printer_data/comms" \
+		"$NEBULAOS_ROOT/printer_data/timelapse" \
+		"$NEBULAOS_ROOT/printer_data/misc" \
+		"$NEBULAOS_ROOT/system" \
+		"$NEBULAOS_ROOT/updates/staging" \
+		"$NEBULAOS_ROOT/updates/locks" \
+		"$NEBULAOS_ROOT/backups/klipper" \
+		"$NEBULAOS_ROOT/backups/moonraker" \
+		"$NEBULAOS_ROOT/backups/mainsail" \
+		"$NEBULAOS_ROOT/backups/printer_config" \
+		"$NEBULAOS_ROOT/maintenance/logs"
+
+	# apps/guppyscreen is reserved-only per this mission's own scope - a
+	# marker file documents why it's intentionally empty, so a future
+	# reader (or this project's own retention manager) doesn't mistake it
+	# for an abandoned/incomplete directory.
+	if [ ! -e "$NEBULAOS_ROOT/apps/guppyscreen/.reserved-not-implemented" ]; then
+		cat > "$NEBULAOS_ROOT/apps/guppyscreen/.reserved-not-implemented" <<'EOF'
+GuppyScreen stays served from the immutable /opt/guppyscreen copy for this
+mission. This directory is reserved layout only - GuppyScreen's own update
+mechanism is explicitly a separate, future mission per the governing brief.
+EOF
+	fi
+}
+
+write_manifest() {
+	manifest="$NEBULAOS_ROOT/system/layout-manifest.json"
+	[ -e "$manifest" ] && return 0
+	now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+	cat > "$manifest" <<EOF
+{
+  "schema_version": $SCHEMA_VERSION,
+  "compatibility_version": 1,
+  "created_at": "$now",
+  "created_at_caveat": "may read as an early-epoch date if this boot occurred before NTP sync - see docs/NEBULAOS_RETENTION_POLICY.md sec 2.6",
+  "layout": {
+    "apps": ["klipper", "moonraker", "mainsail", "guppyscreen"],
+    "guppyscreen_status": "reserved_not_implemented",
+    "envs": ["moonraker"],
+    "printer_data": "private",
+    "shared_gcode_path": "/usr/data/printer_data/gcodes"
+  }
+}
+EOF
+	log "wrote layout manifest ($manifest)"
+}
+
+# Controlled, development-only migration - copies useful config/state out
+# of the old /usr/data/openke/printer_data tree into the new namespace,
+# verifies every copied file by hash, and leaves the old tree completely
+# intact (never deleted/renamed by this script). Guarded by a marker so a
+# real device's post-migration edits (new SAVE_CONFIG state, new Moonraker
+# database entries) are never clobbered by re-running this on a later boot.
+migrate_openke_data() {
+	[ -e "$MIGRATION_MARKER" ] && return 0
+	old_pdata="$OLD_ROOT/printer_data"
+	[ -d "$old_pdata" ] || { log "no $old_pdata found - nothing to migrate (fresh namespace)"; touch "$MIGRATION_MARKER"; return 0; }
+
+	log "migrating useful data from $old_pdata to $NEBULAOS_ROOT/printer_data"
+	failures=0
+	for item in config database; do
+		[ -d "$old_pdata/$item" ] || continue
+		cp -a "$old_pdata/$item/." "$NEBULAOS_ROOT/printer_data/$item/" 2>/dev/null
+
+		# Verify every regular file actually landed with matching content -
+		# a real device's flash/copy can silently truncate under low space;
+		# do not trust "cp exited 0" alone (this project's own established
+		# discipline, docs/NEBULAOS_MUTABLE_RUNTIME_ARCHITECTURE.md).
+		find "$old_pdata/$item" -type f 2>/dev/null | while read -r src; do
+			rel=${src#"$old_pdata/"}
+			dst="$NEBULAOS_ROOT/printer_data/$rel"
+			if [ ! -e "$dst" ]; then
+				echo "MISSING after copy: $rel" >> "$NEBULAOS_ROOT/system/.migration-errors.log"
+				continue
+			fi
+			src_sum=$(sha256sum "$src" 2>/dev/null | cut -d' ' -f1)
+			dst_sum=$(sha256sum "$dst" 2>/dev/null | cut -d' ' -f1)
+			if [ "$src_sum" != "$dst_sum" ]; then
+				echo "HASH MISMATCH after copy: $rel" >> "$NEBULAOS_ROOT/system/.migration-errors.log"
+			fi
+		done
+	done
+
+	if [ -s "$NEBULAOS_ROOT/system/.migration-errors.log" ]; then
+		log "migration completed WITH ERRORS - see $NEBULAOS_ROOT/system/.migration-errors.log - old data at $old_pdata left untouched, marker NOT written, will retry next boot"
+		return 1
+	fi
+
+	touch "$MIGRATION_MARKER"
+	log "migration verified clean - old data at $old_pdata left untouched (not deleted/renamed)"
+}
+
+start() {
+	mkdir -p "$NEBULAOS_ROOT"
+	create_layout
+	write_manifest
+	migrate_openke_data
+}
+
+case "$1" in
+	start)
+		start
+		;;
+	*)
+		;;
+esac
+exit 0

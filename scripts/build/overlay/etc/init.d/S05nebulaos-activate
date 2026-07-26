@@ -16,17 +16,18 @@
 # means "skip this one app, leave it on immutable" rather than aborting
 # the whole boot.
 #
-# Must run after S02nebulaos-namespace and S03nebulaos-factory-seed
-# (needs both the layout and a seeded copy to exist), and BEFORE S39wifi/
-# S50webcam/S55klipper/S56moonraker/S58guppyscreen - no service may start
-# against a path that might still change under it.
+# Must run after S02nebulaos-namespace, S03nebulaos-diskswap, and
+# S04nebulaos-factory-seed (needs the layout, swap resilience, and a
+# seeded copy to all exist), and BEFORE S39wifi/S50webcam/S55klipper/
+# S56moonraker/S58guppyscreen - no service may start against a path that
+# might still change under it.
 
 NEBULAOS_ROOT=/usr/data/nebulaos
 STATE_FILE="$NEBULAOS_ROOT/system/activation-state.json"
 LOCKDIR="$NEBULAOS_ROOT/updates/locks"
 
 log() {
-	echo "S04nebulaos-activate: $1"
+	echo "S05nebulaos-activate: $1"
 }
 
 # Records one app's activation decision. Appended as simple key=value lines

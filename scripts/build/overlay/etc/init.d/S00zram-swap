@@ -1,0 +1,108 @@
+#!/bin/sh
+#
+# NebulaOS mutable-runtime mission, Memory Resilience Gate: primary
+# memory-resilience layer. Real problem found live on the actual device
+# (docs/NEBULAOS_MEMORY_RESILIENCE.md): only 208MB RAM, no swap at all
+# (CONFIG_SWAP was missing from the kernel, confirmed via a live
+# "swapon: Function not implemented" and dmesg OOM-killer events on
+# `git clone` of an 11.5MB bundle needing only ~37-56MB total-vm). This
+# script activates zram (compressed RAM swap) as early as possible - no
+# dependency on /usr/data being mounted at all - so it is active well
+# before S04nebulaos-factory-seed's own memory-heavy git/copy operations
+# run. Runs immediately after S00revert-safety (name sorts "S00z..." after
+# "S00r..." but still before any "S01*" script - deliberate).
+#
+# zram chosen over zswap per this mission's own explicit direction: it
+# exposes a plain, ordinary swap device plus simple sysfs stats
+# (comp_algorithm, disksize, mm_stat) that are easy to inspect and qualify
+# on this BusyBox/Buildroot platform - zswap has no equivalent operator
+# visibility. zram writeback is deliberately not implemented in this pass.
+
+ZRAM_DEV=/dev/zram0
+ZRAM_SYSFS=/sys/block/zram0
+# Starting point for qualification (docs/NEBULAOS_MEMORY_RESILIENCE.md
+# sec 4 records the comparison against 96MiB/128MiB/larger and the
+# measured result this value is based on) - NOT interpreted as physical
+# RAM permanently reserved: zram only consumes real memory for the
+# compressed pages actually stored, up to this logical ceiling.
+ZRAM_SIZE_BYTES=$((128 * 1024 * 1024))
+ZRAM_COMP=lz4
+ZRAM_PRIORITY=100
+
+log() {
+	echo "S00zram-swap: $1"
+}
+
+apply_sysctl_policy() {
+	# Conservative starting values (docs/NEBULAOS_MEMORY_RESILIENCE.md sec 6)
+	# - not copied from a desktop/server tuning guide. Applied regardless
+	# of which swap backend ends up active, since both benefit equally.
+	#
+	# vm.swappiness=10: this is a PREEMPT_RT kernel driving real-time
+	# motion control - favor keeping working pages resident and only
+	# reach for swap under genuine pressure, rather than the kernel
+	# default (60) proactively swapping out rarely-used-but-still-warm
+	# pages during normal, low-pressure operation.
+	#
+	# vm.page-cluster=0: default (3) reads/writes swap in 2^3=8-page
+	# bursts, a tuning that assumes rotational-disk seek cost - wrong
+	# model for zram (RAM-speed either way) and mildly harmful for the
+	# disk swap file (larger writes than necessary to an eMMC-backed
+	# file). 0 = one page at a time, standard community guidance for
+	# zram-backed swap specifically.
+	echo 10 > /proc/sys/vm/swappiness 2>/dev/null
+	echo 0 > /proc/sys/vm/page-cluster 2>/dev/null
+}
+
+start() {
+	apply_sysctl_policy
+
+	if [ ! -e "$ZRAM_SYSFS" ]; then
+		log "WARNING: $ZRAM_SYSFS not present - kernel may be missing CONFIG_ZRAM, skipping (system continues without this resilience layer rather than failing boot)"
+		return 0
+	fi
+
+	if grep -q "^$ZRAM_DEV " /proc/swaps 2>/dev/null; then
+		log "$ZRAM_DEV already active in /proc/swaps - skipping (idempotent)"
+		return 0
+	fi
+
+	current_disksize=$(cat "$ZRAM_SYSFS/disksize" 2>/dev/null)
+	if [ "$current_disksize" != "0" ] && [ -n "$current_disksize" ]; then
+		log "WARNING: $ZRAM_DEV has a nonzero disksize ($current_disksize) but is not an active swap - unexpected prior state, leaving alone rather than guessing (avoid a duplicate/conflicting setup)"
+		return 0
+	fi
+
+	if ! echo "$ZRAM_COMP" > "$ZRAM_SYSFS/comp_algorithm" 2>/dev/null; then
+		log "WARNING: compressor '$ZRAM_COMP' not accepted by this kernel - falling back to whatever default is already selected"
+	fi
+
+	if ! echo "$ZRAM_SIZE_BYTES" > "$ZRAM_SYSFS/disksize" 2>/dev/null; then
+		log "ERROR: could not set zram disksize - skipping zram setup (system continues without this layer)"
+		return 0
+	fi
+
+	if ! mkswap "$ZRAM_DEV" >/dev/null 2>&1; then
+		log "ERROR: mkswap $ZRAM_DEV failed - skipping zram setup"
+		return 0
+	fi
+
+	if ! swapon -p "$ZRAM_PRIORITY" "$ZRAM_DEV" 2>/dev/null; then
+		log "ERROR: swapon $ZRAM_DEV failed - skipping zram setup"
+		return 0
+	fi
+
+	# comp_algorithm reads back as a list with the active one bracketed
+	# (e.g. "lzo [lz4] zstd") - extract just that for a clean log line.
+	active_comp=$(cat "$ZRAM_SYSFS/comp_algorithm" 2>/dev/null | sed -n 's/.*\[\([^]]*\)\].*/\1/p')
+	log "zram active: $ZRAM_DEV, algorithm=${active_comp:-unknown}, size=$ZRAM_SIZE_BYTES bytes, priority=$ZRAM_PRIORITY"
+}
+
+case "$1" in
+	start)
+		start
+		;;
+	*)
+		;;
+esac
+exit 0

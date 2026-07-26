@@ -38,6 +38,12 @@ mission fully closes.
 6. `913b386` - build: fixed a genuine bug in `05-final-build.sh`'s own
    source-fingerprint safety check, found *while* running this mission's
    own rebuild (see "Real bugs found" below).
+7. `3cab4f0` - build: fixed the *actual* root cause of the ustreamer
+   `mkdir: cannot create directory '/src': Permission denied` failure -
+   raw apostrophes inside the single-quoted `bash -c '...'` heredoc body
+   were silently corrupting shell parsing (see "Real bugs found" below,
+   bug #3 - this superseded my earlier, incorrect diagnosis that blamed
+   vendor/k1-ustreamer corruption for this specific symptom).
 
 All of the above are real, live-hardware-validated fixes with evidence
 gathered directly from the device over SSH (see FIRMWARE.md §60 for the
@@ -48,14 +54,28 @@ doc).
 
 A full `02→03→04→05→06` rebuild is required to bake all of the above into
 a real flashable image (kernel changes and the new binaries can't be
-hot-loaded). Two real problems were hit and fixed *during* this rebuild
-itself - see below. A second rebuild attempt (04→05→06 only, since 02/03
-already succeeded and produced a correct kernel+base rootfs) was in flight
-when this status doc was written - check
-`artifacts/buildroot-halley5-v30-image/build-manifest.txt`'s `built_at`
-timestamp and re-run `06-verify.sh`'s camera section, plus
-`unsquashfs -l rootfs.squashfs | grep v4l2-ctl`, to see if it finished
-and actually contains `v4l2-ctl` this time.
+hot-loaded). Three real bugs were hit and fixed *during* this rebuild
+itself - see "Real bugs found" below. `02`/`03` (kernel + base rootfs,
+including the exFAT kernel change) already succeeded once and do not need
+re-running unless kernel/buildroot config changes again. A third `04→05→06`
+attempt (background task `bd40fozyc`, log at
+`/var/tmp/pip/.../scratchpad/rebuild3.log`) was in flight when this status
+doc was last updated, now that all three bugs below are fixed - this
+should be the one that actually finishes clean. Before trusting it:
+- `grep -n "^=== \|EXIT_CODE\|Permission denied\|ABORT" rebuild3.log`
+  should show all three stage markers, `EXIT_CODE=0`, and no
+  Permission-denied/ABORT lines.
+- `unsquashfs -l artifacts/buildroot-halley5-v30-image/rootfs.squashfs |
+  grep -E "v4l2-ctl|ustreamer"` should show BOTH
+  `squashfs-root/usr/bin/v4l2-ctl` and `squashfs-root/usr/bin/ustreamer`
+  (the first two rebuild attempts had ustreamer but never v4l2-ctl - do
+  not assume this is fixed without checking again).
+- `grep CONFIG_EXFAT_FS artifacts/buildroot-halley5-v30-image/kernel.config`
+  should show `=y`.
+- `artifacts/buildroot-halley5-v30-image/build-manifest.txt`'s `built_at`
+  should be a fresh timestamp, `git_commit_main` should be `3cab4f0` or
+  later, and `rootfs_squashfs_sha256` should match a fresh
+  `sha256sum rootfs.squashfs` of the actual file on disk.
 
 **Not started (Phase 20-21):**
 
@@ -85,11 +105,10 @@ and actually contains `v4l2-ctl` this time.
    Docker testing in a part of this session that was summarized away), but
    confirmed isolated to this one vendor directory (klipper/moonraker/
    buildroot-x2000/x2000_kernel_6.6/v4l-utils were all still intact). This
-   silently broke the ustreamer/v4l2-ctl build step (`mkdir: cannot create
-   directory '/src': Permission denied` right at the first command inside
-   the docker container) without failing the outer pipeline loudly - **the
-   first rebuild's resulting squashfs still had the OLD ustreamer binary
-   and no v4l2-ctl at all**, despite the pipeline printing `EXIT_CODE=0`.
+   was real and did need fixing, but turned out **not** to be the cause of
+   the `mkdir: cannot create directory '/src': Permission denied` symptom
+   below - see bug #3, the actual root cause, found afterward when the
+   identical failure persisted even with a freshly re-cloned vendor tree.
    Fixed (with explicit user confirmation before the destructive `rm -rf`)
    by re-cloning `https://github.com/pellcorp/k1-ustreamer.git` fresh at
    the exact pinned commit (`18e30bb313d54b1b01dd995bd31ce5a3d5adffd6`)
@@ -115,19 +134,51 @@ and actually contains `v4l2-ctl` this time.
    Fixed by excluding `artifacts/buildroot-halley5-v30-image/` from the
    git-status snapshot via a `:(exclude)` pathspec.
 
-**Important process note for whoever continues this**: because of bug #1,
-*do not trust a pipeline's `EXIT_CODE=0` alone as proof the build is
-complete and correct* - a docker-internal failure inside one `docker run`
-block did not propagate up through `set -e` as a nonzero exit from the
-overall `04-cross-compile-app-stack.sh` in the way you'd expect (the
-`mkdir: ... Permission denied` line just printed to the log and the script
-seems to have carried on rebuilding whatever it could - chelper and
-Moonraker's C extension both built fine before the ustreamer docker step
-failed). Always independently verify the actual squashfs contents
-(`unsquashfs -l rootfs.squashfs | grep <expected file>`) and the
-`build-manifest.txt`'s `built_at` timestamp/`rootfs_squashfs_sha256`
-against a real fresh `sha256sum` of the file on disk before trusting a
-build enough to flash it.
+3. **The real root cause: apostrophes broke the ustreamer heredoc's
+   quoting** (commit `3cab4f0`). The `mkdir: cannot create directory
+   '/src': Permission denied` symptom persisted identically even after
+   bug #1's fix (fresh vendor/k1-ustreamer clone) - and was 100%
+   reproducible inside the real script, but never reproduced when the
+   exact same `docker run` command was typed directly or placed in a
+   minimal standalone script. `bash -n` on the script confirmed a real
+   syntax error at an unrelated later line. Root cause: the ustreamer
+   docker run's `bash -c '...'` body is a single-quoted string, and its
+   own explanatory comment used real English contractions with literal
+   apostrophes ("Buildroot's own host/bin", "the container's real
+   system", "Buildroot's own build tree", "the container's own PATH"). A
+   raw `'` inside a `'...'`-quoted string has no escape meaning in
+   POSIX/bash - each one closes the string early. With four apostrophes
+   toggling quote state on/off across those lines, bash's parser ended up
+   alternating between quoted/unquoted interpretation of the surrounding
+   text, corrupting how much of the rest of the file it folded into that
+   string. Quote parity happened to resolve close enough that most of the
+   script still ran (chelper, Moonraker) before the corruption became
+   visible: `mkdir -p /src/build` got parsed as a real, unquoted,
+   top-level command in the *outer* script rather than as content
+   destined for the container, so it ran directly against this host's
+   real root filesystem - which a non-root user cannot write to. Fixed by
+   rewording the comment to avoid all contractions/apostrophes inside the
+   single-quoted heredoc. Verified via `bash -n` on every `scripts/build/
+   *.sh` file (all clean) - this class of bug could exist in any other
+   single-quoted heredoc in this project, so it is worth an occasional
+   `bash -n` sweep after editing comments inside any `bash -c '...'`
+   block.
+
+**Important process note for whoever continues this**: because of bug #1
+(and, it turned out, primarily bug #3), *do not trust a pipeline's
+`EXIT_CODE=0` alone as proof the build is complete and correct* - a
+docker-internal/shell-parsing failure did not propagate up through
+`set -e` as a nonzero exit from the overall `04-cross-compile-app-stack.sh`
+in the way you would expect (the `mkdir: ... Permission denied` line just
+printed to the log and the script carried on running whatever commands the
+corrupted parse produced next - chelper and Moonraker's C extension both
+built fine before the ustreamer docker step's real failure). Always
+independently verify the actual squashfs contents (`unsquashfs -l
+rootfs.squashfs | grep <expected file>`) and the `build-manifest.txt`'s
+`built_at` timestamp/`rootfs_squashfs_sha256` against a real fresh
+`sha256sum` of the file on disk before trusting a build enough to flash
+it. Also worth running `bash -n` on any pipeline script right after
+editing it, before spending 10+ minutes re-running a build against it.
 
 ## Mission constraints still in force for whoever continues
 

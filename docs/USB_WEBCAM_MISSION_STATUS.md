@@ -44,6 +44,9 @@ mission fully closes.
    were silently corrupting shell parsing (see "Real bugs found" below,
    bug #3 - this superseded my earlier, incorrect diagnosis that blamed
    vendor/k1-ustreamer corruption for this specific symptom).
+8. `2328f77` - build: v4l2-ctl's docker build was missing `--user root`,
+   so its `apt-get install` silently failed and no output at all was
+   produced for that step (see "Real bugs found" below, bug #4).
 
 All of the above are real, live-hardware-validated fixes with evidence
 gathered directly from the device over SSH (see FIRMWARE.md §60 for the
@@ -163,6 +166,26 @@ should be the one that actually finishes clean. Before trusting it:
    single-quoted heredoc in this project, so it is worth an occasional
    `bash -n` sweep after editing comments inside any `bash -c '...'`
    block.
+
+4. **v4l2-ctl's docker build ran as non-root but needs root for
+   `apt-get`** (commit `2328f77`). After bug #3's fix, the rebuild got
+   past ustreamer (built and linked correctly this time) but v4l2-ctl's
+   own step produced zero output and the pipeline moved straight to
+   `05-final-build.sh` with `EXIT_CODE=0` and v4l2-ctl still absent from
+   the squashfs. Root cause: this docker run never had `--user root`, so
+   it ran as the image's default non-root "developer" user - but its
+   first two commands are `apt-get update`/`apt-get install` (needed for
+   autoconf/automake/libtool/gettext/autopoint/pkg-config), which require
+   root to write `/var/lib/dpkg` and `/usr`. Both commands are piped
+   through `>/dev/null 2>&1` (intentional, to keep routine apt noise out
+   of the log), which also silenced the real permission-denied error, and
+   the container's own `set -e` exited immediately - before autoreconf/
+   configure/make ever ran. (The Moonraker pywheels/streaming-form-data
+   download steps a few lines earlier correctly use `--user root`; this
+   one was simply missed when the section was first written.) Fixed by
+   adding `--user root`. Verified in isolation first (standalone docker
+   run, not through the full pipeline) before committing to another full
+   rebuild: v4l2-ctl now builds to a real 542KB MIPS binary.
 
 **Important process note for whoever continues this**: because of bug #1
 (and, it turned out, primarily bug #3), *do not trust a pipeline's

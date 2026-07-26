@@ -297,3 +297,214 @@ editing it, before spending 10+ minutes re-running a build against it.
   unplug/reinsert per device, confirm flash-drive files visible, confirm
   live webcam image in Mainsail, move a device to another port if evidence
   requires it.
+
+## FINAL REPORT (mission closed 2026-07-26)
+
+Both user-visible goals are done and independently verified end to end:
+the pellcorp/k1-ustreamer webcam stack works (real MJPEG through nginx,
+confirmed live in Mainsail), and the USB flash drive is now genuinely
+visible and usable from GuppyScreen (confirmed by the user directly, not
+just via Moonraker's API) - including surviving a real physical
+unplug/reinsert cycle.
+
+1. **Starting main commit**: `63e2f85` (`config: migrate max_accel_to_decel
+   to minimum_cruise_ratio` - last commit before this mission's own fixes).
+2. **Starting kernel commit**: `f7ff80a8a` (unchanged throughout - only the
+   kernel *config fragment* changed, not the kernel source tree itself).
+3. **Final main commit**: `82c91a7`.
+4. **Final kernel commit**: `f7ff80a8a` (same as starting - no kernel
+   source changes were needed, only `CONFIG_EXFAT_FS=y`).
+5. **Running custom IP**: `192.168.0.146` (stable across this session;
+   stock was seen at `192.168.0.231` during the two stock-boot windows -
+   both may drift on future reboots, see the device-access memory).
+6. **Custom artifact hashes** (from the final, live-flashed
+   `build-manifest.txt`): `xImage_sha256=1559c387d5a7dd0af539fba8af84892b
+   1cd2ff4a1889288eff80059429a5fbf2`, `rootfs_squashfs_sha256=1f6338a647b
+   4e1be9d439235c579fcac048e06484380f8fdd43ea43577626fd2` - both confirmed
+   matching a fresh `sha256sum` of the files actually written to
+   `/dev/mmcblk0p6`/`/dev/mmcblk0p8` via `flash-spare-slot.sh`'s own
+   write-and-read-back verification.
+7. **Whether the verified image needed flashing**: yes - flashed twice
+   this session (once after the initial USB/webcam fixes, once more
+   after the GuppyScreen USB-media integration was added, since the first
+   flash predated that fix).
+8. **Flash result**: both flashes succeeded, md5-verified by
+   `flash-spare-slot.sh` itself on both `xImage` and `rootfs.squashfs`.
+9. **USB topology**: `dwc2` OTG root hub (`usb1`, `1d6b:0002`) → internal
+   Genesys Logic hub (`1-1`, `05e3:0610`, 4 ports) → webcam on port 1
+   (`1-1.1`) + flash drive on port 2 (`1-1.2`).
+10. **Flash-drive VID:PID**: `ffff:5678` ("Disk 2.0").
+11. **Webcam VID:PID**: `a108:2231` ("CCX2F3298", UnionImage Co., UVC 1.00).
+12. **Flash-drive device and partition nodes**: `/dev/sda` only - no
+    partition table (a "superfloppy" layout, exFAT directly on the whole
+    disk).
+13. **Flash-drive filesystem**: exFAT (confirmed via boot-sector "EXFAT"
+    OEM signature).
+14. **exFAT result**: `CONFIG_EXFAT_FS=y` added to the kernel fragment
+    (commit `1597057`); mainline's own in-tree driver, not FUSE-based.
+    Confirmed working live post-reflash.
+15. **Read-only mount result**: succeeded cleanly; real pre-existing user
+    files (two `.gcode` files, `.thumbs/`, `System Volume Information/`)
+    all readable, filesystem reported healthy (`14.6G`/`14.1M used`).
+16. **Safe write result**: succeeded - unique test file written, hash
+    matched on readback, deleted, confirmed gone, all after `sync`.
+17. **Stock USB-drive behavior**: real, working vendor infrastructure,
+    confirmed by reading stock's own rootfs directly (mounted read-only
+    from custom, no separate reboot needed) - `/etc/udev/rules.d/
+    10-mount-udisk.rules` matches `sd[a-z]`/`sd[a-z][0-9]` add/remove
+    events and runs `/etc/auto_mount_udisk.sh`, which mounts under
+    `/tmp/udisk/<dev>` (rw, sync) and calls `ubus_call udisk set_state`
+    to notify Creality's own stock UI via ubus (OpenWrt's IPC system).
+18. **Stock GuppyScreen detection mechanism**: not applicable in the
+    literal sense - "stock GuppyScreen" doesn't exist; stock uses
+    Creality's own closed touchscreen UI, which is what actually consumes
+    the ubus `udisk` notification. GuppyScreen itself is a third-party,
+    generic Klipper UI this project chose to use instead, architecturally
+    unrelated to stock's UI.
+19. **Custom GuppyScreen original behavior**: confirmed via `strings` on
+    the real `/opt/guppyscreen/guppyscreen` binary - zero references to
+    "udisk"/"removable"/"/dev/sd" of any kind. It has no built-in concept
+    of removable USB media at all.
+20. **Exact reason the drive was invisible**: two independent gaps, not
+    one - (a) custom's real, running `udevd` (confirmed via `ps`, already
+    present as Buildroot's own stock `S10udev`) had zero rules deployed,
+    so a USB drive enumerated at the kernel level but nothing ever
+    mounted it; (b) even if it had been mounted, GuppyScreen has no
+    mechanism to discover it outside of Moonraker's own `/server/files/
+    gcodes/` REST API (confirmed via the same `strings` pass - real,
+    live references to that exact endpoint), so mounting it anywhere
+    outside Moonraker's registered gcodes root would still not have
+    surfaced in the UI.
+21. **Files/scripts/macros involved**: new
+    `scripts/build/overlay/etc/udev/rules.d/91-usb-gcode-media.rules` and
+    `scripts/build/overlay/etc/usb-gcode-media.sh` (commit `167ae1f`);
+    separately, `scripts/build/overlay/opt/printer_data/config/
+    GuppyScreen/scripts/reload_camera.py` was also found broken and fixed
+    (commit `affee98` - unrelated to USB storage, found while
+    investigating the webcam freeze).
+22. **Final mountpoint**: `/opt/printer_data/gcodes/USB/<kernel-device-
+    name>` (e.g. `/opt/printer_data/gcodes/USB/sda`) - a subdirectory
+    directly inside Moonraker's own, already-watched gcodes root.
+23. **Final GuppyScreen integration method**: none needed on GuppyScreen's
+    own side - mounting the drive inside the existing gcodes root means
+    Moonraker's file-manager (which GuppyScreen already queries) reports
+    the files automatically, with zero GuppyScreen-side changes.
+24. **Moonraker path result**: `/server/files/list` correctly reported
+    both real files under `USB/sda/...` with correct size/mtime metadata,
+    both after the initial boot-time auto-mount and after the physical
+    hotplug cycle, with no Moonraker restart needed either time.
+25. **Mainsail warnings result**: no new warnings introduced; the
+    pre-existing Mainsail-warnings work from an earlier mission remains
+    intact (not touched this mission).
+26. **USB hotplug result**: confirmed twice - the webcam and flash drive's
+    original enumeration at mission start, and a real, user-performed
+    unplug/reinsert of the flash drive post-reflash. The drive re-attached
+    (dmesg: `sd 0:0:0:0: [sda] Attached SCSI removable disk`), remounted
+    automatically via the same udev rule, and files reappeared in
+    Moonraker's listing with no manual intervention. (The exFAT driver
+    logged "Volume was not properly unmounted... run fsck" - expected and
+    benign for a physical unplug with no software-mediated safe-eject
+    step first; not a defect in this project's own mount/unmount logic.)
+27. **USB reboot-persistence result**: confirmed - the flash drive
+    auto-mounted automatically on the very first boot of the freshly
+    reflashed image, before any manual intervention, proving the udev
+    rule fires correctly for devices already present at boot time (not
+    just live hotplug events).
+28. **Webcam UVC node**: `/dev/video3` (the real UVC capture node;
+    `/dev/video0-2` are this SoC's own rotation/H.264-encode/H.264-decode
+    M2M blocks, not the camera; `/dev/video4` is the UVC device's own
+    metadata-only sibling node).
+29. **`v4l2-ctl` result**: correctly identifies the webcam (`uvcvideo`
+    driver, "CCX2F3298" card) at `/dev/video3`/`/dev/video4` and the three
+    SoC devices at `/dev/video0-2` by their real driver names
+    (`jz-rot`, `vpu-helix`, `vpu-felix`).
+30. **ustreamer source commit**: `vendor/k1-ustreamer` pinned at
+    `18e30bb313d54b1b01dd995bd31ce5a3d5adffd6` (unchanged, untouched -
+    the fix was the toolchain, never the source).
+31. **ustreamer target hash**: not separately tracked as its own artifact
+    hash (it ships inside `rootfs.squashfs`, whose hash is recorded
+    above); its own `--help` banner reports "license: GPLv3" matching the
+    now-corrected documentation.
+32. **Direct stream result**: confirmed live twice (before and after the
+    final reflash) - real MJPEG frames from `127.0.0.1:8080/snapshot` and
+    a genuine continuous 30fps multipart stream from `.../stream`
+    (`queued_fps: 30` per ustreamer's own `/state` endpoint while a test
+    client was connected).
+33. **nginx `/webcam/` result**: confirmed live - `/webcam/?action=
+    snapshot` and `/webcam/?action=stream` both proxy correctly to
+    ustreamer and return real JPEG/MJPEG data.
+34. **Mainsail webcam result**: confirmed live by the user directly - a
+    real, moving camera image visible in Mainsail's own UI.
+35. **Webcam reconnect result**: not separately re-tested after the final
+    reflash beyond the standard boot-time S50webcam start (which did
+    succeed automatically); the mission's one permitted hotplug test was
+    spent on the flash drive rather than the webcam, per the user's own
+    choice in this session.
+36. **Simultaneous webcam/storage result**: confirmed - both were mounted/
+    streaming at the same time throughout final validation (webcam
+    snapshot fetched successfully immediately after the USB hotplug
+    cycle), with no interference between the two.
+37. **CPU and memory impact**: not formally profiled/benchmarked this
+    mission; no symptoms of resource exhaustion observed (Moonraker,
+    Klipper, ustreamer, and the mount script all responded promptly
+    throughout testing).
+38. **Klipper communication impact**: none from the USB/webcam work
+    itself. The one real MCU-shutdown event seen was the already-
+    documented, pre-existing pattern that follows any flash-triggering
+    reboot on this project (recovered via a single `FIRMWARE_RESTART`
+    each time, twice this session).
+39. **Heater targets**: confirmed `0.0`/`0.0` (extruder/heater_bed) at
+    every safety checkpoint this session, including immediately before
+    both reboots and immediately after both post-flash recoveries.
+40. **No-motion confirmation**: `toolhead.homed_axes` confirmed empty
+    (`""`) at every checkpoint; no G28/motion/heater/fan/probing commands
+    were ever issued.
+41. **`S99confirm-good` result**: not separately queried this session
+    (no failure symptoms observed - Moonraker reached a healthy `ready`
+    state well within its own timeout both times).
+42. **OTA marker state**: currently `ota:kernel2` (custom), confirmed via
+    `mmc_read_str ota` immediately after the final marker flip.
+43. **Stock fallback state**: untouched - `flash-spare-slot.sh` only ever
+    wrote `/dev/mmcblk0p6`/`/dev/mmcblk0p8` (the custom kernel2/rootfs2
+    pair), and explicitly refuses to write to whatever is the
+    currently-mounted root, which was stock's own `/dev/mmcblk0p7` during
+    both flashes.
+44. **Files changed**: see the full commit list below - kernel config
+    fragment, 3 build pipeline scripts, S50webcam, moonraker.conf,
+    reload_camera.py, a new udev rule + mount script, README.md,
+    FIRMWARE.md, docs/BOARD_CAPABILITY_MATRIX.md, docs/
+    BOOT_WARNING_AUDIT.md, and this status doc.
+45. **Commits created** (chronological, oldest first): `1597057` `7b69d68`
+    `c7f4de2` `aa35cd0` `353fb4c` `913b386` `34a5a68` `3cab4f0` `1e7d56f`
+    `2328f77` `e4dbd77` `b436139` `257646c` `affee98` `c3ede09` `167ae1f`
+    `0821bb5` `82c91a7`.
+46. **Temporary diagnostics removed**: yes - the debug `echo`/`set -x`
+    probes added to `04-cross-compile-app-stack.sh` while root-causing the
+    apostrophe bug were removed before that commit was made (never
+    committed); manual test copies of `usb-gcode-media.sh`/
+    `stockroot` mount used for live validation were cleaned up from the
+    device (`/tmp` removed, `/tmp/stockroot` unmounted+removed) before
+    the real, built-in versions were flashed.
+47. **Remaining limitations**: (a) `vendor/k1-ustreamer`'s mid-mission
+    corruption was never fully forensically root-caused (fixed by
+    re-cloning, not a mystery that blocks anything going forward); (b)
+    webcam reconnect-after-hotplug specifically wasn't re-tested after
+    the *final* reflash (only storage was, per the user's choice) -
+    S50webcam's own supervisor loop already handles this by design and
+    was validated earlier in the session, just not re-exercised via a
+    physical unplug in this exact final pass; (c) CPU/memory impact of
+    running ustreamer + the USB mount script simultaneously was not
+    formally benchmarked, only observed to be problem-free.
+48. **Final classification**:
+    - `USB_HOST_FUNCTIONAL`
+    - `USB_HOTPLUG_FUNCTIONAL`
+    - `USB_MASS_STORAGE_FUNCTIONAL`
+    - `EXFAT_FILESYSTEM_FUNCTIONAL`
+    - `GUPPYSCREEN_USB_MEDIA_FUNCTIONAL`
+    - `USB_UVC_WEBCAM_FUNCTIONAL`
+    - `V4L2_DIAGNOSTICS_FUNCTIONAL`
+    - `PELLCORP_K1_USTREAMER_FUNCTIONAL`
+    - `NGINX_WEBCAM_PROXY_FUNCTIONAL`
+    - `MAINSAIL_WEBCAM_STREAM_FUNCTIONAL`
+    - `PRINTER_STACK_REMAINS_PASSIVELY_SAFE`
+    - `USB_DOCUMENTATION_CORRECTED`

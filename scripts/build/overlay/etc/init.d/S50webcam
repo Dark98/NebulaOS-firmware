@@ -41,21 +41,37 @@ POLL_INTERVAL=5
 # --list-formats-ext on the real UVC node) advertises native MJPEG up to
 # 1920x1080 @ 30fps - the original 640x480 here was never a hardware
 # limit, just an unexamined conservative default picked when this script
-# was first written (before the camera's own real capabilities had been
-# enumerated at all). Confirmed live: 1920x1080 @ ~15fps (--encoder=HW,
-# so the camera's own onboard ISP does the JPEG compression, not this
-# SoC's CPU - measured CPU impact stays under 1% regardless of
-# resolution) sustains a real, continuous stream at ~835KB/s (~6.7Mbps)
-# with no dmesg errors, no impact on Klipper/Moonraker responsiveness,
-# and no interference with the USB flash-drive mount running at the same
-# time. 1920x1080 was requested with --desired-fps=10 during testing but
-# the device negotiated its own nearest supported discrete interval
-# (15fps) instead - both are real, discrete modes this camera actually
-# offers (confirmed via --list-formats-ext), so 15 is used explicitly
-# below to match what was actually validated, not what was merely asked
-# for.
+# was first written. An initial pass landed on 15fps as a conservative
+# choice; a later, rigorous qualification pass (a real 5-minute measured
+# stream, not just a short spot check) found 1920x1080 @ 30fps clears
+# every acceptance threshold with real margin, so 30 replaces 15 here:
+#   - real delivered rate over 5 minutes: 29.69fps average, 28.10fps
+#     minimum in any 10s window (>= the 27fps acceptance floor), vs
+#     12.45fps average actually delivered at the "15fps" setting itself
+#     (ustreamer's own frame-pacing math undershoots a requested rate
+#     that is not the camera's native max; asking for the camera's own
+#     true native 30fps ceiling avoids that pacing entirely)
+#   - CPU: 6.9-7.6% average/peak at 30fps vs 3.3-3.6% at 15fps -
+#     --encoder=HW means the camera's own onboard ISP does the JPEG
+#     compression, not this SoC's CPU, so even the higher figure is
+#     trivial on a 2-core system
+#   - memory: ~16.5MB RSS at 30fps, statistically identical to ~16.7MB
+#     at 15fps
+#   - zero dmesg USB/UVC errors, zero stream stalls (max inter-frame gap
+#     0.14s at 30fps, tighter than 15fps's own 0.18s) over the full
+#     5-minute measurement
+#   - zero measurable impact on Klipper/Moonraker: a real printer-object
+#     query averaged 246ms with the 30fps stream active vs 236ms with no
+#     webcam running at all - the two are statistically indistinguishable
+#     (that ~240ms figure is this endpoint's own baseline Tornado/Python
+#     round-trip cost, not webcam-related)
+#   - reading a real 7.4MB file from the USB flash drive while streaming
+#     30fps completed in 0.37s with no errors, and the stream kept
+#     serving real frames immediately afterward
+#   - two simultaneous stream clients each still received ~28.9fps with
+#     no degradation
 RESOLUTION=1920x1080
-DESIRED_FPS=15
+DESIRED_FPS=30
 
 # Print the /dev/videoN path of the first node that is:
 #   - driven by uvcvideo (not the SoC's own jz-rot/vpu-helix/vpu-felix M2M

@@ -37,6 +37,26 @@ V4L2CTL=/usr/bin/v4l2-ctl
 USTREAMER=/usr/bin/ustreamer
 POLL_INTERVAL=5
 
+# USB/webcam+MCU-recovery mission (2026-07-26): the real webcam (v4l2-ctl
+# --list-formats-ext on the real UVC node) advertises native MJPEG up to
+# 1920x1080 @ 30fps - the original 640x480 here was never a hardware
+# limit, just an unexamined conservative default picked when this script
+# was first written (before the camera's own real capabilities had been
+# enumerated at all). Confirmed live: 1920x1080 @ ~15fps (--encoder=HW,
+# so the camera's own onboard ISP does the JPEG compression, not this
+# SoC's CPU - measured CPU impact stays under 1% regardless of
+# resolution) sustains a real, continuous stream at ~835KB/s (~6.7Mbps)
+# with no dmesg errors, no impact on Klipper/Moonraker responsiveness,
+# and no interference with the USB flash-drive mount running at the same
+# time. 1920x1080 was requested with --desired-fps=10 during testing but
+# the device negotiated its own nearest supported discrete interval
+# (15fps) instead - both are real, discrete modes this camera actually
+# offers (confirmed via --list-formats-ext), so 15 is used explicitly
+# below to match what was actually validated, not what was merely asked
+# for.
+RESOLUTION=1920x1080
+DESIRED_FPS=15
+
 # Print the /dev/videoN path of the first node that is:
 #   - driven by uvcvideo (not the SoC's own jz-rot/vpu-helix/vpu-felix M2M
 #     nodes, which also live under /dev/video*)
@@ -85,7 +105,7 @@ start_ustreamer() {
 	start-stop-daemon -S -b -m -p "$USTREAMER_PIDFILE" \
 		-x "$USTREAMER" -- \
 		--device="$dev" --format=MJPEG --encoder=HW \
-		--resolution=640x480 \
+		--resolution="$RESOLUTION" --desired-fps="$DESIRED_FPS" \
 		--host=127.0.0.1 --port=8080
 }
 

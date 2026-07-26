@@ -1,0 +1,116 @@
+#!/bin/sh
+#
+# Bounded, one-shot recovery for a real, recurring condition found this
+# mission: after a host reboot, Klipper's very first MCU connection attempt
+# sometimes finds the real toolhead MCU already latched in its own firmware
+# "shutdown" state (mcu.py: "Can not update MCU 'mcu' config as it is
+# shutdown"), which requires an explicit FIRMWARE_RESTART to clear - stock
+# does not need this for the same real MCU/serial config (confirmed: same
+# printer.cfg [mcu] serial/baud/restart_method, read directly from stock's
+# own rootfs), but stock's own klippy.log never showed this exact error
+# either, even across a plain serial "Timeout on connect" that it recovered
+# from cleanly on its own. The underlying hardware/timing root cause was not
+# conclusively isolated (no dmesg evidence of anything else touching
+# /dev/ttyS1, no differing kernel-side UART config found) - this guard
+# treats the *symptom* safely rather than assuming a specific electrical
+# explanation.
+#
+# Why this is safe to automate: the "config as it is shutdown" error is
+# structurally raised by mcu.py during _mcu_identify(), before printer.cfg
+# is ever parsed - confirmed live, the /printer/info response in this exact
+# state has no "status" object at all (no heater targets, no homed_axes -
+# they don't exist yet). There is no G-code queue, no possibility of a
+# nonzero heater target or in-progress motion at this specific point,
+# because Klipper has not yet reached the part of startup where any of that
+# could exist. This is categorically different from a shutdown occurring
+# after the printer was already ready (mid-print, mid-heat, etc.), which
+# this script does not and must not try to handle - that is a genuine fault
+# and is deliberately left alone.
+#
+# Bounds enforced:
+#   - runs only once per real boot (both by being a plain init.d "start"
+#     action, and belt-and-suspenders via a /run/ marker - /run/ is tmpfs,
+#     so the marker cannot survive a real reboot and force a skip forever)
+#   - matches only the exact, known error string above - any other
+#     state_message (thermal, ADC, config, stepper/endstop faults, or an
+#     unrecognized message) is left completely untouched
+#   - issues at most one FIRMWARE_RESTART call, ever, per boot - if that
+#     single attempt does not clear it, this script does not retry further;
+#     the printer is left in its (safe, pre-ready, non-heating, non-moving)
+#     error state for a human to look at, matching S99confirm-good's own
+#     "don't guess, leave the marker on stock" posture
+#   - never fires once klippy_state has already reached "ready" this boot -
+#     the poll loop below exits immediately the first time it sees "ready",
+#     before ever considering recovery action
+
+MARKER=/run/mcu-boot-recovery-attempted
+POLL_RETRIES=15
+POLL_DELAY=2
+RECOVERY_SETTLE=10
+KNOWN_SHUTDOWN_MSG="Can not update MCU 'mcu' config as it is shutdown"
+
+get_klippy_state() {
+	wget -q -O - --timeout=3 "http://127.0.0.1:7125/server/info" 2>/dev/null | \
+		sed -n 's/.*"klippy_state":"\([^"]*\)".*/\1/p'
+}
+
+get_printer_info() {
+	wget -q -O - --timeout=3 "http://127.0.0.1:7125/printer/info" 2>/dev/null
+}
+
+start() {
+	if [ -f "$MARKER" ]; then
+		echo "S95mcu-boot-recovery: already ran this boot, skipping"
+		exit 0
+	fi
+	touch "$MARKER"
+
+	i=0
+	while [ "$i" -lt "$POLL_RETRIES" ]; do
+		state=$(get_klippy_state)
+		case "$state" in
+			ready)
+				echo "S95mcu-boot-recovery: Klipper reached ready on its own, no recovery needed"
+				exit 0
+				;;
+			error)
+				pinfo=$(get_printer_info)
+				case "$pinfo" in
+					*"$KNOWN_SHUTDOWN_MSG"*)
+						echo "S95mcu-boot-recovery: known early-boot MCU-shutdown transient detected - issuing one bounded FIRMWARE_RESTART"
+						wget -q -O - --timeout=5 --post-data='' \
+							"http://127.0.0.1:7125/printer/firmware_restart" >/dev/null 2>&1
+						sleep "$RECOVERY_SETTLE"
+						final=$(get_klippy_state)
+						echo "S95mcu-boot-recovery: post-recovery klippy_state=$final (no further automatic attempts this boot)"
+						exit 0
+						;;
+					*)
+						echo "S95mcu-boot-recovery: Klipper in error state but not the known transient - leaving untouched for manual attention"
+						exit 0
+						;;
+				esac
+				;;
+			*)
+				# "startup"/connecting/empty - not yet resolved, keep waiting
+				;;
+		esac
+		i=$((i + 1))
+		sleep "$POLL_DELAY"
+	done
+	echo "S95mcu-boot-recovery: klippy_state never resolved to ready or error after $((POLL_RETRIES * POLL_DELAY))s - leaving as-is"
+}
+
+case "$1" in
+	start)
+		start
+		;;
+	stop)
+		:
+		;;
+	*)
+		echo "Usage: $0 {start|stop}"
+		exit 1
+		;;
+esac
+exit 0

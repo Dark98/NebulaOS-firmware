@@ -8,6 +8,20 @@
 # isn't "healthy" though, so this polls Moonraker's own HTTP API for real
 # confirmation rather than assuming.
 #
+# USB/webcam+MCU-recovery mission (2026-07-26): the original version of
+# this check only confirmed that /server/info returned *some* "result" -
+# true the instant Moonraker's HTTP listener is up, regardless of whether
+# Klipper ever actually connected to the real MCU. A real, found-live gap:
+# this would have happily flipped the marker forward on a boot where the
+# MCU was stuck in its own shutdown state (see S95mcu-boot-recovery),
+# since Moonraker itself was always healthy in that case - only Klipper's
+# own connection to the *printer* was not. /server/info's own
+# "klippy_state" field is Moonraker's real, live answer to "is Klipper
+# actually ready," confirmed live (returns "ready" only once Klipper has
+# loaded config and connected the MCU) - checking that instead is a
+# strictly more correct version of the exact same intent this script
+# always had.
+#
 # If the retry loop below times out without Moonraker ever responding, this
 # script deliberately does NOT flip the marker forward - S00revert-safety's
 # "ota:kernel" (stock) stays in place, so the next reboot goes back to stock
@@ -28,7 +42,9 @@ RETRIES=30
 DELAY=5
 
 check_moonraker() {
-	wget -q -O - --timeout=3 "http://127.0.0.1:7125/server/info" 2>/dev/null | grep -q '"result"'
+	state=$(wget -q -O - --timeout=3 "http://127.0.0.1:7125/server/info" 2>/dev/null | \
+		sed -n 's/.*"klippy_state":"\([^"]*\)".*/\1/p')
+	[ "$state" = "ready" ]
 }
 
 case "$1" in

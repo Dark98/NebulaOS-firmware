@@ -123,6 +123,11 @@ start_ustreamer() {
 		--device="$dev" --format=MJPEG --encoder=HW \
 		--resolution="$RESOLUTION" --desired-fps="$DESIRED_FPS" \
 		--host=127.0.0.1 --port=8080
+	# NebulaOS Memory Resilience Gate: webcam streaming is "more
+	# expendable" - optional media, never printer-critical - so it should
+	# be picked as an OOM victim well before Klipper/Moonraker/GuppyScreen
+	# (docs/NEBULAOS_MEMORY_RESILIENCE.md sec 7).
+	[ -f "$USTREAMER_PIDFILE" ] && echo 300 > "/proc/$(cat "$USTREAMER_PIDFILE")/oom_score_adj" 2>/dev/null
 }
 
 stop_ustreamer() {

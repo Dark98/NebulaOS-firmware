@@ -33,6 +33,12 @@ start() {
 		-x /usr/bin/python3 -- \
 		"$MOONRAKER" -d "$DATAPATH" -c "$CONFIG" -l "$LOGFILE" \
 		-u "$UNIXSOCKET"
+	# NebulaOS Memory Resilience Gate: moderately protected - Moonraker
+	# coordinates updates/rollback and must survive memory pressure
+	# preferentially over GuppyScreen/webcam/update-helper processes, but
+	# less critically than Klipper itself (docs/NEBULAOS_MEMORY_RESILIENCE.md
+	# sec 7).
+	[ -f "$PIDFILE" ] && echo -400 > "/proc/$(cat "$PIDFILE")/oom_score_adj" 2>/dev/null
 }
 
 stop() {

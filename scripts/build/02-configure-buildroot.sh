@@ -95,6 +95,7 @@ set -e
 cp "/repo/artifacts/buildroot-halley5-v30-image/buildroot.config" "/repo/vendor/buildroot-x2000/.config"
 mkdir -p "/repo/vendor/buildroot-x2000/board"
 cp "/repo/artifacts/buildroot-halley5-v30-image/halley5-openke-fragment.config" "/repo/vendor/buildroot-x2000/board/halley5-openke-fragment.config"
+cp "/repo/artifacts/buildroot-halley5-v30-image/halley5-openke-busybox-fragment.config" "/repo/vendor/buildroot-x2000/board/halley5-openke-busybox-fragment.config"
 cat > "/repo/vendor/buildroot-x2000/local.mk" <<EOF
 LINUX_OVERRIDE_SRCDIR = /kernel_6_6/kernel/kernel-6.6
 EOF
@@ -154,6 +155,12 @@ docker run --label "openke-build-pid=$$" --rm --user root \
 apt-get -qq update >/dev/null 2>&1
 apt-get install -y -qq python3 bc cpio rsync unzip bison flex libncurses5-dev file build-essential libssl-dev libelf-dev >/dev/null 2>&1
 make libopenssl-dirclean 2>/dev/null || true
+# Same class of bug, found again (Memory Resilience Gate, 2026-07-26):
+# adding CONFIG_FEATURE_SWAPON_PRI via the busybox config fragment had no
+# effect on an already-built busybox (confirmed live on a flashed image:
+# swapon rejected the priority option outright) - same stale-stamp
+# mechanism as the libopenssl case above.
+make busybox-dirclean 2>/dev/null || true
 '
 
 echo "== buildroot configured =="

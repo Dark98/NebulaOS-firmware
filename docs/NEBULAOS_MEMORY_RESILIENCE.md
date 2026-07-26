@@ -156,3 +156,27 @@ python3 urllib.request.urlopen(...):        status 200
 Live HTTPS qualification: **passed**, with this documented, permanent caveat rather than a false "all green."
 
 Ready to resume Phase 7 (mutable Klipper/Moonraker/Mainsail installs, writable Moonraker environment) on top of this now-proven foundation.
+
+## 8. Phase 7 writable Moonraker environment — proven live, one more real bug found and fixed
+
+`setup_moonraker_env()` in `S04nebulaos-factory-seed` creates `/usr/data/nebulaos/envs/moonraker` via `python3 -m venv --system-site-packages` (all of Moonraker's real dependencies, per `vendor/moonraker/scripts/moonraker-requirements.txt`, are already importable through Buildroot's own python3 site-packages, so this needs zero new package installs to be immediately functional). `S56moonraker` prefers this venv's `bin/python3` when present, falling back to the system interpreter on a freshly-wiped namespace's first boot before `S04` has run.
+
+**Fresh-boot qualification** (namespace reset to genuinely unseeded beforehand, same as §6): venv created successfully, passed its own `import tornado, numpy, streaming_form_data` smoke test, `S56moonraker` logged `Starting moonraker (using /usr/data/nebulaos/envs/moonraker/bin/python3)`, `ps aux` confirmed the running process's interpreter was the venv's own binary, Klipper/Moonraker both reached `ready`, zero OOM events despite the added ~59s of venv-creation CPU load, no `.partial` debris, `known-good.json` recorded real commits (not `"unseeded"`).
+
+**Real bug found live while reviewing this boot's `moonraker.log`**: Moonraker's `machine.py` network-interface poller calls `ip -json -det address` roughly every 10s to serve its own `/machine/*` API and Mainsail's network status page. BusyBox's `ip` applet supports only `-f[amily]`/`-o[neline]` (confirmed directly against its own usage text — both `-json`/`-j` and `-det`/`-d` just printed the busybox help, never attempted the request) — a structural limitation of the minimal reimplementation, not a missing config flag, same class as the `swapon -p`/`wget`-HTTPS gaps in §5/§7. This produced a `ShellCommandError` traceback in `moonraker.log` every ~10s, indefinitely, on every boot.
+
+**Fix**: enabled the real `BR2_PACKAGE_IPROUTE2` Buildroot package and disabled BusyBox's own `ip` applet (`CONFIG_IP=n` in the busybox fragment). This second half mattered: Buildroot's `busybox.mk` installs via the upstream `install-noclobber` rule (confirmed against `package/busybox/busybox.mk` and busybox's own `applets/install.sh`, which uses `ln -sf`/`-f` for `--symlinks`/`--hardlinks` but is invoked with `install-noclobber` here), meaning whichever of busybox/iproute2 happened to install `/sbin/ip` first during `TARGET_FINALIZE` would silently win — not something to leave to build-order luck. Disabling the applet removes the ambiguity entirely.
+
+**Rebuilt (full Buildroot rebuild required — new package, not just an overlay change), reflashed, and proven live**:
+```
+/sbin/ip:                     real MIPS ELF (iproute2), not the busybox multi-call symlink
+ip -json -det address:        real JSON output (ifindex/ifname/flags/mtu/... for lo, etc.)
+moonraker.log:                no further "Error running shell command: 'ip -json -det address'" tracebacks
+/proc/swaps:                  zram (pri 100) + disk swapfile (pri 10), both active
+dmesg | grep -i oom:          empty
+klippy_state:                 ready, klippy_connected: true
+moonraker process interpreter: /usr/data/nebulaos/envs/moonraker/bin/python3 (persisted across reboot, no reseed needed)
+/usr/data/nebulaos/{apps,envs}: no .partial debris
+```
+
+`06-verify.sh` was extended with a static check that `/sbin/ip` exists in the built rootfs and is not the busybox applet symlink (parsed from `debugfs stat`'s `Fast link dest` field), so this cannot silently regress in a future build.

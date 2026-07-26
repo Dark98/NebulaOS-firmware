@@ -256,6 +256,23 @@ check /opt/nebulaos-seeds/moonraker.bundle
 check /opt/nebulaos-seeds/seed-manifest.json
 check /usr/sbin/ntpd
 check /etc/init.d/S40nebulaos-ntpsync
+
+# Phase 7 live qualification: Moonraker machine.py needs real iproute2
+# JSON output (`ip -json -det address`), which BusyBox ip cannot produce
+# at all (confirmed live). /sbin/ip must be the real iproute2 ELF binary,
+# not still the busybox multi-call symlink - debugfs stat prints
+# "Fast link dest" only for symlinks, so its presence (and pointing at
+# busybox) is what would indicate the fix did not take.
+check /sbin/ip
+stat_out=$(debugfs -R "stat /sbin/ip" /img/rootfs.ext2 2>&1)
+case "$stat_out" in
+	*"Fast link dest"*busybox*)
+		echo "MISS /sbin/ip is still the busybox applet symlink"
+		;;
+	*)
+		echo "OK   /sbin/ip is a real binary, not the busybox symlink"
+		;;
+esac
 '
 
 echo "=== architecture spot-checks (host objdump has no MIPS backend - using the k1-bash-build toolchain) ==="

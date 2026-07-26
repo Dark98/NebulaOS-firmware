@@ -1,0 +1,38 @@
+# OpenKE addition (USB/webcam stock-parity mission, 2026-07-26): custom
+# already runs a real udevd (Buildroot's own stock S10udev, unmodified -
+# confirmed live via `ps`, pid present) but ships with zero rules, so a USB
+# flash drive enumerates at the kernel level (real /dev/sdX node, confirmed
+# live) and then simply sits there - nothing ever mounts it or tells any
+# userspace component it exists. Stock has its own working equivalent for
+# this exact case (/etc/udev/rules.d/10-mount-udisk.rules ->
+# /etc/auto_mount_udisk.sh, confirmed by reading stock's own real rootfs
+# directly - see FIRMWARE.md), but stock's mechanism ends in a
+# `ubus_call udisk set_state` notification - a whole separate IPC service
+# (ubus/ubusd) this project's userspace doesn't have at all, built for
+# Creality's own stock touchscreen UI, not GuppyScreen.
+#
+# GuppyScreen (confirmed via `strings` on its own binary: zero references
+# to "udisk"/"removable"/"/dev/sd", but real references to
+# "http://{}:{}/server/files/gcodes/{}") has no built-in USB-media concept
+# of its own at all - it only ever lists files via Moonraker's own
+# /server/files/gcodes/ REST API, which lists whatever is really present
+# under Moonraker's registered gcodes root (/opt/printer_data/gcodes). So
+# the real integration point for *this* UI isn't a notification service -
+# it's just making the drive's files actually appear inside that directory
+# tree, which Moonraker already watches and GuppyScreen already browses.
+#
+# See /etc/usb-gcode-media.sh for the actual mount/unmount logic. Matches
+# whole-disk nodes (superfloppy media, no partition table - confirmed this
+# is how the real flash drive tested this mission is formatted) and
+# partitioned nodes alike, same as stock's own rule.
+ACTION!="add", GOTO="usb_gcode_media_exit"
+SUBSYSTEM!="block", GOTO="usb_gcode_media_exit"
+KERNEL=="sd[a-z][0-9]", ENV{MDEV}="%k", RUN+="/etc/usb-gcode-media.sh %k"
+KERNEL=="sd[a-z]", ENV{MDEV}="%k", RUN+="/etc/usb-gcode-media.sh %k"
+LABEL="usb_gcode_media_exit"
+
+ACTION!="remove", GOTO="usb_gcode_media_exit"
+SUBSYSTEM!="block", GOTO="usb_gcode_media_exit"
+KERNEL=="sd[a-z][0-9]", ENV{MDEV}="%k", RUN+="/etc/usb-gcode-media.sh %k"
+KERNEL=="sd[a-z]", ENV{MDEV}="%k", RUN+="/etc/usb-gcode-media.sh %k"
+LABEL="usb_gcode_media_exit"

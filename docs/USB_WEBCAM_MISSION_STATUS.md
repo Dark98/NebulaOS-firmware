@@ -53,7 +53,20 @@ gathered directly from the device over SSH (see FIRMWARE.md §60 for the
 full narrative and evidence quotes already written up before this status
 doc).
 
-**In progress (Phase 19 - full production rebuild):**
+**Phase 19 - full production rebuild: DONE and independently verified**
+(commit `b436139`). Fourth attempt succeeded cleanly after fixing a
+fourth real bug (v4l2-ctl's docker build was missing `--user root` -
+commit `2328f77`). Verified directly, not just via exit code:
+`build-manifest.txt`'s `rootfs_squashfs_sha256` matches a fresh
+`sha256sum` of the real file on disk; `unsquashfs -l` confirms
+`usr/bin/ustreamer`, `usr/bin/v4l2-ctl`, and `etc/init.d/S50webcam` are
+all present; `kernel.config` confirms `CONFIG_EXFAT_FS=y`; `readelf` on
+the built `v4l2-ctl` binary confirms interpreter `/lib/ld.so.1` and only
+NEEDED libs already present on-device (`libstdc++.so.6`, `libm.so.6`,
+`libgcc_s.so.1`, `libc.so.6`, `ld.so.1`).
+
+**Old, no-longer-relevant note below** (kept only for the debugging
+narrative in "Real bugs found"):
 
 A full `02→03→04→05→06` rebuild is required to bake all of the above into
 a real flashable image (kernel changes and the new binaries can't be

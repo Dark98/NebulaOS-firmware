@@ -44,10 +44,17 @@ fi
 clone_pinned buildroot-x2000 https://github.com/lone0/buildroot-x2000.git \
 	74d020081096972857acdb9e76c6c5335455d430
 
-# SimpleAF's Klipper fork - Track 1's "SimpleAF + the probe" decision applies
-# here too: this is the environment this whole app stack targets.
-clone_pinned klipper https://github.com/pellcorp/klipper.git \
-	386fde4fd38e8eda6999e58bf260eceb00051188
+# NebulaOS's own fork of SimpleAF's Klipper (coreflake1/NebulaOS-klipper,
+# `nebulaos` branch) - Track 1's "SimpleAF + the probe" decision applies here
+# too: pellcorp/klipper @ 386fde4 is still the base this whole app stack
+# targets, but every klippy_extras/ file this project needs (tmcstatus,
+# guppy_config_helper, guppy_module_loader, calibrate_shaper_config,
+# prtouch_v2 + companions, z_compensate) is now committed into this fork's
+# own tracked history on top of that commit, instead of being copied in as
+# untracked files by 04-cross-compile-app-stack.sh after every fetch (see
+# that script's own comment, now removed, for the gap this replaces).
+clone_pinned klipper https://github.com/coreflake1/NebulaOS-klipper.git \
+	b3d5ab2b9484f1558586c3a2ea43d46ff9a473a7
 
 # Official Moonraker - not a fork, no reason to deviate.
 clone_pinned moonraker https://github.com/Arksine/moonraker.git \

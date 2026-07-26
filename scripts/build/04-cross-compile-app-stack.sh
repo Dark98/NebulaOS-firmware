@@ -81,13 +81,18 @@ cp -r "$VENDOR/klipper/config" "$OVERLAY/opt/klipper/"
 cp -r "$VENDOR/klipper/docs" "$OVERLAY/opt/klipper/"
 
 # This repo's own klippy_extras/ (prtouch_v2.py, z_compensate.py,
-# guppy_module_loader.py, etc.) was a real, pre-existing gap - written and
+# guppy_module_loader.py, etc.) used to be a real gap - written and
 # referenced by printer.cfg's own comments, but never actually copied
 # anywhere by this pipeline, since only vendor Klipper's own klippy/extras/
-# ever made it into the overlay above. Layered on top (never replacing
-# vendor Klipper's own extras), same as everything else in this stage.
-cp "$REPO_ROOT/klippy_extras/"*.py "$OVERLAY/opt/klipper/klippy/extras/"
-rm -rf "$OVERLAY/opt/klipper/klippy/extras/__pycache__"
+# ever made it into the overlay above. Fixed at the source instead of here:
+# vendor/klipper now tracks coreflake1/NebulaOS-klipper's `nebulaos` branch
+# (00-fetch-vendor-sources.sh), which has every one of these files committed
+# directly into its own klippy/extras/ - the wholesale `cp -r klippy` above
+# already carries them into the overlay, so no separate copy step is needed
+# here any more. This repo's own klippy_extras/ directory remains the
+# reviewable source of truth for these files' content (edit there, then
+# re-commit into the fork - see docs/NEBULAOS_MUTABLE_RUNTIME_ARCHITECTURE.md
+# sec 1.3), it is just no longer injected at build time as untracked files.
 
 ### 2. Moonraker: source + its Python dependency chain
 echo "== copying Moonraker source =="
@@ -129,7 +134,7 @@ apt-get install -y python3-pip >/dev/null 2>&1
 pip3 download -d /wheels --no-deps \
 	inotify-simple==2.0.1 libnacl==2.1.0 apprise==1.9.3 ldap3==2.9.1 \
 	importlib_metadata==8.4.0 preprocess-cancellation==0.2.1 pyasn1 \
-	zipp==3.20.2
+	zipp==3.20.2 wheel==0.42.0
 '
 SITEPKG="$OVERLAY/usr/lib/python3.11/site-packages"
 mkdir -p "$SITEPKG"

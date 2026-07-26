@@ -140,10 +140,16 @@ seed_git_app() {
 	# was mistaken for a memory/OOM issue at first because it kept leaving
 	# the exact same-looking ".partial" trail; it is unrelated to memory -
 	# it reproduced identically even after zram/disk swap were both
-	# confirmed correctly active with zero OOM events. rmdir here is safe
-	# (only removes if genuinely empty - never touches real content; the
-	# `-e "$dest/.git"` check above already proved there is none).
-	rmdir "$dest" 2>/dev/null
+	# confirmed correctly active with zero OOM events. A plain `rmdir`
+	# (only-if-empty) was tried first and verified to work in an isolated
+	# manual test - but still left the same nesting live, meaning $dest
+	# was not always genuinely empty at this point (most likely leftover
+	# debris from an earlier failed attempt this same boot, not yet fully
+	# explained). `rm -rf` here is safe regardless of what is inside -
+	# the `-e "$dest/.git"` check above already proved $dest holds no
+	# valid seeded checkout, so its content (empty or partial debris) is
+	# always safe to discard right before mv replaces it.
+	rm -rf "$dest"
 	mv "$dest.partial" "$dest"
 	log "$name seeded successfully (branch $branch, $(git -C "$dest" rev-parse HEAD))"
 }
@@ -167,7 +173,7 @@ seed_mainsail() {
 		rm -rf "$dest.partial"
 		return 1
 	fi
-	rmdir "$dest" 2>/dev/null
+	rm -rf "$dest"
 	mv "$dest.partial" "$dest"
 	log "mainsail seeded successfully"
 }

@@ -37,6 +37,14 @@ if [ -f "$KERNEL_CONFIG" ]; then
 	check_builtin CONFIG_STAGE_OPENKE_GENERAL_480X272
 	check_builtin CONFIG_BRCMFMAC
 	check_builtin CONFIG_INGENIC_HW_RANDOM
+	# NebulaOS Memory Resilience Gate: real bug this catches if regressed -
+	# the original OOM/no-swap incident happened precisely because these
+	# were silently absent from the kernel; a plain rootfs file check
+	# can't see kernel config at all, so this is the only place a clean
+	# build can catch this specific regression.
+	check_builtin CONFIG_SWAP
+	check_builtin CONFIG_ZRAM
+	check_builtin CONFIG_CRYPTO_LZ4
 	# Two competing WiFi drivers were a real, previously-hit bug (FIRMWARE.md
 	# sec 24/36) - confirm the vendor's out-of-tree one stays disabled.
 	if grep -q "^CONFIG_BCMDHD=y$" "$KERNEL_CONFIG"; then
@@ -229,6 +237,23 @@ check /etc/init.d/S01persistent-datastore
 check /etc/init.d/S99confirm-good
 check /etc/ota_marker.sh
 check /opt/printer_data/config/GuppyScreen/scripts/static_ip.py
+
+echo "=== NebulaOS memory resilience (docs/NEBULAOS_MEMORY_RESILIENCE.md) ==="
+check /sbin/mkswap
+check /sbin/swapon
+check /sbin/swapoff
+check /usr/bin/free
+check /etc/init.d/S00zram-swap
+check /etc/init.d/S03nebulaos-diskswap
+check /etc/init.d/S02nebulaos-namespace
+check /etc/init.d/S04nebulaos-factory-seed
+check /etc/init.d/S05nebulaos-activate
+check /etc/init.d/S45nebulaos-cleanup
+check /etc/nebulaos-retention.sh
+check /etc/nebulaos-healthcheck.sh
+check /opt/nebulaos-seeds/klipper.bundle
+check /opt/nebulaos-seeds/moonraker.bundle
+check /opt/nebulaos-seeds/seed-manifest.json
 '
 
 echo "=== architecture spot-checks (host objdump has no MIPS backend - using the k1-bash-build toolchain) ==="

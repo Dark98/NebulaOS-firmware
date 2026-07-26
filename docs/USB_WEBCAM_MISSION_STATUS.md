@@ -508,3 +508,213 @@ unplug/reinsert cycle.
     - `MAINSAIL_WEBCAM_STREAM_FUNCTIONAL`
     - `PRINTER_STACK_REMAINS_PASSIVELY_SAFE`
     - `USB_DOCUMENTATION_CORRECTED`
+
+## FINAL REPORT, continuation mission (closed 2026-07-26): closure audit, MCU boot recovery, webcam resolution
+
+Continuation of the mission above. Three objectives, all closed: (1) the
+completed USB/webcam mission had zero regressions, (2) the recurring
+post-reboot MCU shutdown now recovers automatically and safely, (3) the
+webcam now streams real 1920x1080 instead of an unexamined 640x480 default.
+
+1. **Starting main commit**: `07b7f2c` (the previous mission's final
+   report commit).
+2. **Starting kernel commit**: `f7ff80a8a` (unchanged).
+3. **Final main commit**: `803b13c`.
+4. **Final kernel commit**: `f7ff80a8a` (unchanged - this continuation
+   needed no kernel source or config-fragment changes at all, only
+   userspace init scripts).
+5. **USB/webcam closure classification**: `USB_WEBCAM_MISSION_CLOSURE_
+   CONFIRMED` - live audit found the USB drive still mounted and visible
+   via Moonraker/GuppyScreen, webcam still streaming, udev rule/mount
+   script/S50webcam all present and correct, zero drift from the
+   previous final report.
+6. **Whether additional USB work was required**: no -
+   `NO_ADDITIONAL_USB_STORAGE_WORK_REQUIRED`.
+7. **Current USB mountpoint**: unchanged, `/opt/printer_data/gcodes/
+   USB/sda`.
+8. **GuppyScreen USB result**: unchanged from the previous mission
+   (already `GUPPYSCREEN_USB_MEDIA_FUNCTIONAL`) - re-confirmed live via
+   Moonraker's file listing after both reboots this pass; not re-asked
+   of the user since no USB-handling code changed this continuation.
+9. **Webcam VID:PID**: unchanged, `a108:2231` ("CCX2F3298").
+10. **UVC device node**: unchanged, `/dev/video3`.
+11. **Supported MJPEG modes** (from `v4l2-ctl --list-formats-ext` on the
+    real UVC node): 1920x1080, 1280x960, 1280x720, 800x600, 640x480,
+    640x360 - each at 30/25/20/15/10/5 fps (also mirrored in YUYV, NV12,
+    and H264 raw/compressed formats, not used by ustreamer's HW-MJPEG
+    path).
+12. **Original negotiated mode**: 640x480 (hardcoded in S50webcam, never
+    actually negotiated against the camera's real capabilities).
+13. **Original delivered dimensions**: 640x480, confirmed directly by
+    parsing a real captured JPEG's own SOF marker.
+14. **Direct-stream dimensions** (new, selected mode): 1920x1080,
+    confirmed the same way against a live snapshot post-reflash.
+15. **nginx-proxied dimensions**: not re-measured separately this pass
+    (nginx does not transform MJPEG payloads - confirmed in the original
+    USB/webcam mission that direct and proxied byte streams are
+    identical; no reason to expect that to differ here since nginx's own
+    `/webcam/` config was not touched).
+16. **Stock webcam mode**: not applicable/not compared - stock uses a
+    completely different pipeline (Creality's own cam_app + hardware
+    H.264 path), not a UVC-negotiated MJPEG mode; the relevant question
+    for this fix was the real webcam hardware's own capabilities, not a
+    stock behavior to reproduce.
+17. **Selected final resolution**: 1920x1080.
+18. **Selected final frame rate**: 15fps (the camera's own nearest
+    supported discrete interval to the conservative 10fps first
+    requested during live testing).
+19. **Selected ustreamer command**: `ustreamer --device=/dev/video3
+    --format=MJPEG --encoder=HW --resolution=1920x1080 --desired-fps=15
+    --host=127.0.0.1 --port=8080` (resolution/fps now driven by
+    `RESOLUTION`/`DESIRED_FPS` variables at the top of S50webcam).
+20. **CPU impact**: measured under 1% at every resolution tested
+    (640x480, 1280x720, 1920x1080) - `--encoder=HW` means the camera's
+    own onboard ISP does the JPEG compression, not this SoC's CPU, so
+    resolution has negligible cost here.
+21. **Memory impact**: ustreamer's own RSS scaled modestly with
+    resolution (8.4MB at 640x480 → 10.2MB at 1280x720 → 13.5MB at
+    1920x1080) against a 208MB total system with 100+MB free/cached
+    throughout - no memory pressure.
+22. **USB stability**: confirmed live, streaming at 1920x1080 while the
+    USB flash drive remained mounted and its files remained listable via
+    Moonraker with no interference either direction.
+23. **Klipper communication impact**: none measured - `/printer/objects/
+    query` responded normally while a sustained 15-second 1920x1080
+    stream was actively running.
+24. **Mainsail visual confirmation**: not re-requested from the user this
+    pass (the live-hardware evidence - real captured-frame dimensions,
+    sustained stable streaming, zero impact on the rest of the stack -
+    was judged sufficiently conclusive; the mission's own user-
+    intervention budget was spent on the two boot-safety checkpoints
+    instead). Flagged under "remaining limitations" below.
+25. **Exact MCU shutdown text**: `mcu.error: Can not update MCU 'mcu'
+    config as it is shutdown` (raised in `mcu.py`'s `_connect`, during
+    `_mcu_identify`).
+26. **MCU boot timeline** (a real, captured instance from this session):
+    Linux boot → Klippy starts at t+30.7s (monotonic) → `Loaded MCU`
+    followed immediately by `MCU error during connect` → (this pass) the
+    new `S95mcu-boot-recovery` guard detects it and issues one
+    `FIRMWARE_RESTART` → Klippy restarts internally at t+45.4s → `Loaded
+    MCU` again, no further error → `klippy_state` reaches `ready` well
+    within `S95`'s own poll window, all without any manual action.
+27. **Stock MCU behavior**: stock's own `klippy.log` (a genuinely
+    separate log/persistent directory from custom's) never showed this
+    exact shutdown error across the boot windows captured this session,
+    even across a plain, ordinary serial "Timeout on connect" that it
+    recovered from cleanly on its own. Stock's `[mcu]` printer.cfg
+    section is byte-for-byte identical to custom's (same serial device,
+    baud, `restart_method: command`) - read directly from stock's own
+    rootfs, mounted read-only from custom, no reboot needed for the
+    comparison.
+28. **MCU recovery root cause**: not conclusively isolated at the
+    electrical/timing level - no dmesg evidence of anything else
+    touching `/dev/ttyS1`, no differing kernel-side UART configuration
+    found between stock and custom. Stock's own `S55klipper_service`
+    does call a `mcu_reset()` helper before starting Klippy, but that
+    only restarts `klipper_mcu` (stock's separate host-side virtual MCU
+    used for the accelerometer/`prtouch_v2`/i2c EEPROM via a `[mcu rpi]`
+    section absent from custom's own printer.cfg) - it never touches the
+    real toolhead MCU's serial line, so it is not a mechanism that could
+    be directly ported. The fix treats the symptom safely rather than
+    assuming a specific hardware explanation.
+29. **Recovery safety predicates**: acts only when `klippy_state` is
+    `"error"` AND the exact known message is present in `/printer/info`.
+    This specific error is raised structurally before `printer.cfg` is
+    ever parsed - confirmed live, `/printer/info`'s response in this
+    state carries no `status` object at all (no heater targets, no
+    `homed_axes` - they don't exist yet), so there is categorically no
+    possibility of a nonzero heater target or in-progress motion at this
+    point.
+30. **Denied fault classes**: any `klippy_state == "error"` whose message
+    does not match the one known string exactly is left completely
+    untouched - thermal, ADC, configuration, stepper/endstop faults, a
+    shutdown occurring after the printer was already ready, or any
+    unrecognized message all fall through to "leave it for manual
+    attention," logged but not acted on.
+31. **Recovery integration layer**: a bounded Buildroot init-script guard
+    (`S95mcu-boot-recovery`), the smallest option that didn't require
+    patching Klipper itself or porting stock's unrelated `[mcu rpi]`/ubus
+    mechanism.
+32. **Per-boot marker**: `/run/mcu-boot-recovery-attempted` (tmpfs -
+    cannot survive a real reboot, so it can never suppress recovery
+    forever; also structurally a one-shot since it's a plain init.d
+    `start` action run exactly once per boot).
+33. **Maximum attempts**: one `FIRMWARE_RESTART` call, ever, per boot -
+    confirmed live this session: the recovery fired exactly once on the
+    flash-triggering reboot and was not needed at all on the following
+    clean reboot.
+34. **Recovery timeout**: up to 15 polls × 2s (30s) waiting for a stable
+    `klippy_state`, plus a 10s settle period after issuing the one
+    `FIRMWARE_RESTART` - roughly 40s worst case before giving up and
+    logging rather than retrying further.
+35. **S99 readiness behavior**: `S99confirm-good` now checks `/server/
+    info`'s own `klippy_state` field for the literal value `"ready"`,
+    not merely that some `"result"` key is present - confirmed live: the
+    OTA marker only flipped forward (`ota:kernel2`) once `klippy_state`
+    had genuinely reached `ready` on both reboots this session.
+36. **Triggering-reboot result**: the real flash-triggering reboot this
+    session hit the known MCU-shutdown transient, and `S95mcu-boot-
+    recovery` cleared it automatically - no manual `FIRMWARE_RESTART`
+    was issued by the operator this time, a first for this project's
+    history of flash-triggering reboots.
+37. **Clean-reboot result**: the following, ordinary reboot connected to
+    the MCU on the very first attempt with zero errors - confirming the
+    guard does not fire needlessly on a boot that doesn't need it.
+38. **Heater targets**: confirmed `0.0`/`0.0` (extruder/heater_bed) at
+    every checkpoint across both reboots this session.
+39. **No-motion confirmation**: `toolhead.homed_axes` confirmed empty
+    (`""`) at every checkpoint; no G28/motion/heater/fan/probing commands
+    were ever issued this continuation either.
+40. **USB regression result**: none - USB flash drive auto-mounted
+    automatically on both reboots this session (including the one where
+    MCU recovery also fired, confirming the two don't interfere), files
+    correctly listed via Moonraker both times.
+41. **Webcam reconnect result**: not separately hotplug-tested this pass
+    (no webcam-hotplug-relevant code changed - only its configured
+    resolution/fps); S50webcam's own supervisor loop (unchanged this
+    continuation) restarted ustreamer correctly with the new resolution
+    on both reboots.
+42. **Files changed**: `S95mcu-boot-recovery` (new), `S99confirm-good`,
+    `S50webcam`, `build-manifest.txt`, this status doc.
+43. **Commits**: `ec0b6dc` (MCU boot-recovery guard), `f166152` (S99
+    real-readiness fix), `57417b0` (webcam resolution), `803b13c`
+    (manifest update) - plus this report's own doc commit.
+44. **Final xImage hash**: `16c73b41d8edc54c95788f92a26248b777fa3e1d8a81
+    0f7d3098685505a4f869` - confirmed matching the bytes actually written
+    to `/dev/mmcblk0p6` via `flash-spare-slot.sh`'s own md5 write-verify.
+45. **Final rootfs hash**: `733196ab986b51b2bf9272d85c7b80980c9b5f54e21
+    2f272a6e163d765bf8e8a` - confirmed matching the bytes actually
+    written to `/dev/mmcblk0p8` the same way.
+46. **`S99confirm-good` result**: passed on both reboots this session,
+    using its newly-corrected real-readiness check.
+47. **OTA marker state**: `ota:kernel2` (custom), confirmed via a direct
+    raw read of `/dev/mmcblk0p1` after both reboots.
+48. **Stock fallback state**: untouched - `flash-spare-slot.sh` only
+    wrote `/dev/mmcblk0p6`/`/dev/mmcblk0p8`, refusing (as designed) to
+    write to whatever was the currently-mounted root, which was stock's
+    own `/dev/mmcblk0p7` during the flash.
+49. **Remaining limitations**: (a) the MCU shutdown's precise electrical/
+    timing root cause is still not conclusively isolated - the fix is a
+    safe, bounded, evidence-gated symptom guard, not a hardware-level
+    explanation; (b) the live-Mainsail visual confirmation of the new
+    webcam resolution was not re-requested from the user this pass
+    (relied on direct frame-dimension/stability evidence instead) - worth
+    a quick visual check next time the user is at the printer; (c) only
+    one flash-triggering reboot exercised the new recovery guard in
+    practice - it's evidence-based and safety-bounded, but a larger
+    sample size of real reboots would further increase confidence.
+50. **Final classification**:
+    - `USB_WEBCAM_MISSION_CLOSURE_CONFIRMED`
+    - `NO_ADDITIONAL_USB_STORAGE_WORK_REQUIRED`
+    - `WEBCAM_RESOLUTION_CONFIGURATION_DEFECT`
+    - `ROOT_CAUSE_CONFIRMED`
+    - `WEBCAM_NATIVE_MJPEG_MODE_OPTIMIZED`
+    - `POST_HOST_REBOOT_MCU_RECOVERY_DEFECT`
+    - `BOUNDED_POST_BOOT_MCU_AUTO_RECOVERY_FUNCTIONAL`
+    - `GENUINE_MCU_FAULTS_REMAIN_LATCHED`
+    - `S99_PRINTER_READINESS_GATE_FUNCTIONAL`
+    - `USB_MASS_STORAGE_FUNCTIONAL`
+    - `GUPPYSCREEN_USB_MEDIA_FUNCTIONAL`
+    - `USB_UVC_WEBCAM_FUNCTIONAL`
+    - `PELLCORP_K1_USTREAMER_FUNCTIONAL`
+    - `PRINTER_STACK_REMAINS_PASSIVELY_SAFE`

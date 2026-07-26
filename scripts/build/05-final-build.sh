@@ -39,9 +39,20 @@ KERNEL_MOUNT="$REPO_ROOT/vendor/x2000_kernel_6.6/kernel/kernel-6.6"
 # multiple sessions/processes have edited files in this same repo while a
 # build was in flight before). Snapshot before the real make, compare after
 # copying artifacts, abort rather than silently ship a mismatched build.
+#
+# 2026-07-26: excludes artifacts/buildroot-halley5-v30-image/ from the main
+# repo's status - this script itself overwrites xImage/rootfs.*/*.config
+# under that exact path a few lines below (see the docker cp step), which
+# was previously included in both the BEFORE and AFTER snapshots and so
+# self-tripped this check on every build that changes the kernel/buildroot
+# config in a way that produces a different kernel.config/buildroot.config
+# than what's currently committed - a false positive, not a real "something
+# else touched the tree mid-build" case (which is what this check is
+# actually meant to catch).
 source_fingerprint() {
 	(
-		cd "$REPO_ROOT" && git rev-parse HEAD && git status --porcelain=v2
+		cd "$REPO_ROOT" && git rev-parse HEAD && \
+			git status --porcelain=v2 -- . ":(exclude)artifacts/buildroot-halley5-v30-image/"
 		cd "$REPO_ROOT/vendor/x2000_kernel_6.6" && git rev-parse HEAD && git status --porcelain=v2
 	) | sha256sum | awk '{print $1}'
 }

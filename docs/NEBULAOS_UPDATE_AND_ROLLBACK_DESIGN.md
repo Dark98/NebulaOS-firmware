@@ -124,6 +124,17 @@ On any Stage 1 or Stage 2 failure:
 
 Persisted at `/usr/data/nebulaos/updates/<component>/state.json` (exact schema TBD during implementation), tracking at minimum: selected version, previous known-good version, activation state (`inactive`/`staged`/`activating`/`active`/`rollback-in-progress`/`factory-fallback`), pending-update state, last rollback reason, last health-check result. A reboot occurring during any of these states must resume deterministically on next boot (the activation manager, Phase 5, reads this state before starting any dependent service) rather than silently picking an arbitrary version.
 
+## 4.1 Factory-seed-to-mutable-update transition (real constraint found during Phase 4 implementation)
+
+The offline factory seeds (`docs/NEBULAOS_MUTABLE_RUNTIME_ARCHITECTURE.md` §Phase 4) are git bundles built from **flattened single-commit snapshots** of the (shallow) vendor checkouts, not real preserved history — a real git limitation was found and worked around: bundling a shallow clone's actual history does not survive a clone on the git version this project uses (`git bundle verify` reports the bundle as fine; `git clone` of it fails with "did not send all necessary objects"). The flattened seed commit therefore has **no shared ancestry** with the real `coreflake1/NebulaOS-klipper`/`Arksine/moonraker` history on GitHub.
+
+**Consequence for this design's Stage 1/2 update flow**: the very first real update performed against a freshly-seeded checkout must fetch and **hard-reset**, not merge:
+```sh
+git fetch origin <branch>
+git reset --hard origin/<branch>
+```
+A `git pull`/merge would attempt to reconcile two unrelated histories and either fail outright or produce a nonsensical merge commit. Every subsequent update (once the checkout is on real, continuous history from origin) can use normal fetch+fast-forward semantics — this constraint only applies to the one-time seed-to-real-history transition.
+
 ## 5. Open decisions
 
 1. **`pinned_commit` vs. no pin for Klipper/Moonraker** (§2): SimpleAF pins hard; this mission wants user-updatable components. Leaning toward **no hard pin**, relying instead on Stage 1/2 health checks and the rollback path as the compatibility gate — but this needs explicit confirmation before Phase 10 configuration is finalized, since it's a real behavioral difference from the proven reference.

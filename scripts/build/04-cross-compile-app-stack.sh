@@ -307,4 +307,93 @@ echo "== copying Mainsail static build =="
 mkdir -p "$OVERLAY/usr/share/mainsail"
 cp -r "$VENDOR"/mainsail-dist/dist/* "$OVERLAY/usr/share/mainsail/"
 
+### 6. NebulaOS mutable-runtime mission, Phase 4: immutable offline factory
+# seeds. Git bundles (a single self-contained file holding real commit
+# history, git's own documented offline-distribution mechanism) for
+# Klipper and Moonraker, baked into the read-only squashfs so first-boot
+# namespace seeding (S03nebulaos-factory-seed) never depends on GitHub,
+# PyPI, or DNS being reachable. Mainsail needs no bundle - it is already a
+# plain static release tree, not a git repo, so the existing
+# /usr/share/mainsail copy above IS its own offline seed; first-boot
+# seeding just cp -a's it.
+#
+# Both vendor/klipper and vendor/moonraker are shallow clones
+# (00-fetch-vendor-sources.sh's clone_pinned, 1-2 commits deep) - found by
+# testing the obvious `git bundle create out.bundle <branch>` directly
+# against them and getting "Failed to traverse parents of commit ...";
+# `git bundle verify` reports such a bundle as fine, but a real `git clone`
+# of it fails with "did not send all necessary objects" (a real git
+# shallow-bundle limitation, not a syntax mistake). Fixed by flattening
+# each vendor checkout into a single synthetic orphan commit (same tree,
+# no shallow boundary at all) in a throwaway copy before bundling - the
+# factory seed only ever needs matching tree content plus a real branch
+# name to clone onto, not preserved history; the true upstream commit this
+# snapshot derives from is recorded in the commit message and the seed
+# manifest below instead.
+make_flat_bundle() {
+	src="$1"; branch="$2"; out="$3"; true_commit="$4"
+	tmp=$(mktemp -d)
+	cp -r "$src/." "$tmp/"
+	git -C "$tmp" checkout --orphan nebulaos-seed-tmp -q
+	git -C "$tmp" add -A
+	git -C "$tmp" -c user.email=nebulaos@localhost -c user.name=NebulaOS \
+		commit -q -m "NebulaOS factory seed snapshot of $branch @ $true_commit"
+	git -C "$tmp" branch -D "$branch" 2>/dev/null || true
+	git -C "$tmp" branch -m nebulaos-seed-tmp "$branch"
+	git -C "$tmp" bundle create "$out" HEAD "refs/heads/$branch"
+	git -C "$tmp" rev-parse HEAD
+	rm -rf "$tmp"
+}
+
+echo "== creating offline factory-seed git bundles (Klipper, Moonraker) =="
+mkdir -p "$OVERLAY/opt/nebulaos-seeds"
+klipper_true_commit=$(git -C "$VENDOR/klipper" rev-parse nebulaos)
+klipper_seed_commit=$(make_flat_bundle "$VENDOR/klipper" nebulaos \
+	"$OVERLAY/opt/nebulaos-seeds/klipper.bundle" "$klipper_true_commit")
+moonraker_true_commit=$(git -C "$VENDOR/moonraker" rev-parse master)
+moonraker_seed_commit=$(make_flat_bundle "$VENDOR/moonraker" master \
+	"$OVERLAY/opt/nebulaos-seeds/moonraker.bundle" "$moonraker_true_commit")
+
+klipper_origin=$(git -C "$VENDOR/klipper" remote get-url nebulaos 2>/dev/null || echo "https://github.com/coreflake1/NebulaOS-klipper.git")
+moonraker_origin=$(git -C "$VENDOR/moonraker" remote get-url origin 2>/dev/null || echo "https://github.com/Arksine/moonraker.git")
+mainsail_version=$(cat "$VENDOR/mainsail-dist/dist/.version" 2>/dev/null || echo "unknown")
+build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+cat > "$OVERLAY/opt/nebulaos-seeds/seed-manifest.json" <<EOF
+{
+  "schema_version": 1,
+  "build_date": "$build_date",
+  "seeds": {
+    "klipper": {
+      "format": "git_bundle_flattened",
+      "file": "klipper.bundle",
+      "repository": "$klipper_origin",
+      "branch": "nebulaos",
+      "seed_commit": "$klipper_seed_commit",
+      "true_upstream_commit": "$klipper_true_commit",
+      "sha256": "$(sha256sum "$OVERLAY/opt/nebulaos-seeds/klipper.bundle" | cut -d' ' -f1)",
+      "compatibility_level": 1,
+      "upstream_base": "pellcorp/klipper @ 386fde4fd38e8eda6999e58bf260eceb00051188"
+    },
+    "moonraker": {
+      "format": "git_bundle_flattened",
+      "file": "moonraker.bundle",
+      "repository": "$moonraker_origin",
+      "branch": "master",
+      "seed_commit": "$moonraker_seed_commit",
+      "true_upstream_commit": "$moonraker_true_commit",
+      "sha256": "$(sha256sum "$OVERLAY/opt/nebulaos-seeds/moonraker.bundle" | cut -d' ' -f1)",
+      "compatibility_level": 1
+    },
+    "mainsail": {
+      "format": "directory_copy",
+      "source_path": "/usr/share/mainsail",
+      "version": "$mainsail_version",
+      "compatibility_level": 1
+    }
+  }
+}
+EOF
+echo "== factory seeds created: $(ls -la "$OVERLAY/opt/nebulaos-seeds/") =="
+
 echo "== app-stack overlay assembled at $OVERLAY =="

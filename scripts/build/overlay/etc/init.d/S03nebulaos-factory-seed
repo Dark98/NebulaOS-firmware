@@ -1,0 +1,139 @@
+#!/bin/sh
+#
+# NebulaOS mutable-runtime mission, Phase 4: idempotent, offline-only
+# first-boot seeding of the mutable Klipper/Moonraker/Mainsail checkouts
+# under /usr/data/nebulaos/apps/*, from the immutable git bundles and
+# static-release copy baked into the read-only squashfs at
+# /opt/nebulaos-seeds. Never touches GitHub/PyPI/DNS - this must work with
+# no network at all, so a wiped or first-time namespace can always recover.
+#
+# Must run after S02nebulaos-namespace (needs the directory layout to
+# already exist). Like S02, this script does NOT cut any running service
+# over to the seeded copies - Phase 5's activation manager does that. This
+# is purely "make sure a valid, verified mutable copy exists on disk."
+#
+# IMPORTANT for whoever writes Phase 7/10's update logic: the seeded
+# Klipper/Moonraker checkouts are flattened single-commit snapshots (see
+# 04-cross-compile-app-stack.sh's make_flat_bundle - both vendor checkouts
+# are shallow clones, and bundling a shallow repo's real history does not
+# survive a clone on this git version). Their commit has NO shared ancestry
+# with the real coreflake1/NebulaOS-klipper or Arksine/moonraker history on
+# GitHub. The first real update after seeding MUST use
+# `git fetch origin <branch> && git reset --hard origin/<branch>`
+# (discarding the synthetic local commit outright), never a merge/pull -
+# a merge would try to reconcile two unrelated histories and fail or
+# produce a nonsensical result.
+
+SEEDS=/opt/nebulaos-seeds
+APPS=/usr/data/nebulaos/apps
+SYSTEM=/usr/data/nebulaos/system
+
+log() {
+	echo "S03nebulaos-factory-seed: $1"
+}
+
+seed_git_app() {
+	name="$1"
+	bundle="$SEEDS/$name.bundle"
+	dest="$APPS/$name"
+	branch="$2"
+	origin="$3"
+
+	if [ -e "$dest/.git" ]; then
+		log "$name already seeded ($dest/.git exists) - skipping"
+		return 0
+	fi
+	if [ ! -f "$bundle" ]; then
+		log "ERROR: seed bundle missing ($bundle) - cannot seed $name"
+		return 1
+	fi
+
+	log "seeding $name from offline bundle $bundle"
+	rm -rf "$dest.partial"
+	if ! git clone --quiet "$bundle" "$dest.partial"; then
+		log "ERROR: git clone from bundle failed for $name - leaving no partial state"
+		rm -rf "$dest.partial"
+		return 1
+	fi
+
+	# Point the seeded checkout's origin at the real remote so a later
+	# network-connected `git fetch` reaches GitHub, not the (now-stale)
+	# bundle file - but do NOT fetch here; this step must stay fully
+	# offline, network access is Phase 7/10's concern, not first-boot seeding.
+	git -C "$dest.partial" remote set-url origin "$origin" 2>/dev/null || true
+
+	# Verify the seeded checkout landed on the exact expected branch/commit
+	# before it is considered valid - an interrupted or corrupted bundle
+	# extraction must never silently become "seeded."
+	actual_branch=$(git -C "$dest.partial" branch --show-current)
+	if [ "$actual_branch" != "$branch" ]; then
+		log "ERROR: $name seeded checkout is on branch '$actual_branch', expected '$branch' - rejecting"
+		rm -rf "$dest.partial"
+		return 1
+	fi
+
+	mv "$dest.partial" "$dest"
+	log "$name seeded successfully (branch $branch, $(git -C "$dest" rev-parse HEAD))"
+}
+
+seed_mainsail() {
+	dest="$APPS/mainsail"
+	if [ -e "$dest/index.html" ]; then
+		log "mainsail already seeded ($dest/index.html exists) - skipping"
+		return 0
+	fi
+	if [ ! -d /usr/share/mainsail ]; then
+		log "ERROR: immutable Mainsail source /usr/share/mainsail missing - cannot seed"
+		return 1
+	fi
+	log "seeding mainsail from immutable /usr/share/mainsail"
+	rm -rf "$dest.partial"
+	mkdir -p "$dest.partial"
+	cp -a /usr/share/mainsail/. "$dest.partial/"
+	if [ ! -e "$dest.partial/index.html" ]; then
+		log "ERROR: mainsail copy incomplete (no index.html) - rejecting"
+		rm -rf "$dest.partial"
+		return 1
+	fi
+	mv "$dest.partial" "$dest"
+	log "mainsail seeded successfully"
+}
+
+record_known_good() {
+	# Phase 8's rollback/health-check machinery consumes this - record the
+	# very first known-good version for each component right after a
+	# successful seed, so there is always a "previous known good" to fall
+	# back to even before any real update has ever happened.
+	kg="$SYSTEM/known-good.json"
+	[ -e "$kg" ] && return 0
+	klipper_commit=$( [ -d "$APPS/klipper/.git" ] && git -C "$APPS/klipper" rev-parse HEAD 2>/dev/null || echo "unseeded")
+	moonraker_commit=$( [ -d "$APPS/moonraker/.git" ] && git -C "$APPS/moonraker" rev-parse HEAD 2>/dev/null || echo "unseeded")
+	now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+	cat > "$kg" <<EOF
+{
+  "recorded_at": "$now",
+  "recorded_at_caveat": "may read as an early-epoch date if this boot occurred before NTP sync",
+  "klipper": {"commit": "$klipper_commit", "source": "factory_seed"},
+  "moonraker": {"commit": "$moonraker_commit", "source": "factory_seed"},
+  "mainsail": {"source": "factory_seed"}
+}
+EOF
+	log "recorded initial known-good versions ($kg)"
+}
+
+start() {
+	[ -d "$APPS" ] || { log "namespace not present yet ($APPS missing) - S02 should have created it, skipping"; exit 0; }
+	seed_git_app klipper nebulaos "https://github.com/coreflake1/NebulaOS-klipper.git"
+	seed_git_app moonraker master "https://github.com/Arksine/moonraker.git"
+	seed_mainsail
+	record_known_good
+}
+
+case "$1" in
+	start)
+		start
+		;;
+	*)
+		;;
+esac
+exit 0

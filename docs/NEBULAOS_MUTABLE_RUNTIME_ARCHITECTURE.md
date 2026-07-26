@@ -263,6 +263,21 @@ After the `04`-toolchain-ordering fix (§3.9) completed cleanly (`06-verify.sh` 
 
 **Fix**: re-ran the full `02` → `04` → `05` → `06` sequence again. `02`'s own `rm -rf`+`cp -r` resync picks up the current overlay template (now including all six new files); `04` had to run again immediately after because `02`'s `rm -rf` on the whole board overlay directory also wipes everything `04` itself adds directly (Klipper/Moonraker/Mainsail/ustreamer/the seed bundles) — none of which live in the tracked `scripts/build/overlay/` template. Result recorded in §5 once complete.
 
+## 3.11 Reproducibility exercise: final verified result
+
+After the three real findings above (§3.9 toolchain-ordering, §3.10 overlay staleness) were each fixed and the pipeline re-run, a final `02` → `04` → `05` → `06` pass completed with **zero `MISS` lines** and was independently confirmed via direct `unsquashfs -l` (not the verify script's own say-so) to contain: `git`/`curl`/`rsync`/`openssl` binaries, the CA bundle, `wheel`, `/opt/klipper/klippy/klippy.py`, `/opt/moonraker/moonraker/server.py`, `/usr/share/mainsail/index.html`, `/usr/bin/ustreamer`, and all six new NebulaOS init scripts/helper scripts (`S02`/`S03`/`S04`/`S45nebulaos-*`, `nebulaos-retention.sh`, `nebulaos-healthcheck.sh`) plus the `/opt/nebulaos-seeds/*` factory-seed bundles.
+
+**Final verified artifact** (this is the image to flash for live qualification):
+```
+built_at=2026-07-26T18:38:32Z
+git_commit_main=025a802305da438a7d4456d0e19a0949411b4390 (git_dirty_main=yes - later commits landed after this build)
+git_commit_kernel=f7ff80a8aa21886a32783dab167e451298c60a8d (git_dirty_kernel=no)
+xImage_sha256=8449c3029bef1c749dc2ffeb110e0b6c01246838213f0beaab031021295611d1
+rootfs_squashfs_sha256=cbcb2bc9ba829ec444c89139ce066f5f07e7b5307d994027c2b1993425642941
+```
+
+**Checkpoint item 2 is now genuinely complete**: not only was the original stale-stamp bug root-caused and fixed in the tracked pipeline, but the fix (and the whole current overlay) has been proven to hold from a truly clean Buildroot tree — catching two further real, independent bugs along the way (the `03`-before-`04` toolchain ordering requirement, and overlay-resync staleness), both fixed, both re-verified directly against the built squashfs rather than trusted from an exit code.
+
 ## 4. Pacing
 
 Per explicit user direction, proceeding straight through the remaining phases, checkpointing at major risk points (live-device tests, anything that looks destructive) rather than after every phase. Next: **Phase 2** (add git/curl/rsync/openssl/CA-certs/unzip/tar/venv/pip/setuptools/wheel to the Buildroot rootfs and prove real HTTPS against the required GitHub endpoints) — self-contained, no device changes, matches the mission's own phase ordering, unblocks Phase 7's dependency installs and Phase 10's git-based update manager.

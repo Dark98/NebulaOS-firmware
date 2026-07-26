@@ -271,7 +271,7 @@ cp "$VENDOR"/k1-ustreamer/build/ustreamer-deps/lib/*.so* "$OVERLAY/usr/lib/"
 # toolchain, same reasoning for appending (not prepending) buildroot-host/
 # bin to PATH.
 echo "== cross-compiling v4l2-ctl (this project's own Buildroot toolchain) =="
-docker run --label "openke-build-pid=$$" --rm \
+docker run --label "openke-build-pid=$$" --rm --user root \
 	-v "$VENDOR/v4l-utils:/src" \
 	-v "$TOOLCHAIN_HOST:/buildroot-host" \
 	-w /src pellcorp/k1-bash-build bash -c '

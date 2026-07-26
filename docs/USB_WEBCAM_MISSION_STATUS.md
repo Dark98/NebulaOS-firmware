@@ -216,6 +216,75 @@ rootfs.squashfs | grep <expected file>`) and the `build-manifest.txt`'s
 it. Also worth running `bash -n` on any pipeline script right after
 editing it, before spending 10+ minutes re-running a build against it.
 
+## Continuity record (updated 2026-07-26, mid-session)
+
+- Repo HEAD: `167ae1f` (main), kernel HEAD: `f7ff80a8a` (unchanged since
+  the exFAT commit - no further kernel changes since).
+- Currently booted: **custom**, at `192.168.0.146` (stable this session).
+- Flashed image (commit `e4dbd775`, per its own build-manifest.txt) is
+  running live and independently verified: USB flash drive (exFAT,
+  read/write tested), USB UVC webcam (real MJPEG through ustreamer +
+  nginx `/webcam/`), all confirmed via SSH.
+- Webcam is now confirmed **visually working in Mainsail** (user
+  confirmed a live/moving image, after some initial 0fps freezing that
+  resolved on its own - see "Extra findings" below).
+- Two real webcam-adjacent bugs found and fixed after the reflash:
+  `RELOAD_CAMERA`'s script targeted stock's dead cam_app/mjpg_streamer
+  binaries (commit `affee98`); Moonraker had no seeded `[webcam]` entry
+  for fresh installs (commit `c3ede09`).
+- **New scope, still pending flash**: USB flash drive is enumerable and
+  mountable in Linux, but was completely invisible in GuppyScreen (no
+  USB-media concept in GuppyScreen at all - confirmed via `strings` on
+  its own binary). Root-caused and fixed: `udevd` runs on custom but had
+  zero rules; added a real udev rule + mount script
+  (`91-usb-gcode-media.rules` + `usb-gcode-media.sh`, commit `167ae1f`)
+  that mounts USB block devices under Moonraker's own `gcodes` root
+  (`/opt/printer_data/gcodes/USB/<dev>`), matching stock's own real
+  auto-mount mechanism (`10-mount-udisk.rules`/`auto_mount_udisk.sh`,
+  read directly from stock's own rootfs, mounted read-only from custom -
+  no reboot needed for that comparison) but pointed at the actual
+  integration point this UI uses (Moonraker's file-manager), since
+  GuppyScreen has zero ubus/udisk awareness unlike stock's own UI.
+  **Validated manually** (direct script invocation, not real udev
+  triggering yet - /etc is read-only squashfs, so the real hotplug path
+  needs a rebuild+reflash to test): mount succeeded read-write, files
+  appeared instantly in Moonraker's `/server/files/list` under
+  `USB/sda/...`, unmount cleaned up correctly. **Still needed**: rebuild
+  (04→05→06, no kernel changes needed) + reflash + a real hotplug test
+  (unplug/reinsert the flash drive) to prove udev itself triggers this
+  correctly end to end, then confirm the files actually appear in
+  GuppyScreen's own UI (not just Moonraker's API).
+
+### Extra findings from this pass
+
+- **Stock SSH password is `Creality2023`**, not `openke` (custom-only).
+  Saved to the `reference-device-access` memory. An earlier FIRMWARE.md
+  note claiming "root/openke... same as before" for a stock session
+  turns out to describe serial console access specifically, not SSH.
+- Switching TO custom from stock needs a different mechanism than the
+  reverse: stock has no `write_ota_marker.sh`; use
+  `. /etc/ota_bin/ota_utils.sh; . /etc/ota_bin/ota_local_method.sh;
+  local_set_next_boot_device` (a *toggle*, not an explicit target - read
+  `mmc_read_str ota` first). Also saved to memory.
+- Stock and custom can be reachable at **different IPs simultaneously**
+  after a marker-flip+reboot (found via `nmap -p 22 --open -T4
+  192.168.0.0/24`, hostname pattern `ender3v3ke-<hex>.lan`).
+- Post-reflash, Klipper reported `MCU 'mcu' config as it is shutdown` -
+  the known, previously-documented one-off pattern after a flash-
+  triggering reboot. Recovered with a single `FIRMWARE_RESTART` (not
+  forbidden by the mission's constraint list); heater targets/homed_axes
+  confirmed still safe (0/empty) both before and after.
+- The webcam's initial "mostly frozen, 0fps" symptom in Mainsail resolved
+  on its own after some diagnostic `v4l2-ctl` queries and/or a
+  `RELOAD_CAMERA`-macro press - direct server-side testing (both times)
+  showed ustreamer and nginx delivering a smooth, real 30fps locally, so
+  this was very likely a one-time cold-start hiccup in the UVC device's
+  own streaming state, not a real service-type incompatibility. Both
+  Mainsail's default `mjpegstreamer-adaptive` and `uv4l-mjpeg` service
+  types were confirmed working after that.
+- `vendor/k1-ustreamer` corruption (see "Real bugs found" above) was
+  fixed by re-cloning; not committed (vendor/ is gitignored).
+
 ## Mission constraints still in force for whoever continues
 
 - Production streamer must stay `pellcorp/k1-ustreamer` - do not swap in

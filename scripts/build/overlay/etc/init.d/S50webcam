@@ -3,33 +3,154 @@
 # OpenKE addition: starts pellcorp/k1-ustreamer against the real UVC webcam,
 # mirroring Creality's own S50webcam pattern (see FIRMWARE.md sec 6/11) but
 # using an open replacement instead of their closed cam_app + proprietary
-# Helix/Felix encoder. "-c HW" means the webcam's own onboard ISP does the
-# MJPEG compression - this never touches Ingenic's hardware encoder at all,
-# the same approach any generic USB-UVC-webcam Klipper printer uses.
+# Helix/Felix encoder. "--encoder=HW" means the webcam's own onboard ISP does
+# the MJPEG compression - this never touches Ingenic's hardware encoder at
+# all, the same approach any generic USB-UVC-webcam Klipper printer uses.
 #
-# /dev/video0 is assumed since this build only enables uvcvideo (no
-# competing internal M2M encoder /dev/videoN nodes exist here, unlike the
-# stock device's /dev/video4) - unconfirmed against real hardware, adjust if
-# the real device enumerates differently.
+# USB/webcam stock-parity mission (2026-07-26): the old version of this
+# script hardcoded /dev/video0 and just skipped if it was absent. Real
+# hardware testing (first time this project ever had an actual USB webcam
+# physically attached) showed that assumption was wrong: this SoC's own
+# rotation/H.264-encode/H.264-decode M2M blocks claim /dev/video0-2
+# unconditionally at boot (ingenic-rot, helix-venc, felix-vdec), regardless
+# of whether any USB webcam is even connected - the real webcam always
+# enumerates at /dev/video3 or later. Also found: ustreamer itself never
+# actually ran before this mission - a real MIPS ABI mismatch between
+# pellcorp's own k1-camera-build toolchain and this project's Buildroot
+# toolchain (see 04-cross-compile-app-stack.sh's own comment) meant the
+# binary could never load at all, independent of this script.
+#
+# This version discovers the real UVC capture node dynamically via v4l2-ctl
+# (now actually packaged - see 00-fetch-vendor-sources.sh/
+# 04-cross-compile-app-stack.sh), and runs as a small supervising loop
+# (bounded 5s poll, not a busy loop) so a webcam that enumerates late, or
+# is unplugged/replugged later, is picked up without a reboot. mdev/hotplug
+# event wiring would be the more "correct" event-driven approach, but this
+# system doesn't currently wire the kernel hotplug sysctl to mdev at all -
+# doing that is a bigger, more invasive change to how this whole image
+# manages devices than this mission's actual scope, so the supervising loop
+# (explicitly listed as an acceptable option) is the smaller, safer choice.
 
-DEVICE=/dev/video0
-PIDFILE=/var/run/ustreamer.pid
+PIDFILE=/var/run/ustreamer-supervisor.pid
+USTREAMER_PIDFILE=/var/run/ustreamer.pid
+V4L2CTL=/usr/bin/v4l2-ctl
+USTREAMER=/usr/bin/ustreamer
+POLL_INTERVAL=5
+
+# Print the /dev/videoN path of the first node that is:
+#   - driven by uvcvideo (not the SoC's own jz-rot/vpu-helix/vpu-felix M2M
+#     nodes, which also live under /dev/video*)
+#   - a real Video Capture node per its own "Device Caps" block specifically
+#     (a UVC device commonly exposes a second, metadata-only node too -
+#     same driver, same "Capabilities" summary line, but Device Caps lacks
+#     "Video Capture" - confirmed via real hardware: this webcam's own
+#     /dev/video4 is exactly this case, right next to /dev/video3 which is
+#     the real one)
+#   - able to produce MJPEG directly (matches --format=MJPEG --encoder=HW)
+# Prints nothing and returns 1 if no such node exists right now.
+discover_uvc_device() {
+	for dev in /dev/video*; do
+		[ -e "$dev" ] || continue
+
+		info=$("$V4L2CTL" -d "$dev" --info 2>/dev/null) || continue
+		echo "$info" | grep -q 'Driver name.*: uvcvideo$' || continue
+
+		# Isolate just the "Device Caps" block (up to the next blank-ish
+		# section) so we don't match the combined summary line that both
+		# the real capture node and its metadata-only sibling both show.
+		device_caps=$(echo "$info" | sed -n '/^\tDevice Caps/,/^[A-Za-z]/p')
+		echo "$device_caps" | grep -q 'Video Capture' || continue
+
+		"$V4L2CTL" -d "$dev" --list-formats 2>/dev/null | grep -q "'MJPG'" || continue
+
+		echo "$dev"
+		return 0
+	done
+	return 1
+}
+
+ustreamer_running_on() {
+	dev="$1"
+	[ -f "$USTREAMER_PIDFILE" ] || return 1
+	pid=$(cat "$USTREAMER_PIDFILE" 2>/dev/null)
+	[ -n "$pid" ] && [ -d "/proc/$pid" ] || return 1
+	# Confirm it's actually still serving the same device node, not a
+	# stale pidfile pointing at an unrelated recycled PID.
+	tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -q -- "--device=$dev "
+}
+
+start_ustreamer() {
+	dev="$1"
+	echo "S50webcam: starting ustreamer on $dev"
+	start-stop-daemon -S -b -m -p "$USTREAMER_PIDFILE" \
+		-x "$USTREAMER" -- \
+		--device="$dev" --format=MJPEG --encoder=HW \
+		--resolution=640x480 \
+		--host=127.0.0.1 --port=8080
+}
+
+stop_ustreamer() {
+	[ -f "$USTREAMER_PIDFILE" ] || return 0
+	start-stop-daemon -K -p "$USTREAMER_PIDFILE" 2>/dev/null
+	rm -f "$USTREAMER_PIDFILE"
+}
+
+# Supervisor loop: bounded poll, not a hotplug event - see header comment
+# for why. Runs as the process start-stop-daemon itself tracks via
+# $PIDFILE, so `stop`/`restart`/`status` below all act on this loop, which
+# in turn owns the actual ustreamer child via $USTREAMER_PIDFILE.
+supervise() {
+	while true; do
+		dev=$(discover_uvc_device)
+		if [ -n "$dev" ]; then
+			if ! ustreamer_running_on "$dev"; then
+				# Either nothing running yet, or the previously-served
+				# device went away and a (possibly renumbered) one came
+				# back - clean up any stale instance before restarting.
+				stop_ustreamer
+				start_ustreamer "$dev"
+			fi
+		else
+			# No webcam right now - if something is still running (e.g.
+			# device just unplugged), stop it rather than serve a dead
+			# node until the next poll notices.
+			if [ -f "$USTREAMER_PIDFILE" ]; then
+				echo "S50webcam: webcam no longer present, stopping ustreamer"
+				stop_ustreamer
+			fi
+		fi
+		sleep "$POLL_INTERVAL"
+	done
+}
 
 start() {
-	if [ ! -e "$DEVICE" ]; then
-		echo "S50webcam: $DEVICE not present, skipping"
+	if [ ! -x "$V4L2CTL" ] || [ ! -x "$USTREAMER" ]; then
+		echo "S50webcam: v4l2-ctl or ustreamer missing, skipping"
 		return 0
 	fi
-	echo "Starting ustreamer on $DEVICE"
+	echo "Starting S50webcam supervisor"
 	start-stop-daemon -S -b -m -p "$PIDFILE" \
-		-x /usr/bin/ustreamer -- \
-		--device="$DEVICE" --format=MJPEG --encoder=HW \
-		--host=0.0.0.0 --port=8080
+		-x /bin/sh -- "$0" __supervise
 }
 
 stop() {
-	echo "Stopping ustreamer"
-	start-stop-daemon -K -p "$PIDFILE"
+	echo "Stopping S50webcam supervisor"
+	start-stop-daemon -K -p "$PIDFILE" 2>/dev/null
+	rm -f "$PIDFILE"
+	stop_ustreamer
+}
+
+status() {
+	if [ -f "$PIDFILE" ] && [ -d "/proc/$(cat "$PIDFILE" 2>/dev/null)" ]; then
+		echo "S50webcam supervisor: RUNNING"
+	else
+		echo "S50webcam supervisor: STOPPED"
+	fi
+	if [ -f "$USTREAMER_PIDFILE" ] && [ -d "/proc/$(cat "$USTREAMER_PIDFILE" 2>/dev/null)" ]; then
+		echo "ustreamer: RUNNING ($(cat "$USTREAMER_PIDFILE"))"
+	else
+		echo "ustreamer: STOPPED"
+	fi
 }
 
 case "$1" in
@@ -43,8 +164,16 @@ case "$1" in
 		stop
 		start
 		;;
+	status)
+		status
+		;;
+	__supervise)
+		# Internal re-exec target for start-stop-daemon above - not a
+		# public command.
+		supervise
+		;;
 	*)
-		echo "Usage: $0 {start|stop|restart}"
+		echo "Usage: $0 {start|stop|restart|status}"
 		exit 1
 		;;
 esac

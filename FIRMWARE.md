@@ -465,8 +465,10 @@ listing, matches the "14 modules" figure already in this file from earlier foren
 camera path is UVC webcam (`CCX2F3298`, `/dev/video4`) into Creality's own closed `cam_app`, which
 drives Ingenic's proprietary "Helix"/"Felix" V4L2 M2M hardware H.264/JPEG encoder
 (`vpu-helix`/`vpu-felix`, built into the kernel, not a loadable module, no public source). **The
-user pointed at the actual fix**: `pellcorp/k1-ustreamer` (a real MIT-licensed port of the
-open-source µStreamer project) + `pellcorp/creality`'s `k1/services/S50webcam` init script - which
+user pointed at the actual fix**: `pellcorp/k1-ustreamer` (a real GPLv3-licensed port of the
+open-source µStreamer project - corrected 2026-07-26, this entry originally, incorrectly, called it
+MIT; the vendored `LICENSE` file is the full GPLv3 text) + `pellcorp/creality`'s
+`k1/services/S50webcam` init script - which
 runs `ustreamer -c HW -m MJPEG -d $V4L_DEVICE` directly against the UVC webcam device node. `-c HW`
 means the *webcam's own onboard ISP* does the MJPEG compression (standard behavior for basically
 any USB UVC webcam) - this **never touches Ingenic's Helix encoder at all**, the exact same
@@ -1086,10 +1088,18 @@ or they will silently vanish on the next full rebuild.
 
 ### Camera (ustreamer) - cross-compiled clean, real MIPS binary
 
-Cross-compiled `pellcorp/k1-ustreamer` (a real port of the open-source µStreamer project, MIT-
-licensed) using its own documented build process - `pellcorp/k1-camera-build` Docker image (a
-different, separate container from this workspace's usual `k1-bash-build`, but confirmed to use
-the exact same toolchain path, `/opt/toolchains/mips-gcc720-glibc229`), `docker.sh all` (builds
+Cross-compiled `pellcorp/k1-ustreamer` (a real port of the open-source µStreamer project, GPLv3-
+licensed - corrected 2026-07-26, this entry originally, incorrectly, called it MIT) using its own
+documented build process - `pellcorp/k1-camera-build` Docker image (a different, separate container
+from this workspace's usual `k1-bash-build`, using its own bundled toolchain at the same path,
+`/opt/toolchains/mips-gcc720-glibc229` - **this claim of using "the exact same toolchain" was wrong**:
+that toolchain's glibc 2.29 is a genuinely different, ABI-incompatible build from this project's own
+Buildroot-internal toolchain (glibc 2.38, MIPS_O32_FP64 ABI) - the resulting binary's dynamic-linker
+request (`ld-linux-mipsn8.so.1`) never matched this rootfs's real interpreter (`ld.so.1`), so it could
+never actually execute here. Not caught until 2026-07-26, the first time this project had a real UVC
+webcam physically attached to test with - see that date's entry for the real fix: rebuilding this
+exact same source with the Buildroot-internal toolchain instead, in
+`04-cross-compile-app-stack.sh`.), `docker.sh all` (builds
 `jpeg-9d`, `libevent`, `libmd`, `libbsd` as static dependencies, then `ustreamer` itself dynamically
 linked against them). Verified real: `file` confirms a genuine MIPS32r2 ELF binary. This is the
 `ustreamer -c HW -m MJPEG` approach from §6 - pulls MJPEG straight from the UVC webcam's own
@@ -5079,3 +5089,111 @@ that real events flow.
   **`TOUCH_DRIVER_FUNCTIONAL_BASELINE`**, **`USERSPACE_GUI_FUNCTIONAL`** - display root cause and
   touch root cause both confirmed and fixed; stock data integrity and A/B recovery preserved;
   application stack healthy. See `docs/GUI_WORKSTREAM_HANDOFF.md`.
+
+## 60. USB host, storage, and the real webcam - working, and a genuine multi-session-old bug finally caught
+
+**Starting premise questioned, and wrong.** An earlier session (§42) found that no external USB
+device - flash drive, ethernet dongle - ever enumerated on this physical unit, on stock or custom,
+and that finding was never revisited. Later docs (`docs/BOARD_CAPABILITY_MATRIX.md`,
+`docs/BOOT_WARNING_AUDIT.md`) nonetheless described USB/camera as "proven live"/"confirmed live".
+This session's first real evidence, gathered with a real USB flash drive and a real USB UVC webcam
+both already connected at boot (so as not to lose whatever the boot log itself might show): a
+completely clean `dmesg` - `dwc2` registers the root hub, an internal Genesys Logic hub (`05e3:0610`)
+fans out to 4 ports, the webcam (`a108:2231`, "CCX2F3298") binds `uvcvideo` on port 1, and the flash
+drive (`ffff:5678`, "Disk 2.0") binds `usb-storage` → SCSI → a real `/dev/sda` with real capacity
+(15.7GB). `lsusb -t` confirms the same topology. **§42's finding is real for what it tested, but
+outdated or incomplete now** - `OUTDATED_OR_INCOMPLETE_PRIOR_TEST`, not a regression, and not
+something a fresh stock reboot was needed to prove given how directly this custom-side evidence
+already contradicts it.
+
+**The webcam's own two device nodes matter.** This SoC's own rotation/H.264-encode/H.264-decode M2M
+blocks (`ingenic-rot`, `helix-venc`, `felix-vdec`) unconditionally claim `/dev/video0-2` at boot,
+webcam attached or not - the real UVC device always lands at `/dev/video3` or later, confirmed via
+`v4l2-ctl -d /dev/videoN --info`'s own "Device Caps" block (not the combined "Capabilities" summary
+line, which misleadingly lists "Video Capture" for *both* the real capture node and its sibling
+metadata-only node - this webcam exposes both `/dev/video3`, real capture + MJPEG, and `/dev/video4`,
+metadata only, same driver, same card name). `S50webcam`'s old hardcoded `/dev/video0` assumption
+(already flagged "unconfirmed against real hardware" in its own header comment) was simply wrong -
+fixed with dynamic discovery (below).
+
+**The real reason ustreamer had never actually run, ever, on this project, on any session**: a MIPS
+ABI mismatch, not a USB problem at all. `pellcorp/k1-camera-build`'s own bundled toolchain
+(`/opt/toolchains/mips-gcc720-glibc229`) produces binaries linked against glibc 2.29 with a dynamic-
+linker request of `/lib/ld-linux-mipsn8.so.1` - this project's own Buildroot-built target rootfs uses
+glibc 2.38 (`libc ABIs: MIPS_PLT UNIQUE MIPS_O32_FP64 ABSOLUTE MIPS_XHASH` per its own version
+banner) with its real interpreter at plain `/lib/ld.so.1`. The two paths never matched, so the
+kernel's own `execve()` always failed with ENOENT on the missing interpreter - BusyBox `ash` reports
+this as a confusing "not found", easy to misread as "the file doesn't exist" when it's actually
+"there's nobody who can load it". Every library the binary needed was correctly staged the whole
+time (`readelf -d` NEEDED entries all resolved) - the binary itself just could never start. Never
+caught before this session because no prior session had a real webcam physically attached to notice
+the silence.
+
+Fix: rebuild the exact same, untouched `pellcorp/k1-ustreamer` source (still pinned at
+`18e30bb313d54b1b01dd995bd31ce5a3d5adffd6`, submodules unchanged, working tree clean, verified via
+`git remote -v`/`git rev-parse HEAD`/`git submodule status` before touching anything) with this
+project's own Buildroot-internal toolchain instead - the same one `chelper` and Moonraker's
+`streaming-form-data` C extension already use - mirroring `docker.sh`'s own real build steps
+(`jpeg-9d`, `libevent`, `libmd`, `libbsd`, then `ustreamer` itself) with `CC`/`AR`/`LD`/`STRIP`/
+`--host=` swapped to the Buildroot triple. Two real environment snags along the way, neither related
+to the ABI fix itself: `pellcorp/k1-bash-build`'s own `xz` binary has a broken `liblzma.so.5`
+mismatch (worked around by decompressing the `.xz` tarballs on the host, where `xz` works fine,
+before mounting them in); and naively prepending `/buildroot-host/bin` to `PATH` shadowed the
+container's own working `automake` with Buildroot's own internal `automake-1.16` wrapper (broken
+outside Buildroot's own build tree layout) - fixed by appending instead, since the cross-tool names
+(`mipsel-buildroot-linux-gnu-*`) don't collide with anything already in the container's `PATH`.
+Live-tested the rebuilt binary directly against `/dev/video3` before ever touching the build script's
+committed state: real `--help` output (`Version: 7fe8c87; license: GPLv3` - straight from the binary
+itself, further confirming the license correction below), a real `Capturing ...` log line, and a real
+`GET /snapshot` returning `X-UStreamer-Online: true`/`Width: 640`/`Height: 480` headers with actual
+JPEG bytes behind them.
+
+**A second, unrelated real gap**: the flash drive's filesystem is exFAT (confirmed via the boot
+sector's own `EXFAT` OEM signature - no partition table at all, a superfloppy layout), and
+`/proc/filesystems` had no `exfat` entry - `CONFIG_VFAT_FS` was already on (so FAT32 drives already
+worked), `CONFIG_EXFAT_FS` was not. Enabled via the fragment file, mainline's own driver (merged
+since 5.4, not FUSE-based), following this project's own standing rule (fragment file, never a direct
+in-place `.config` edit).
+
+**A third gap, closing an already-known loose end**: the "camera macro warning" (`v4l2-ctl:
+command not found`) from the Mainsail-warnings mission is a real one - this vendored Buildroot tree
+(a trimmed vendor BSP subset) has no `v4l-utils` package at all. Rather than write a brand new
+Buildroot package from scratch, built `v4l2-ctl` directly the same way as `ustreamer` - real upstream
+`v4l-utils` pinned at tag `v4l-utils-1.20.0` (the last release before the 1.22 meson migration;
+`pellcorp/k1-bash-build` has no python3/meson/ninja, so staying on autotools avoided adding that whole
+toolchain for one diagnostic binary), `autoreconf`'d inside the container (needed `autoconf`/
+`automake`/`libtool`/`gettext`/`autopoint`/`pkg-config` installed via `apt-get`, matching this
+project's own already-established pattern for Moonraker's `pip download` step), configured minimal
+(`--disable-libdvbv5 --disable-qv4l2 --disable-qvidcap --disable-gconv --disable-bpf
+--disable-v4l2-ctl-libv4l`, no GUI, no libv4l2 conversion layer needed for basic diagnostics), built
+just the `utils/v4l2-ctl` target. Live-tested: `v4l2-ctl --list-devices` correctly named all four
+device groups (`jz-rot`, `CCX2F3298` with its two nodes, `vpu-felix`, `vpu-helix`) by their real
+driver/card names, with the correct `/lib/ld.so.1` interpreter this time too.
+
+**`S50webcam` rewritten** around real dynamic UVC discovery instead of the old hardcoded
+`/dev/video0`: scans `/dev/video*`, keeps only nodes whose driver is `uvcvideo` *and* whose own
+"Device Caps" block (not the combined summary) lists "Video Capture" *and* whose formats include
+`MJPG`, rejecting the M2M/rotation/metadata-only nodes by construction. Runs as a small supervising
+loop (5s bounded poll, not a busy loop, not full mdev/hotplug event wiring - this image doesn't
+currently wire the kernel hotplug sysctl to `mdev` at all, and doing that is a bigger, more invasive
+change to this whole image's device-management model than this mission's actual scope) so a webcam
+that enumerates late, or is unplugged and replugged, gets picked up without a reboot; standard
+`start`/`stop`/`restart`/`status` interface via `start-stop-daemon`, `stop` cleanly kills both the
+supervisor and any running `ustreamer` child. `--host` changed from `0.0.0.0` to `127.0.0.1` -
+`nginx`'s already-existing `/webcam/` reverse proxy is the only intended public entry point,
+unchanged. Live-tested the full lifecycle (`start`/`status` showing both the supervisor and
+`ustreamer` child `RUNNING` against the correct node/`stop` cleanly killing both/a live `GET
+/snapshot` through the real supervised instance) before committing.
+
+**License correction**: `pellcorp/k1-ustreamer`'s vendored `LICENSE` is the full GPLv3 text (also
+confirmed at runtime, in the rebuilt binary's own `--help` banner) - every place in this project's
+own documentation that called it "MIT-licensed" (§6, §10 above, this file; `README.md`) was wrong,
+and has been corrected in place with a note, not silently rewritten.
+
+- Classification: **`USB_HOST_FUNCTIONAL`**, **`USB_HOTPLUG_FUNCTIONAL`**,
+  **`USB_MASS_STORAGE_FUNCTIONAL`**, **`USB_UVC_WEBCAM_FUNCTIONAL`**,
+  **`V4L2_DIAGNOSTICS_FUNCTIONAL`**, **`PELLCORP_K1_USTREAMER_FUNCTIONAL`**,
+  **`NGINX_WEBCAM_PROXY_FUNCTIONAL`**, **`USB_DOCUMENTATION_CORRECTED`**,
+  **`PRINTER_STACK_REMAINS_PASSIVELY_SAFE`** - real webcam streaming and real flash-drive enumeration
+  both confirmed on real hardware; exFAT mount and full post-reflash/hotplug validation still pending
+  the production rebuild this same session continues into.

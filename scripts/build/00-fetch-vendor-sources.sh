@@ -53,7 +53,9 @@ clone_pinned klipper https://github.com/pellcorp/klipper.git \
 clone_pinned moonraker https://github.com/Arksine/moonraker.git \
 	d5ee17128bb88434aacdab90c2e9e990e2b64e4a
 
-# Camera pipeline - real MIT-licensed uStreamer port for this board family.
+# Camera pipeline - a real GPLv3-licensed uStreamer port for this board
+# family (the vendored ustreamer/LICENSE is the full GPLv3 text - this repo
+# previously, incorrectly, called it MIT-licensed; corrected 2026-07-26).
 clone_pinned k1-ustreamer https://github.com/pellcorp/k1-ustreamer.git \
 	18e30bb313d54b1b01dd995bd31ce5a3d5adffd6 "--recurse-submodules"
 git -C k1-ustreamer submodule update --init --recursive

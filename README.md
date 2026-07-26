@@ -115,7 +115,9 @@ just inference). Result: touch, display, WiFi, Bluetooth, and camera are now all
   workspace: kernel config changes must go through that fragment file, never direct in-place
   `.config` edits** - the latter are invisible to Buildroot's own tracking and get silently
   discarded on the next full rebuild.
-- **Camera**: cross-compiled `pellcorp/k1-ustreamer` (real MIT-licensed µStreamer port) cleanly to a
+- **Camera**: cross-compiled `pellcorp/k1-ustreamer` (a real µStreamer port; GPLv3-licensed - the
+  vendored `LICENSE` file is the full GPLv3 text, corrected 2026-07-26 after this entry originally,
+  incorrectly, called it MIT) cleanly to a
   confirmed real MIPS32r2 binary - saved as an artifact, not yet integrated into the rootfs image
   itself (needs its shared libs added as a Buildroot package or rootfs overlay - real, smallish
   remaining work).

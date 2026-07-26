@@ -16,8 +16,8 @@ at the bottom).
 | Touchscreen | supported | `i2c4`, `ns2009_ts`, confirmed live |
 | PWM beeper | supported | GPC-3/PWM channel 3, `guppybeep`, direct `/dev/mem` MMIO - entirely independent of ALSA/kernel-PWM-subsystem, unaffected by the audio-graph disable below |
 | ALSA/PCM audio | intentionally disabled | stock's own dmesg says "No soundcards found," `/proc/asound` is empty, and stock's real production stack (Klipper/GuppyScreen) has zero consumer for it - the whole graph (as-platform, as-virtual-fe, as-fmtcov, as-dsp, as-baic, as-dmic, as-mixer, as-spdif, icodec, the machine-driver `sound` node) is disabled; see `docs/BOOT_WARNING_AUDIT.md` |
-| USB | supported | `dwc2` OTG, storage/HID/camera all proven live |
-| Camera | supported | USB UVC webcam via `ustreamer`, confirmed live |
+| USB | supported | `dwc2` OTG - **correction, 2026-07-26**: this row's original "proven live" wording (2026-07-23) meant driver registration in `dmesg` only, not a real external device ever enumerating - a real, contradictory finding from an earlier session (FIRMWARE.md §42: no external USB device, on stock or custom, ever enumerated on this physical unit) was never resolved before this row was written. Genuinely proven live now: a real USB flash drive (`usb-storage`→SCSI→`/dev/sda`, real capacity) and a real USB UVC webcam (`uvcvideo`) both enumerate correctly with real hardware physically attached - see FIRMWARE.md §60 |
+| Camera | supported | USB UVC webcam via `ustreamer` - **correction, 2026-07-26**: not actually functional before this date despite the original wording here - a real MIPS ABI/toolchain mismatch meant the `ustreamer` binary could never execute at all (see FIRMWARE.md §60 for the root cause and fix). Genuinely confirmed live now: real MJPEG capture from `/dev/video3` (the real UVC capture node - `/dev/video0-2` are this SoC's own rotation/encode/decode blocks, not the camera), served correctly over HTTP |
 | Rotation | supported | `/dev/video0`, confirmed live |
 | H.264 encoder | supported | `/dev/video1`, confirmed live |
 | H.264 decoder | supported | `/dev/video2`, confirmed live |

@@ -256,6 +256,8 @@ check /opt/nebulaos-seeds/moonraker.bundle
 check /opt/nebulaos-seeds/seed-manifest.json
 check /usr/sbin/ntpd
 check /etc/init.d/S40nebulaos-ntpsync
+check /etc/nebulaos-update-supervisor.sh
+check /etc/init.d/S59nebulaos-update-supervisor
 
 # Phase 7 live qualification: Moonraker machine.py needs real iproute2
 # JSON output (`ip -json -det address`), which BusyBox ip cannot produce

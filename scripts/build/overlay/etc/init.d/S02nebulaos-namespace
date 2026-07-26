@@ -43,6 +43,8 @@ create_layout() {
 		"$NEBULAOS_ROOT/system" \
 		"$NEBULAOS_ROOT/updates/staging" \
 		"$NEBULAOS_ROOT/updates/locks" \
+		"$NEBULAOS_ROOT/updates/klipper" \
+		"$NEBULAOS_ROOT/updates/moonraker" \
 		"$NEBULAOS_ROOT/backups/klipper" \
 		"$NEBULAOS_ROOT/backups/moonraker" \
 		"$NEBULAOS_ROOT/backups/mainsail" \

@@ -254,6 +254,8 @@ check /etc/nebulaos-healthcheck.sh
 check /opt/nebulaos-seeds/klipper.bundle
 check /opt/nebulaos-seeds/moonraker.bundle
 check /opt/nebulaos-seeds/seed-manifest.json
+check /usr/sbin/ntpd
+check /etc/init.d/S40nebulaos-ntpsync
 '
 
 echo "=== architecture spot-checks (host objdump has no MIPS backend - using the k1-bash-build toolchain) ==="

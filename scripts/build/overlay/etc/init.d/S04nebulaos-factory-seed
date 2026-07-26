@@ -27,9 +27,67 @@
 SEEDS=/opt/nebulaos-seeds
 APPS=/usr/data/nebulaos/apps
 SYSTEM=/usr/data/nebulaos/system
+LOCKDIR=/usr/data/nebulaos/updates/locks
+
+# NebulaOS Memory Resilience Gate (docs/NEBULAOS_MEMORY_RESILIENCE.md): this
+# is the "most expendable during maintenance" process tier - it should be
+# the OOM-killer's first choice, well before Klipper/Moonraker/GuppyScreen.
+# Applied to this shell itself so every child (git, cp) inherits it.
+echo 500 > "/proc/self/oom_score_adj" 2>/dev/null
+
+# Low-memory git settings for this 208MB-RAM device
+# (docs/NEBULAOS_MEMORY_RESILIENCE.md sec 11) - single-threaded packing/
+# delta work and bounded caches measurably reduce index-pack's peak RSS
+# during `git clone` of a bundle, which is exactly the operation the
+# kernel OOM-killer was observed killing. gc.auto=0 avoids an incidental
+# background gc competing for memory right after a clone.
+export GIT_CONFIG_COUNT=4
+export GIT_CONFIG_KEY_0=pack.threads GIT_CONFIG_VALUE_0=1
+export GIT_CONFIG_KEY_1=core.packedGitWindowSize GIT_CONFIG_VALUE_1=1m
+export GIT_CONFIG_KEY_2=core.deltaBaseCacheLimit GIT_CONFIG_VALUE_2=8m
+export GIT_CONFIG_KEY_3=gc.auto GIT_CONFIG_VALUE_3=0
 
 log() {
-	echo "S03nebulaos-factory-seed: $1"
+	echo "S04nebulaos-factory-seed: $1"
+}
+
+# Per this mission's maintenance-safety-gate requirement: heavy seeding
+# must not proceed while a print is active, an update transaction is
+# unresolved, or memory resilience is unavailable (the exact condition
+# that caused the original OOM kill this whole sub-mission exists to
+# fix). A read-only query only - no state-changing action taken here.
+maintenance_gate_ok() {
+	active=$(wget -q -O - --timeout=3 'http://127.0.0.1:7125/printer/objects/query?print_stats' 2>/dev/null)
+	case "$active" in
+		*'"state":"printing"'*|*'"state":"paused"'*)
+			log "BLOCKED: a print is active - refusing to run memory-heavy seeding this boot (will retry next boot)"
+			return 1
+			;;
+	esac
+
+	if [ -d "$LOCKDIR" ] && [ -n "$(ls -A "$LOCKDIR" 2>/dev/null)" ]; then
+		log "BLOCKED: an update transaction lock is present - refusing to run seeding concurrently with an update"
+		return 1
+	fi
+
+	if ! grep -qE '^(/dev/zram0|.*/system/swapfile) ' /proc/swaps 2>/dev/null; then
+		log "BLOCKED: no memory-resilience swap active (neither zram nor the NebulaOS disk swap file) - this is exactly the condition that caused the original OOM kill; refusing to proceed until S00zram-swap/S03nebulaos-diskswap have activated at least one"
+		return 1
+	fi
+
+	return 0
+}
+
+pause_expendable_services() {
+	log "pausing expendable services for memory-heavy seeding (guppyscreen, webcam)"
+	/etc/init.d/S58guppyscreen stop 2>/dev/null
+	/etc/init.d/S50webcam stop 2>/dev/null
+}
+
+resume_expendable_services() {
+	log "resuming paused services"
+	/etc/init.d/S50webcam start 2>/dev/null
+	/etc/init.d/S58guppyscreen start 2>/dev/null
 }
 
 seed_git_app() {
@@ -55,6 +113,7 @@ seed_git_app() {
 		rm -rf "$dest.partial"
 		return 1
 	fi
+	sync
 
 	# Point the seeded checkout's origin at the real remote so a later
 	# network-connected `git fetch` reaches GitHub, not the (now-stale)
@@ -123,9 +182,33 @@ EOF
 
 start() {
 	[ -d "$APPS" ] || { log "namespace not present yet ($APPS missing) - S02 should have created it, skipping"; exit 0; }
+
+	# Nothing to do - already fully seeded from a prior boot. Skip the
+	# gate/pause/resume dance entirely rather than pausing services for
+	# no reason on every normal boot after the first.
+	if [ -e "$APPS/klipper/.git" ] && [ -e "$APPS/moonraker/.git" ] && [ -e "$APPS/mainsail/index.html" ]; then
+		log "all components already seeded - nothing to do"
+		return 0
+	fi
+
+	maintenance_gate_ok || return 0
+
+	# Pausing is a genuine no-op on a normal first boot (S04 runs at
+	# position 4, well before S50/S58 have ever started) - kept anyway so
+	# a later re-invocation (namespace-recovery-after-normal-boot, or
+	# Phase 7 reusing this same pattern) gets the same protection.
+	pause_expendable_services
+
+	# Serialized, one component at a time - each step's own subprocess
+	# memory is fully released (process exit) before the next begins;
+	# `sync` after each step flushes rather than leaving dirty pages to
+	# compete with the next step's own memory needs.
 	seed_git_app klipper nebulaos "https://github.com/coreflake1/NebulaOS-klipper.git"
 	seed_git_app moonraker master "https://github.com/Arksine/moonraker.git"
 	seed_mainsail
+	sync
+
+	resume_expendable_services
 	record_known_good
 }
 

@@ -183,8 +183,18 @@ record_known_good() {
 	# very first known-good version for each component right after a
 	# successful seed, so there is always a "previous known good" to fall
 	# back to even before any real update has ever happened.
+	# Real bug found live: a plain "write once, never again" guard
+	# (`[ -e "$kg" ] && return 0`) can record "unseeded" permanently if
+	# this function ever runs before seeding has actually finished (seen
+	# live on a boot where the recorded file predated real .git content
+	# by seconds - start()'s own call ordering runs this last, but the
+	# guard means an earlier, premature write from the same boot's
+	# history is never corrected). Only skip if the existing file already
+	# reflects real seeded commits, not just any prior file.
 	kg="$SYSTEM/known-good.json"
-	[ -e "$kg" ] && return 0
+	if [ -e "$kg" ] && ! grep -q '"commit": "unseeded"' "$kg"; then
+		return 0
+	fi
 	klipper_commit=$( [ -d "$APPS/klipper/.git" ] && git -C "$APPS/klipper" rev-parse HEAD 2>/dev/null || echo "unseeded")
 	moonraker_commit=$( [ -d "$APPS/moonraker/.git" ] && git -C "$APPS/moonraker" rev-parse HEAD 2>/dev/null || echo "unseeded")
 	now=$(date -u +%Y-%m-%dT%H:%M:%SZ)

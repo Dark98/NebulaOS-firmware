@@ -132,4 +132,28 @@ apt-get install -y -qq python3 bc cpio rsync unzip bison flex libncurses5-dev fi
 make olddefconfig
 '
 
+# Reproducibility fix (2026-07-26, NebulaOS mutable-runtime mission): a real
+# bug found by directly inspecting the built rootfs.squashfs with unsquashfs
+# instead of trusting 05-final-build.sh's exit code - enabling
+# BR2_PACKAGE_LIBOPENSSL_BIN=y (the openssl CLI) above did NOT get the
+# openssl binary into the image, because libopenssl had already been built
+# once before (as a transitive dependency of git/python3-ssl/curl) with that
+# suboption off, and Buildroot's own per-package build stamps
+# (output/build/<pkg>/.stamp_*) are not invalidated by a suboption-only
+# .config change - only by the package's own source/patch/version changing.
+# This is a general Buildroot limitation, not specific to openssl: ANY
+# suboption added to an already-built package needs an explicit dirclean, or
+# it silently keeps the old build. Forcing it here (rather than relying on
+# whoever runs this script next to remember to do it by hand, which is
+# exactly how this was first missed) makes the fix part of the tracked
+# pipeline instead of a one-off manual step - dirclean is a safe no-op if
+# the package was never built yet (e.g. on a genuinely fresh output/ tree).
+docker run --label "openke-build-pid=$$" --rm --user root \
+	-v "$REPO_ROOT/vendor/x2000_kernel_6.6/kernel/kernel-6.6:/kernel_6_6/kernel/kernel-6.6" \
+	-v "$BUILDROOT_DIR:/src" -w /src pellcorp/k1-bash-build bash -c '
+apt-get -qq update >/dev/null 2>&1
+apt-get install -y -qq python3 bc cpio rsync unzip bison flex libncurses5-dev file build-essential libssl-dev libelf-dev >/dev/null 2>&1
+make libopenssl-dirclean 2>/dev/null || true
+'
+
 echo "== buildroot configured =="

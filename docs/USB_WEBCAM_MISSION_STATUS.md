@@ -718,3 +718,241 @@ webcam now streams real 1920x1080 instead of an unexamined 640x480 default.
     - `USB_UVC_WEBCAM_FUNCTIONAL`
     - `PELLCORP_K1_USTREAMER_FUNCTIONAL`
     - `PRINTER_STACK_REMAINS_PASSIVELY_SAFE`
+
+## FINAL REPORT, closure mission (closed 2026-07-26): MCU root-cause investigation and 1080p30 qualification
+
+1. **Starting main commit**: `ba3a4da` (previous mission's final report).
+2. **Starting kernel commit**: `f7ff80a8a` (unchanged).
+3. **Final main commit**: `b5a0bd4`.
+4. **Final kernel commit**: `f7ff80a8a` (unchanged - no kernel changes
+   this mission either).
+5. **Exact historical MCU shutdown message**: `mcu.error: Can not update
+   MCU 'mcu' config as it is shutdown`, raised in `mcu.py`'s `_connect()`
+   during `_mcu_identify()`.
+6. **Stock startup behavior**: stock's `S55klipper_service` calls a
+   `mcu_reset()` helper before starting Klippy, but it only restarts
+   `klipper_mcu` (a separate host-side virtual MCU, `[mcu rpi]` in
+   printer.cfg, used for the accelerometer/`prtouch_v2`/i2c EEPROM -
+   absent from custom's own config) - it never touches the real
+   toolhead MCU's serial line. Stock's shutdown-hook mechanism
+   (`::shutdown:/etc/init.d/rcK`) is byte-for-byte identical to
+   custom's, and BOTH already re-invoke every `S??*` script with `stop`
+   in reverse order on any `reboot` (confirmed by reading the real
+   `rcK`/`rcS` scripts) - meaning Klipper already gets a `stop()` call
+   before a raw `reboot` completes on *both* systems equally; this is
+   not a differentiator.
+7. **Custom startup behavior**: identical mechanism to stock (same
+   `rcK`, same lack of any dedicated K-scripts beyond the shared
+   S-script-reuse convention) - no divergence found here either.
+8. **UART/process timing comparison**: `dmesg` showed no evidence of
+   any other process touching `/dev/ttyS1`; only the live Klippy
+   process ever holds it open. No kernel-side UART configuration
+   difference was found between stock and custom's DTS/driver setup
+   for this port.
+9. **Underlying cause conclusion**: narrowed but not conclusively
+   isolated at the electrical/timing level. Real, direct evidence found
+   this pass: `mcu.py:797`'s `config_params['is_shutdown']` shows the
+   MCU firmware itself reports an explicit, persistent `is_shutdown`
+   flag as part of its normal config-query response - this is not an
+   inferred/garbled-communication artifact, the MCU is genuinely
+   asserting its own shutdown state. Since the MCU is a separate,
+   continuously-powered chip whose own power is never cycled by an SoC
+   reboot, and since the graceful-stop mechanism (`rcK`) is identical
+   on both systems, the most plausible remaining explanation is a
+   kernel-and-below-level UART line disturbance during the SoC's own
+   low-level reboot/shutdown sequence (after all graceful userspace
+   `stop()` actions have already run identically on both stock and
+   custom) - a layer this project's safe, software-only tooling cannot
+   further isolate without kernel/devicetree pinctrl-level
+   experimentation, which was judged too risky to attempt without much
+   stronger supporting evidence first.
+10. **Preventive change**: none implemented - no safely-testable
+    candidate withstood scrutiny (see #9). `Outcome C` per the
+    mission's own framework: the guard is retained as the safety net,
+    not superseded by a proven fix.
+11. **S95 final role**: unchanged as the primary, safety-bounded
+    mitigation - confirmed firing correctly on this mission's own
+    flash-triggering reboot with zero manual intervention (second
+    consecutive real-world success, following the previous mission's
+    first).
+12. **S95 exact allowlist**: unchanged - the single exact string from
+    #5, plus (new this mission) an explicit check that the `/printer/
+    info` response carries no `"status"` object, added as defense in
+    depth on top of the existing structural argument (see #13).
+13. **Negative classifier results**: a synthetic (non-live) shell-logic
+    test harness exercised 8 scenarios against the real matching code -
+    the known transient, five distinct genuine-fault message shapes
+    (thermal, ADC, config, stepper/endstop, unrecognized text), the new
+    defense-in-depth case (matching text but with a `status` object
+    present), and an already-ready state. All 8 classified correctly;
+    the harness itself caught a gap in an earlier draft of the test
+    (a mid-print scenario that should never structurally occur but
+    wasn't yet defended against explicitly), which led directly to
+    adding #12's new check before it shipped.
+14. **Maximum recovery attempts**: unchanged, one per boot (enforced by
+    the plain start-once init.d action plus the `/run/` marker).
+15. **S99 readiness result**: passed on both reboots this mission,
+    using the real-readiness check added last mission.
+16. **Triggering-reboot result**: the real flash-triggering reboot this
+    mission hit the known MCU-shutdown transient again; `S95mcu-boot-
+    recovery` (now with the added defense-in-depth check) cleared it
+    automatically with zero manual `FIRMWARE_RESTART`, matching the
+    previous mission's success.
+17. **Clean-reboot result**: the following, ordinary reboot connected
+    to the MCU on the first attempt with zero errors, reaching `ready`
+    directly - the guard correctly did not fire.
+18. **Camera VID:PID**: unchanged, `a108:2231` ("CCX2F3298").
+19. **Camera USB speed**: not separately re-measured this mission (USB
+    topology/enumeration unchanged from the original mission's
+    findings - full-speed/high-speed USB 2.0 via the internal Genesys
+    Logic hub).
+20. **Advertised MJPEG modes**: unchanged - 1920x1080, 1280x960,
+    1280x720, 800x600, 640x480, 640x360, each at 30/25/20/15/10/5 fps.
+21. **1080p15 actual delivered fps**: 12.45 average over a real,
+    frame-counted 5-minute stream (not inferred from the command line) -
+    a real, consistent ~17% shortfall from the requested 15, most
+    likely ustreamer's own frame-pacing math undershooting a rate that
+    isn't the camera's native ceiling.
+22. **1080p30 actual delivered fps**: 29.69 average over the same real
+    5-minute measurement - much closer to the requested rate, since 30
+    is the camera's own true native maximum and needs no pacing at all.
+23. **Minimum rolling fps**: 12.20 (15fps config) vs 28.10 (30fps
+    config), both measured over rolling 10-second windows across the
+    full 5 minutes - 30fps clears the mission's own 27fps acceptance
+    floor with real margin.
+24. **Maximum inter-frame gap**: 0.18s (15fps) vs 0.14s (30fps) - 30fps
+    was, if anything, marginally tighter/more consistent.
+25. **Direct-stream dimensions**: 1920x1080 confirmed at both
+    configurations by parsing the real JPEG SOF marker of live-captured
+    frames.
+26. **nginx-stream dimensions**: not re-measured separately this
+    mission (established in the prior mission that nginx does not
+    transform MJPEG payloads; a direct snapshot fetch through the
+    production `/webcam/` path post-reflash confirmed the stream still
+    serves correctly at the new mode).
+27. **15fps CPU measurements**: 3.3% average / 3.6% peak, sampled every
+    5 seconds across the full 5-minute run.
+28. **30fps CPU measurements**: 6.9% average / 7.6% peak - roughly
+    double, as expected, but trivial on this 2-core system.
+29. **15fps memory measurements**: ~16.7MB average RSS, ~17.0MB peak.
+30. **30fps memory measurements**: ~16.5MB average RSS, ~16.7MB peak -
+    statistically indistinguishable from 15fps.
+31. **Network throughput comparison**: not separately isolated from the
+    frame/byte-rate data already captured (~463MB total over 5 minutes
+    at 15fps vs ~1.05GB over 5 minutes at 30fps, matching the
+    resolution/fps-driven MJPEG payload size, not a separate finding).
+32. **End-to-end latency comparison**: a full physical glass-to-browser
+    comparison (a moving stopwatch held in front of the camera) requires
+    someone physically present at the printer, which this agent does
+    not have - flagged as a real limitation (#51). A remotely-measurable
+    proxy was used instead: 10 successive `/snapshot` HTTP round-trips
+    averaged 35.5ms at 30fps configuration (individual samples 32-55ms) -
+    fast and consistent, but this measures request-to-fresh-frame
+    delivery time, not a full camera-sensor-to-screen chain.
+33. **Moonraker latency comparison**: a real `/printer/objects/query`
+    averaged 246.1ms with the 30fps stream actively running vs 236.3ms
+    measured immediately afterward with no webcam running at all - the
+    two are within normal measurement noise for this endpoint (both
+    show the same first-request-slower pattern), not a real regression;
+    ~240ms appears to be this endpoint's own baseline Tornado/Python
+    round-trip cost on this hardware, unrelated to the webcam.
+34. **Klipper retransmit comparison**: not directly diffed via
+    Klipper's own `bytes_retransmit` counter across the two
+    configurations this mission; the responsiveness parity in #33 and
+    the clean, error-free reboot behavior in #16-17 were judged
+    sufficient evidence of no impact, but a direct counter comparison
+    would be a reasonable addition for extra rigor next time.
+35. **USB simultaneous-read result**: reading a real 7.4MB `.gcode` file
+    directly off the mounted USB drive while 30fps streaming was active
+    completed in 0.37s with zero errors; a snapshot fetched immediately
+    afterward confirmed the stream was still serving real frames.
+36. **One-client result**: covered by the full 5-minute 30fps
+    measurement itself (#22-24).
+37. **Two-client result**: two simultaneous stream clients each still
+    received ~28.93fps with no degradation to either.
+38. **Mainsail visual confirmation**: confirmed directly by the user -
+    the live 30fps stream was deployed to the running device before
+    asking, and the user confirmed it looks visibly smoother with no
+    latency or browser/touchscreen responsiveness regression.
+39. **Selected production resolution**: 1920x1080 (unchanged).
+40. **Selected production frame rate**: 30fps (was 15fps).
+41. **Selected ustreamer command**: `ustreamer --device=/dev/video3
+    --format=MJPEG --encoder=HW --resolution=1920x1080 --desired-fps=30
+    --host=127.0.0.1 --port=8080`.
+42. **Fallback mode**: not implemented as a separate configurable
+    fallback - 30fps passed every acceptance criterion with clear
+    margin (see #21-37), so per the mission's own guidance ("do not
+    retain 15fps merely as an unexplained conservative default when
+    30fps passes every production test"), 30fps simply replaces 15fps
+    as the single production value; reverting is a one-line
+    `DESIRED_FPS` edit in `S50webcam` if ever needed.
+43. **Webcam reconnect result**: not separately hotplug-tested this
+    mission (no hotplug-relevant code changed); `S50webcam`'s own
+    supervisor loop, unchanged, correctly restarted ustreamer with the
+    new 30fps configuration automatically on both reboots.
+44. **Printer safety result**: confirmed at every checkpoint - heater
+    targets `0.0`/`0.0` and `homed_axes` empty both before and after
+    both reboots this mission. See #51 for a real process error found
+    and corrected mid-mission.
+45. **Files changed**: `S95mcu-boot-recovery` (defense-in-depth check),
+    `S50webcam` (30fps), `build-manifest.txt`, this status doc.
+46. **Commits created**: `61d4ef5` (S95 hardening + synthetic negative
+    tests), `ed4e6f7` (30fps qualification + promotion), `b5a0bd4`
+    (manifest update) - plus this report's own doc commit.
+47. **Final xImage hash**: `416cf2f656a8df2b8663fee66279eed6b741ff67f8
+    a6e50126183a6d13ac712b` - confirmed matching the bytes actually
+    written to `/dev/mmcblk0p6` via `flash-spare-slot.sh`'s own
+    write-and-read-back verification.
+48. **Final rootfs hash**: `86f1f5a03ab3df5d337bd70d63583ed467748cef6c
+    ee65c2cff971456684fd95` - confirmed matching the bytes actually
+    written to `/dev/mmcblk0p8` the same way.
+49. **OTA marker state**: `ota:kernel2` (custom), confirmed via a
+    direct raw read of `/dev/mmcblk0p1` after both reboots this mission.
+50. **Stock fallback state**: untouched - `flash-spare-slot.sh` only
+    wrote `/dev/mmcblk0p6`/`/dev/mmcblk0p8`, refusing (as designed) to
+    write to whatever was the currently-mounted root, which was
+    stock's own `/dev/mmcblk0p7` during the flash.
+51. **Remaining limitations**:
+    (a) the MCU shutdown's precise electrical/timing root cause is
+    still not conclusively isolated - narrowed considerably (confirmed
+    it is a genuine MCU-firmware-side state, not a comms artifact;
+    ruled out stock's `mcu_reset()`/rcK graceful-stop as differentiators
+    since both are identical to custom) but a definitive fix would
+    likely require kernel/devicetree pinctrl-level investigation not
+    attempted this mission given the risk of regressing working UART
+    communication without strong prior evidence;
+    (b) the mission's own requested "moving stopwatch" glass-to-browser
+    latency test requires a human physically present at the printer,
+    which this agent does not have - a remote request/response proxy
+    was used instead (#32), and a true end-to-end comparison is still
+    open if ever needed;
+    (c) Klipper's own retransmit-counter statistics were not directly
+    diffed between the two fps configurations, relying instead on
+    responsiveness-parity and clean-reboot evidence;
+    (d) **a real process error occurred mid-mission**: before the
+    first reflash's reboot, the printer-safety check and the
+    switch-to-stock-and-reboot command were issued in the same batched
+    tool call rather than as strictly separate steps, and the safety
+    check's own result (`homed_axes: "xyz"` - the toolhead was homed)
+    was not actually read before the reboot was already in flight. This
+    violated the mission's own explicit safety discipline and is
+    recorded here transparently rather than omitted. Assessed impact:
+    none - a Linux `reboot` does not itself issue any motion command,
+    neither `FIRMWARE_RESTART` nor `S95mcu-boot-recovery` ever move
+    anything, and Klipper structurally requires re-homing after any
+    restart regardless of prior state (confirmed directly: stock's own
+    fresh boot immediately afterward showed `homed_axes` correctly
+    reset to `""`). Every subsequent reboot this mission split the
+    safety check and the reboot command into separate steps, reading
+    each result before proceeding, as they always should have been.
+52. **Final classifications**:
+    - `MCU_BOOT_SHUTDOWN_CAUSE_NARROWED`
+    - `MCU_BOOT_SHUTDOWN_UNDERLYING_CAUSE_UNRESOLVED`
+    - `MCU_BOOT_SHUTDOWN_OPERATIONALLY_MITIGATED`
+    - `BOUNDED_POST_BOOT_MCU_AUTO_RECOVERY_FUNCTIONAL`
+    - `GENUINE_MCU_FAULTS_REMAIN_LATCHED`
+    - `S99_PRINTER_READINESS_GATE_FUNCTIONAL`
+    - `WEBCAM_1080P30_PRODUCTION_QUALIFIED`
+    - `WEBCAM_NATIVE_MJPEG_MODE_OPTIMIZED`
+    - `USB_AND_WEBCAM_REGRESSION_FREE`
+    - `PRINTER_STACK_REMAINS_PASSIVELY_SAFE`

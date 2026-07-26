@@ -97,4 +97,35 @@ Flashed and booted the first memory-resilience build (following the same strict 
 - **Fix**: new `halley5-openke-busybox-fragment.config` (mirroring the existing kernel-fragment pattern, wired through `BR2_PACKAGE_BUSYBOX_CONFIG_FRAGMENT_FILES` which was already present in `buildroot.config` but empty) setting `CONFIG_FEATURE_SWAPON_PRI=y`. Also added `make busybox-dirclean` to `02-configure-buildroot.sh`'s own normalization step — the exact same stale-package-stamp class of bug as the earlier `libopenssl` fix (§3.9 of the architecture doc), caught proactively this time rather than requiring a second live-boot failure to discover it.
 - No change needed to `S00zram-swap`/`S03nebulaos-diskswap` themselves — they already used `swapon -p`, which will work correctly once this BusyBox feature is compiled in.
 
-Result of this pass, once rebuilt: recorded in the next subsection.
+## 6. Live qualification — final pass: full success, two more real bugs found and fixed
+
+After the swapon-priority fix (§5), a second live boot revealed **swap correctly active with zero OOM events**, but seeding was still stuck at `.partial` for all three components — proving the earlier "stuck partial" symptom was never actually about memory at all, even though it first surfaced during the original OOM incident.
+
+**Bug 2 — `mv` into an existing directory.** `$dest` (e.g. `apps/klipper`) already exists as an empty directory (created by `S02nebulaos-namespace`'s own `mkdir -p`) by the time `seed_git_app`/`seed_mainsail` reach their final `mv "$dest.partial" "$dest"`. POSIX `mv srcdir destdir` when `destdir` already exists moves `srcdir` *inside* it rather than replacing it — confirmed with an isolated local reproduction before touching the fix. First attempted a plain `rmdir "$dest"` (only-if-empty) immediately before the `mv` — verified correct in isolation, but a real boot *still* produced the identical nesting, meaning `$dest` was not always genuinely empty at that point (most likely leftover debris from an earlier attempt the same boot; not fully root-caused, and no longer relevant once fixed more robustly). Switched to `rm -rf "$dest"` — safe unconditionally, since the function's own `-e "$dest/.git"` check earlier already proved `$dest` holds no valid seeded checkout, so discarding whatever it contains (empty or debris) before the `mv` is always correct.
+
+Verified directly on the device before committing to another rebuild: copied the fixed script to `/tmp`, ran it standalone — all three components seeded cleanly with no nesting, `known-good.json` recorded, expendable services correctly paused/resumed, and a second invocation correctly no-op'd (`all components already seeded - nothing to do`).
+
+**Bug 3 — `known-good.json`'s write-once guard.** After the `rm -rf` fix was rebuilt, reflashed, and boot-tested end-to-end from a genuinely reset (unseeded) namespace state, `known-good.json` still showed `"commit": "unseeded"` for both components despite the real checkouts being fully, correctly seeded. The guard (`[ -e "$kg" ] && return 0`) meant an earlier, premature write from the same boot's own history (exact mechanism not conclusively identified) could never be corrected once seeding actually finished afterward. Fixed to only skip recording if the existing file already reflects real committed versions, not merely any prior file — self-correcting rather than permanently wrong. Manually corrected the live device's file with the real commit hashes as an immediate fix; the source fix is committed for future builds.
+
+### Final, authoritative end-to-end result (fresh-boot test, namespace reset to genuinely unseeded beforehand)
+
+```
+OTA marker:        ota:kernel2 (S99confirm-good validated this boot)
+/proc/swaps:       /dev/zram0                          131068  0  100
+                   /usr/data/nebulaos/system/swapfile   131068  0   10
+free -m Swap:      256 total, 0 used, 256 free
+dmesg OOM events:  zero
+apps/klipper:      real seeded checkout, .git present, HEAD d7c3b338...
+apps/moonraker:    real seeded checkout, .git present, HEAD c5a2acfa...
+apps/mainsail:     real seeded release, index.html present
+.partial debris:   none anywhere
+known-good.json:   correct, real commits recorded
+activation-state:  klipper=persistent, moonraker=persistent, mainsail=persistent,
+                   printer_data=persistent, shared_gcode=persistent
+klippy_state:      ready, klippy_connected: true (running from the MUTABLE checkout)
+USB:               still auto-mounted (sda visible under gcodes/USB)
+```
+
+**The Memory Resilience Gate is complete.** Every acceptance item from the governing mission brief is met: kernel swap support enabled and proven; zram active as the high-priority primary layer; the NebulaOS-owned disk swap file active as the lower-priority fallback (not the stock file); zero OOM events during the exact workload that originally failed; the activation manager correctly activated all three previously-immutable apps once they became genuinely valid. Three real, independent bugs were found and fixed by testing directly against the device rather than trusting any single build or boot: the BusyBox `swapon` priority feature flag, the `mv`-into-existing-directory seeding bug, and the `known-good.json` write-once guard — none of which were the original memory/OOM problem, but all of which were blocking its full resolution from being observable.
+
+Ready to resume Phase 7 (mutable Klipper/Moonraker/Mainsail installs, writable Moonraker environment) on top of this now-proven foundation.

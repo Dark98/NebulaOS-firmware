@@ -232,6 +232,20 @@ Implemented (not yet built into a flashed image at the time of writing this sect
 
 **Not yet done**: Phase 7's actual writable Klipper/Moonraker/Mainsail installs and the real Moonraker virtualenv at `/usr/data/nebulaos/envs/moonraker` this config references don't exist on a running device yet (only the seeded copies from S03, not yet activated+exercised through a real update cycle) — Update Manager configuration is necessarily ahead of having something live to manage; it will be exercised for real during Phase 12.
 
+## 3.8 Phase 11: OpenKE runtime-naming classification (partial pass)
+
+Repo-wide search (39 files, excluding `vendor/`/`.git/`/`artifacts/`) classified as follows, per the mission's own required distinction:
+
+| Category | Examples | Action |
+|---|---|---|
+| **Legitimate historical/provenance** — describes a specific past change, mission, or investigation, factually true as written | `# OpenKE addition (FIRMWARE.md sec 13)...`, `# OpenKE app-stack addition...`, most `docs/*.md` mission-status/audit files, `ANALYSIS.md`/`DESIGN.md` | **Not changed** — rewriting these would falsify the historical record. Matches the mission's own explicit instruction. |
+| **User-facing/current-identity, safe to rename now** | `songs.conf`'s two comments ("OpenKE buzzer songs" / "reinstall or update OpenKE"), `moonraker.conf`'s top-of-file identity header | **Renamed to NebulaOS** this pass (both low-risk, comment-only, no behavior change). |
+| **Internal build-path naming family, real but deliberately deferred** | `board/halley5-openke-overlay`, `halley5-openke-fragment.config`, `halley5-openke-wheels`, `.openke-build.lock` — spans `.gitignore`, all six numbered `scripts/build/0*.sh` stages, `python-matplotlib.mk` | **Not renamed this pass** — purely internal Buildroot host-build-time paths (never present on the device itself), but touching all ~7 files consistently without breaking the pipeline needs its own dedicated rebuild-and-verify pass, not a rushed multi-file sed rename this late in an already-long session. Flagged as real, identified, remaining work. |
+| **The one genuine runtime-path occurrence** | `S01persistent-datastore`'s `DATA_ROOT=/usr/data/openke` | **Not changed this pass** — this is the actual on-disk directory name a live device (192.168.0.146) currently depends on; `S02nebulaos-namespace` already migrates data *out* of it into `/usr/data/nebulaos`, but changing `S01` itself risks the one script every other service's data path currently depends on, without a dedicated isolated test of that specific change. Deliberately deferred to be done alongside real-device boot testing (Phase 12), not rushed here. |
+| **Migration-only** | `docs/HOW_TO_SWITCH_STOCK_AND_CUSTOM.md`, `.gitignore` comments | Reference existing/historical paths accurately; no change needed independent of the build-path family above. |
+
+**Honest status**: Phase 11 is **partially complete**. The safe, no-behavior-change renames are done. The two real remaining items (the `halley5-openke-*` build-path family, and `S01`'s `DATA_ROOT`) are identified, scoped, and deliberately deferred pending dedicated testing rather than rushed — both are called out explicitly here so they are not silently dropped from the final report.
+
 ## 4. Pacing
 
 Per explicit user direction, proceeding straight through the remaining phases, checkpointing at major risk points (live-device tests, anything that looks destructive) rather than after every phase. Next: **Phase 2** (add git/curl/rsync/openssl/CA-certs/unzip/tar/venv/pip/setuptools/wheel to the Buildroot rootfs and prove real HTTPS against the required GitHub endpoints) — self-contained, no device changes, matches the mission's own phase ordering, unblocks Phase 7's dependency installs and Phase 10's git-based update manager.

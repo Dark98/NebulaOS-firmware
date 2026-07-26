@@ -131,6 +131,19 @@ seed_git_app() {
 		return 1
 	fi
 
+	# Real bug found live (docs/NEBULAOS_MEMORY_RESILIENCE.md sec 5): $dest
+	# already exists as an empty directory (S02nebulaos-namespace's own
+	# `mkdir -p .../apps/klipper`) by the time this runs. `mv srcdir
+	# destdir` when destdir already exists moves srcdir INSIDE it rather
+	# than replacing it - confirmed with a local reproduction - producing
+	# apps/klipper/klipper.partial instead of a seeded apps/klipper. This
+	# was mistaken for a memory/OOM issue at first because it kept leaving
+	# the exact same-looking ".partial" trail; it is unrelated to memory -
+	# it reproduced identically even after zram/disk swap were both
+	# confirmed correctly active with zero OOM events. rmdir here is safe
+	# (only removes if genuinely empty - never touches real content; the
+	# `-e "$dest/.git"` check above already proved there is none).
+	rmdir "$dest" 2>/dev/null
 	mv "$dest.partial" "$dest"
 	log "$name seeded successfully (branch $branch, $(git -C "$dest" rev-parse HEAD))"
 }
@@ -154,6 +167,7 @@ seed_mainsail() {
 		rm -rf "$dest.partial"
 		return 1
 	fi
+	rmdir "$dest" 2>/dev/null
 	mv "$dest.partial" "$dest"
 	log "mainsail seeded successfully"
 }

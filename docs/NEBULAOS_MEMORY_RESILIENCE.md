@@ -84,6 +84,17 @@ Applied directly after `start-stop-daemon` returns, reading the daemon's own PID
 
 Added `check_builtin CONFIG_SWAP`/`CONFIG_ZRAM`/`CONFIG_CRYPTO_LZ4` (checked against the real built kernel `.config`, the same mechanism already used for other built-in-driver assertions — catches this exact class of regression, which a rootfs-file-only check could never see) and `check` calls for `/sbin/{mkswap,swapon,swapoff}`, `/usr/bin/free`, both new init scripts, and the seed bundles/manifest.
 
-## 5. Live qualification
+## 5. Live qualification (first pass — real bug found and fixed)
 
-(Recorded after the next build+flash+test cycle.)
+Flashed and booted the first memory-resilience build (following the same strict safety discipline as every prior flash — every safety query and state-changing command issued as separate SSH invocations). Results:
+
+- **No OOM events** in `dmesg` this boot — a real improvement, though (see below) not yet for the intended reason.
+- `zram0` correctly configured: `disksize=134217728` (128MiB), `comp_algorithm` shows `lzo lzo-rle [lz4]` (LZ4 correctly selected as active).
+- **But `/proc/swaps` was completely empty** — zram was configured but never actually activated as swap.
+- Direct on-device diagnosis (read-only/reversible commands only): `mkswap /dev/zram0` succeeded; `swapon -p 100 /dev/zram0` failed with `swapon: invalid option -- 'p'`. BusyBox's `swapon --help` confirmed only `[-a] [-e] [DEVICE]` — no `-p` at all.
+- Tested the documented BusyBox fallback live (via a temporary `mount --bind` over `/etc/fstab`, cleanly reverted after — `/etc/fstab` itself is on the read-only squashfs, confirmed by a failed `echo >> /etc/fstab: Read-only file system`): an `fstab` entry with `pri=100` plus `swapon -a` **did** bring `/dev/zram0` up as swap, but `/proc/swaps` showed priority `-2`, not `100` — the requested priority was silently ignored.
+- Root cause, confirmed directly against the real BusyBox source this build already produced (`vendor/buildroot-x2000/output/build/busybox-1.36.1/util-linux/swaponoff.c`), not guessed: `CONFIG_FEATURE_SWAPON_PRI` gates the `-p` CLI option specifically (`IF_FEATURE_SWAPON_PRI(" [-p PRI]")` in the usage string, `OPTBIT_p` conditionally compiled). This project's `busybox.config` had it unset. Both the `-p` flag and (per this same source) `fstab`'s `pri=` parsing are gated by the identical flag — so the fstab route would never have worked either without this fix.
+- **Fix**: new `halley5-openke-busybox-fragment.config` (mirroring the existing kernel-fragment pattern, wired through `BR2_PACKAGE_BUSYBOX_CONFIG_FRAGMENT_FILES` which was already present in `buildroot.config` but empty) setting `CONFIG_FEATURE_SWAPON_PRI=y`. Also added `make busybox-dirclean` to `02-configure-buildroot.sh`'s own normalization step — the exact same stale-package-stamp class of bug as the earlier `libopenssl` fix (§3.9 of the architecture doc), caught proactively this time rather than requiring a second live-boot failure to discover it.
+- No change needed to `S00zram-swap`/`S03nebulaos-diskswap` themselves — they already used `swapon -p`, which will work correctly once this BusyBox feature is compiled in.
+
+Result of this pass, once rebuilt: recorded in the next subsection.

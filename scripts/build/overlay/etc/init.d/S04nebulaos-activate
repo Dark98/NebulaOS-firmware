@@ -1,0 +1,205 @@
+#!/bin/sh
+#
+# NebulaOS mutable-runtime mission, Phase 5: the one authoritative
+# activation manager. Decides, for each mutable app (Klipper, Moonraker,
+# Mainsail) and for printer_data/shared-gcode, whether the persistent
+# /usr/data/nebulaos copy is valid enough to bind-mount over the immutable
+# /opt/*|/usr/share/mainsail path - or whether to leave the immutable
+# squashfs content in place untouched.
+#
+# SAFETY DEFAULT: doing nothing at all is always safe. Every service in
+# this image was built to run directly against its immutable /opt/*
+# path - that is this system's real default state, not a fallback bolted
+# on afterward. Activation only ever ADDS a bind mount on top when a
+# persistent copy has positively proven itself; it never removes or
+# breaks the immutable content underneath, and any check that fails just
+# means "skip this one app, leave it on immutable" rather than aborting
+# the whole boot.
+#
+# Must run after S02nebulaos-namespace and S03nebulaos-factory-seed
+# (needs both the layout and a seeded copy to exist), and BEFORE S39wifi/
+# S50webcam/S55klipper/S56moonraker/S58guppyscreen - no service may start
+# against a path that might still change under it.
+
+NEBULAOS_ROOT=/usr/data/nebulaos
+STATE_FILE="$NEBULAOS_ROOT/system/activation-state.json"
+LOCKDIR="$NEBULAOS_ROOT/updates/locks"
+
+log() {
+	echo "S04nebulaos-activate: $1"
+}
+
+# Records one app's activation decision. Appended as simple key=value lines
+# to a working file, assembled into JSON at the end of start() - avoids
+# needing a JSON-aware tool in a BusyBox ash environment.
+record() {
+	echo "$1=$2" >> "$NEBULAOS_ROOT/system/.activation-decisions"
+}
+
+# Resolve a path and confirm the result still lives under $NEBULAOS_ROOT -
+# rejects '..' traversal and symlinks that escape the namespace. Empty
+# output means "reject."
+safe_realpath_under_namespace() {
+	target="$1"
+	resolved=$(readlink -f "$target" 2>/dev/null) || return 1
+	case "$resolved" in
+		"$NEBULAOS_ROOT"/*|"$NEBULAOS_ROOT")
+			echo "$resolved"
+			return 0
+			;;
+		*)
+			return 1
+			;;
+	esac
+}
+
+# $1=app name, $2=persistent source dir, $3=required marker file (relative
+# to $2, proves the copy is real/complete), $4=immutable-fallback reason
+# label used only in logs/state.
+validate_app() {
+	name="$1"; src="$2"; marker="$3"
+
+	if [ ! -d "$src" ]; then
+		log "$name: no persistent copy at $src - staying on immutable"
+		record "$name" "immutable:not_present"
+		return 1
+	fi
+
+	resolved=$(safe_realpath_under_namespace "$src")
+	if [ -z "$resolved" ]; then
+		log "$name: $src resolves outside $NEBULAOS_ROOT (traversal/escaping symlink) - REJECTING, staying on immutable"
+		record "$name" "immutable:path_escape_rejected"
+		return 1
+	fi
+
+	if [ ! -e "$src/$marker" ]; then
+		log "$name: missing expected marker ($marker) - incomplete/invalid copy, staying on immutable"
+		record "$name" "immutable:incomplete_or_invalid"
+		return 1
+	fi
+
+	# BusyBox's build here has no `stat` applet at all (confirmed live,
+	# "stat: not found") - `ls -ldn` (numeric UID/GID, a BusyBox ls
+	# extension) is the portable alternative.
+	owner=$(ls -ldn "$src" 2>/dev/null | awk '{print $3":"$4}')
+	if [ "$owner" != "0:0" ]; then
+		log "$name: unexpected ownership ($owner, expected 0:0) - staying on immutable"
+		record "$name" "immutable:unexpected_ownership"
+		return 1
+	fi
+
+	if [ -e "$LOCKDIR/$name.lock" ]; then
+		log "$name: an update transaction lock is present - an update is mid-flight, staying on immutable until it resolves"
+		record "$name" "immutable:update_in_progress"
+		return 1
+	fi
+
+	log "$name: persistent copy at $src validated OK"
+	record "$name" "persistent"
+	return 0
+}
+
+# $1=already-mounted target check, $2=source, $3=target
+bind_if_not_already() {
+	src="$1"; dst="$2"
+	# awk match on the exact target field (2nd column of /proc/mounts) -
+	# avoids a duplicate/stacked bind mount if this script is somehow
+	# invoked twice in one boot (it shouldn't be, but mount stacking from a
+	# double-invocation would be genuinely hard to reason about later).
+	if awk -v t="$dst" '$2==t {found=1} END{exit !found}' /proc/mounts; then
+		log "already mounted at $dst - not re-mounting"
+		return 0
+	fi
+	mount --bind "$src" "$dst"
+	log "bind-mounted $src -> $dst"
+}
+
+start() {
+	# /usr/data must be a real, writable mount before anything else here
+	# is meaningful - S01persistent-datastore already mounted it, but
+	# re-confirm rather than assume, since this script's own correctness
+	# depends on it.
+	if ! awk '$2=="/usr/data" {found=1} END{exit !found}' /proc/mounts; then
+		log "/usr/data is not mounted - cannot activate anything, staying fully immutable"
+		return 0
+	fi
+	testfile="/usr/data/.nebulaos-rw-test-$$"
+	if ! ( : > "$testfile" ) 2>/dev/null; then
+		log "/usr/data is not writable - cannot activate anything, staying fully immutable"
+		return 0
+	fi
+	rm -f "$testfile"
+
+	if [ ! -e "$NEBULAOS_ROOT/system/layout-manifest.json" ]; then
+		log "no layout manifest - namespace not ready, staying fully immutable"
+		return 0
+	fi
+
+	rm -f "$NEBULAOS_ROOT/system/.activation-decisions"
+	mkdir -p "$LOCKDIR"
+
+	if validate_app klipper "$NEBULAOS_ROOT/apps/klipper" "klippy/klippy.py"; then
+		bind_if_not_already "$NEBULAOS_ROOT/apps/klipper" /opt/klipper
+	fi
+
+	if validate_app moonraker "$NEBULAOS_ROOT/apps/moonraker" "moonraker/server.py"; then
+		bind_if_not_already "$NEBULAOS_ROOT/apps/moonraker" /opt/moonraker
+	fi
+
+	if validate_app mainsail "$NEBULAOS_ROOT/apps/mainsail" "index.html"; then
+		bind_if_not_already "$NEBULAOS_ROOT/apps/mainsail" /usr/share/mainsail
+	fi
+
+	# printer_data: private NebulaOS state first, then the shared stock
+	# gcode tree bind-mounted INSIDE it - order matters (mission
+	# requirement), each step independently guarded.
+	if validate_app printer_data "$NEBULAOS_ROOT/printer_data" "config"; then
+		bind_if_not_already "$NEBULAOS_ROOT/printer_data" /opt/printer_data
+
+		# The shared stock gcode tree is outside the NebulaOS namespace by
+		# design (docs/NEBULAOS_MUTABLE_RUNTIME_ARCHITECTURE.md sec 3.1) -
+		# validated separately, not through validate_app's namespace check.
+		shared_gcodes=/usr/data/printer_data/gcodes
+		if [ -d "$shared_gcodes" ]; then
+			# Phase 3.4 finding: NebulaOS's own USB mount target must exist
+			# INSIDE the shared tree once it's what's actually visible at
+			# /opt/printer_data/gcodes - idempotent, harmless if already there.
+			mkdir -p "$shared_gcodes/USB"
+			bind_if_not_already "$shared_gcodes" /opt/printer_data/gcodes
+			record "shared_gcode" "persistent"
+		else
+			log "shared gcode path $shared_gcodes missing - leaving /opt/printer_data/gcodes as whatever printer_data's own mount already provided"
+			record "shared_gcode" "immutable:not_present"
+		fi
+	fi
+
+	# Assemble the human/machine-readable activation state record.
+	now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+	{
+		echo "{"
+		echo "  \"activated_at\": \"$now\","
+		echo "  \"decisions\": {"
+		first=1
+		if [ -e "$NEBULAOS_ROOT/system/.activation-decisions" ]; then
+			while IFS='=' read -r k v; do
+				[ -z "$k" ] && continue
+				[ "$first" = 1 ] || echo ","
+				first=0
+				printf '    "%s": "%s"' "$k" "$v"
+			done < "$NEBULAOS_ROOT/system/.activation-decisions"
+		fi
+		echo ""
+		echo "  }"
+		echo "}"
+	} > "$STATE_FILE"
+	log "activation complete - state recorded at $STATE_FILE"
+}
+
+case "$1" in
+	start)
+		start
+		;;
+	*)
+		;;
+esac
+exit 0

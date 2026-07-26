@@ -192,13 +192,13 @@ docker run --label "openke-build-pid=$$" --rm \
 	-v "$TOOLCHAIN_HOST:/buildroot-host" \
 	-w /src pellcorp/k1-bash-build bash -c '
 	set -e
-	# Append, not prepend: Buildroot's own host/bin also carries its
+	# Append, not prepend: the Buildroot host/bin dir also carries its own
 	# internal automake-1.16/autoconf wrappers (built for its own package
-	# builds), which are broken when found ahead of the container's real
-	# system automake/autoconf - they hardcode paths only valid inside
-	# Buildroot's own build tree. Appending still finds the uniquely-named
+	# builds), which are broken when found ahead of the container real
+	# system automake/autoconf - they hardcode paths only valid inside the
+	# Buildroot build tree itself. Appending still finds the uniquely-named
 	# mipsel-buildroot-linux-gnu-* cross tools (no name collision with
-	# anything in the container's own PATH) without shadowing them.
+	# anything already in the container PATH) without shadowing them.
 	export PATH=$PATH:/buildroot-host/bin
 	export BUILD_PREFIX=/src/build/ustreamer-deps
 	export CC=mipsel-buildroot-linux-gnu-gcc

@@ -55,7 +55,7 @@ PYTHON_MATPLOTLIB_SETUP_TYPE = setuptools
 # only pip own filename-based filter was fooled, not the CPU actually running
 # the code. This wheel is never installed onto the MIPS target and never
 # executed as MIPS code.
-PYTHON_MATPLOTLIB_ENV = PIP_FIND_LINKS=$(TOPDIR)/board/halley5-openke-wheels PIP_NO_INDEX=1
+PYTHON_MATPLOTLIB_ENV = PIP_FIND_LINKS=$(TOPDIR)/board/halley5-nebulaos-wheels PIP_NO_INDEX=1
 
 ifeq ($(BR2_PACKAGE_PYTHON_MATPLOTLIB_QT),y)
 PYTHON_MATPLOTLIB_DEPENDENCIES += python-pyqt5

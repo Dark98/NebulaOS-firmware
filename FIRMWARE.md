@@ -1076,7 +1076,7 @@ dir is invisible to Buildroot's tracking, so a later full `make` silently skippe
 `modules_install`/image-copy, reusing stale artifacts from the *previous* successful build.
 
 **The correct, durable fix**: created a real Buildroot kernel config fragment file,
-`board/halley5-openke-fragment.config`, referenced via `BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES` -
+`board/halley5-nebulaos-fragment.config`, referenced via `BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES` -
 the proper, persistent mechanism for exactly this ("extra config on top of the base defconfig"),
 combined with `make linux-reconfigure` (which properly re-extracts from the override srcdir,
 reapplies defconfig + fragment together, and forces a real rebuild+reinstall) instead of ad-hoc
@@ -1117,7 +1117,7 @@ not started.
 
 **Saved to `artifacts/`** (all committed, all built with zero real-device writes):
 - `buildroot-halley5-v30-image/` - updated `uImage`/`rootfs.ext2` with all of the above baked in,
-  plus `kernel.config`, `buildroot.config`, `halley5-openke-fragment.config`, `halley5_v30.dts`
+  plus `kernel.config`, `buildroot.config`, `halley5-nebulaos-fragment.config`, `halley5_v30.dts`
   (the real board DTS with all our additions, for reference/reproducibility).
 - `panel-driver/` - `panel-openke-general-480x272.c` + the built `.ko`.
 - `ustreamer/` - the cross-compiled binary + its shared library dependencies.
@@ -1252,7 +1252,7 @@ Confirmed first that the kernel side was already solid: `CONFIG_MEDIA_SUPPORT`,
 `uvcvideo` needs nothing further.
 
 Used Buildroot's `BR2_ROOTFS_OVERLAY` mechanism (simpler than writing a full custom package `.mk`
-for a single prebuilt binary) - created `board/halley5-openke-overlay/` with the `ustreamer` binary,
+for a single prebuilt binary) - created `board/halley5-nebulaos-overlay/` with the `ustreamer` binary,
 its 7 shared library dependencies (with real SONAME symlinks created for each, e.g.
 `libjpeg.so.9 -> libjpeg.so.9.4.0` - confirmed the exact SONAMEs actually needed via `readelf -d
 ustreamer | grep NEEDED`, not guessed), and a new `S50webcam` init script. Rather than guess the
@@ -1263,7 +1263,7 @@ literal `HW`, `CPU`, `M2M-VIDEO`, `M2M-IMAGE`), `--host`/`-s`, `--port`/`-p`. Th
 nodes exist unlike the stock device's `/dev/video4`) - flagged as unconfirmed against real hardware
 enumeration order.
 
-Set `BR2_ROOTFS_OVERLAY="board/halley5-openke-overlay"` in the top-level Buildroot `.config` (this
+Set `BR2_ROOTFS_OVERLAY="board/halley5-nebulaos-overlay"` in the top-level Buildroot `.config` (this
 one, unlike the kernel's own `output/build/linux-custom/.config`, is the real persistent
 configuration file - editing it directly is correct, not the anti-pattern from §10's Buildroot
 stamp-tracking bug). Rebuilt with a full `make`, confirmed via `debugfs` that `ustreamer`, all 7
@@ -1438,7 +1438,7 @@ Buildroot rootfs-overlay rebuild doesn't automatically remove a file from `outpu
 it's deleted from the overlay *source* (the overlay-copy step is additive, not a mirror/sync) - the
 stale `S57nginx` kept reappearing in the built image until manually removed from
 `output/target/etc/init.d/` directly. **New standing rule for this workspace**: after removing a
-file from `board/halley5-openke-overlay/`, also check/remove any stale copy already staged in
+file from `board/halley5-nebulaos-overlay/`, also check/remove any stale copy already staged in
 `output/target/` before trusting the next rebuild.
 
 ### Step 5+6: Mainsail, camera verification
@@ -2019,7 +2019,7 @@ guarantee the uart4 fix actually compiled in (confirmed: `uImage` size changed f
 scripts** - `debugfs` confirmed `S00revert-safety`/`S99confirm-good`/`ota_marker.sh` were all
 `MISS`. Root cause: this repo has two separate overlay locations - the git-tracked template
 (`scripts/build/overlay/`) and the actual directory Buildroot reads from
-(`vendor/buildroot-x2000/board/halley5-openke-overlay/`, gitignored) - and only
+(`vendor/buildroot-x2000/board/halley5-nebulaos-overlay/`, gitignored) - and only
 `02-configure-buildroot.sh` syncs one into the other. Adding files to the template alone, without
 re-running that sync, means Buildroot silently keeps using whatever it last saw. Re-ran the sync,
 rebuilt, and this time `debugfs` confirmed every one of today's files present.
@@ -2357,7 +2357,7 @@ The most likely explanation: this board's SPL is a minimal bootstrap stage with 
 so it silently hangs the moment it tries to decompress a gzip-compressed image.
 
 **First fix attempt didn't work, and *looked* like it should have.** Added `CONFIG_KERNEL_XZ=y` to
-`halley5-openke-fragment.config` - MIPS's own `arch/mips/boot/Makefile` only maps
+`halley5-nebulaos-fragment.config` - MIPS's own `arch/mips/boot/Makefile` only maps
 `CONFIG_KERNEL_{GZIP,BZIP2,LZMA,LZO}` to a compressed uImage suffix, so selecting XZ (a mandatory
 Kconfig choice, satisfying the kernel's "must pick exactly one" requirement) falls through to the
 same uncompressed `.bin` the stock kernel uses, without needing the generic, MIPS-unavailable
@@ -2733,7 +2733,7 @@ safely back on stock (confirmed via `/proc/cmdline` showing `root=/dev/mmcblk0p7
 
 **This entire round happened after §34's commit and was never written up or committed** - caught
 only because a later session found the working tree still dirty (`kernel.config`,
-`halley5-openke-fragment.config`, rebuilt `xImage`/`rootfs.*` all modified, plus a new untracked
+`halley5-nebulaos-fragment.config`, rebuilt `xImage`/`rootfs.*` all modified, plus a new untracked
 `scripts/build/diag_init.c`) with no matching commit or FIRMWARE.md entry. Recovered by reading the
 uncommitted diff and the boot logs it referenced directly, in full, rather than trusting any prior
 summary.
@@ -3768,7 +3768,7 @@ functionally gating anything (`manual_list` registration in this driver is uncon
 
 - `halley5_v30.dts`: `&msc1`'s `compatible` reverted from `"ingenic,x1600-mmc"` back to the base
   `"ingenic,sdhci"`.
-- `halley5-openke-fragment.config`: `CONFIG_INGENIC_MMC` fully disabled (was `=y` with
+- `halley5-nebulaos-fragment.config`: `CONFIG_INGENIC_MMC` fully disabled (was `=y` with
   `CONFIG_INGENIC_MMC_MMC1=y`) - nothing needs `ingenic_mmc.c` anymore.
 - `sdhci-ingenic.c`/`sdhci-ingenic.h`: the §47 rename (`sdhci_ingenic_mmc_manual_detect`/
   `sdhci_ingenic_mmc_clk_ctrl`, done to dodge the link collision with `ingenic_mmc.c`) reverted back
@@ -4572,7 +4572,7 @@ Checked the built kernel's own `.config`: `# CONFIG_FILE_LOCKING is not set` - i
 a deliberate choice for this project), silently disabling POSIX advisory locking kernel-wide. This
 would have broken *any* future component depending on `flock`/`fcntl` locks, not just Moonraker's
 sqlite usage - a systemic gap, not a narrow one. Fixed with one line in
-`halley5-openke-fragment.config`: `CONFIG_FILE_LOCKING=y`. `06-verify.sh` gained a permanent check.
+`halley5-nebulaos-fragment.config`: `CONFIG_FILE_LOCKING=y`. `06-verify.sh` gained a permanent check.
 
 Independently, and in parallel, a `moonraker-sqlite-nolock.patch` had already been added to
 `04-cross-compile-app-stack.sh` - a real, working, application-level fix for the exact same symptom
@@ -4597,12 +4597,12 @@ standard-practice addition any real local Moonraker setup would want anyway.
 
 ### Real, permanent build-script robustness fixes made along the way
 
-- **`vendor/buildroot-x2000/board/halley5-openke-overlay` ownership**: `02-configure-buildroot.sh`'s
+- **`vendor/buildroot-x2000/board/halley5-nebulaos-overlay` ownership**: `02-configure-buildroot.sh`'s
   own `cp -r` of the overlay runs inside a `--user root` container, leaving the tree root-owned; the
   very next stage (`04-cross-compile-app-stack.sh`) writes into that same tree as the host user and
   failed with `Permission denied` on a rebuild. `02-configure-buildroot.sh` now hands the overlay tree
   back to the host user (`chown -R $(id -u):$(id -g)`) as its own last step, so this can't regress.
-- Build-stage exclusive lock (`.openke-build.lock`, `flock`) added across `02`-`05` to stop two build
+- Build-stage exclusive lock (`.nebulaos-build.lock`, `flock`) added across `02`-`05` to stop two build
   stages from interleaving writes into the same shared `vendor/buildroot-x2000` tree if run
   concurrently.
 - `build-work/` (04's own pywheels/tarball scratch dir) added to `.gitignore` - pure build output, same
@@ -4733,7 +4733,7 @@ background+watchdog timeout instead of trusting the tool to return.
   post-transfer size verification.
 - One real process-hygiene mistake, self-corrected: a `03-build-kernel-and-rootfs.sh` run was
   interrupted, but its `docker run` container kept running independently of the killed shell wrapper,
-  holding `.openke-build.lock` - found and stopped explicitly (`docker stop`) before the next build.
+  holding `.nebulaos-build.lock` - found and stopped explicitly (`docker stop`) before the next build.
 - Five isolated commits this section: `970bd6b83` (uart1 fix), `72236226a` (MSC2 disable), plus three
   main-repo doc commits (Phase 0/1 baseline+inventory, Phase 2/3A/10A findings, this section's fixes
   and bounded investigations).

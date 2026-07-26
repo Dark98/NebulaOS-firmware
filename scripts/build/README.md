@@ -86,13 +86,13 @@ load failure, harmless to everything else - see `FIRMWARE.md` §53).
    linux` defconfig plus every option this project added - WiFi/BT/touch/display/RNG/Python3/
    nginx/etc, using a helper that finds-and-replaces each option's *real* existing line rather than
    blindly appending, which is what caused a real class of bugs this session - see `FIRMWARE.md`
-   §14), the kernel config fragment file (`halley5-openke-fragment.config` - includes
+   §14), the kernel config fragment file (`halley5-nebulaos-fragment.config` - includes
    `CONFIG_EXTRA_FIRMWARE`, which embeds the WiFi firmware directly into the kernel image rather
    than relying on the rootfs being mounted yet - `brcmfmac` is built-in and probes for it earlier
    in boot than the real root filesystem mounts, see `FIRMWARE.md` §53), `local.mk` (the
    `LINUX_OVERRIDE_SRCDIR` pointer), and copies this repo's own hand-written overlay content
    (`scripts/build/overlay/`, including whatever `fetch-wifi-firmware.sh` staged) into
-   `board/halley5-openke-overlay/`.
+   `board/halley5-nebulaos-overlay/`.
 4. **`03-build-kernel-and-rootfs.sh`** - the main kernel + rootfs build (`make`) - touch, display,
    WiFi, Bluetooth, camera-kernel-side, and Core SoC infra all come from this one pass, since
    they're all just kernel config + device-tree, no cross-compiled userspace extras needed yet.

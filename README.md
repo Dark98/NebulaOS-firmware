@@ -111,7 +111,7 @@ just inference). Result: touch, display, WiFi, Bluetooth, and camera are now all
   directory were silently discarded on the next full rebuild, because Buildroot's package tracking
   watches the source-override directory, not the build directory - `rootfs.ext2` kept missing new
   modules despite "successful" builds. Fixed with a real, persistent Buildroot config fragment file
-  (`board/halley5-openke-fragment.config`) + `make linux-reconfigure`. **New standing rule for this
+  (`board/halley5-nebulaos-fragment.config`) + `make linux-reconfigure`. **New standing rule for this
   workspace: kernel config changes must go through that fragment file, never direct in-place
   `.config` edits** - the latter are invisible to Buildroot's own tracking and get silently
   discarded on the next full rebuild.
@@ -446,7 +446,7 @@ except this probe layer, with no SWD required.
   built against `Llixuma/ingenic-linux-kernel6.6-x2000-v1.0-20250221` (rebased here 2026-07-19 by
   explicit user instruction - see `FIRMWARE.md` §8), **updated again the same day (2026-07-19,
   "build everything first" pass) to include touch/display/WiFi/BT** - now also has
-  `halley5-openke-fragment.config` (the Buildroot kernel-config fragment) alongside the existing
+  `halley5-nebulaos-fragment.config` (the Buildroot kernel-config fragment) alongside the existing
   configs. **Not gitignored on purpose**, same reasoning as the ax88179 artifacts above. See
   `FIRMWARE.md` §8 for the original build recipe/errors and §10 for this session's additions, what
   was verified (cross-compile + `debugfs` inspection) vs. not (no real hardware attempted), and

@@ -17,7 +17,7 @@
 # or the kernel fragment/buildroot.config artifacts, and before 03/05 - a real
 # bug this session (FIRMWARE.md sec 24): editing the git-tracked overlay
 # template alone does nothing, since Buildroot only ever reads from
-# vendor/buildroot-x2000/board/halley5-openke-overlay/ (gitignored), which
+# vendor/buildroot-x2000/board/halley5-nebulaos-overlay/ (gitignored), which
 # this script is what syncs the template into. A rebuild after only touching
 # the template, without re-running this first, silently uses whatever this
 # script last copied there.
@@ -55,8 +55,8 @@ REPO_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
 # same shared vendor/buildroot-x2000 tree - running two of these at once
 # (e.g. from two terminals) would silently interleave writes. Cheap
 # insurance: a single exclusive lock file, held for the whole script.
-exec 9>"$REPO_ROOT/.openke-build.lock"
-flock -n 9 || { echo "another build stage already owns $REPO_ROOT/.openke-build.lock" >&2; exit 1; }
+exec 9>"$REPO_ROOT/.nebulaos-build.lock"
+flock -n 9 || { echo "another build stage already owns $REPO_ROOT/.nebulaos-build.lock" >&2; exit 1; }
 
 # Orphaned-container cleanup (2026-07-23) - a real incident this session: a
 # killed build wrapper left its `docker run` process running independently
@@ -94,20 +94,20 @@ docker run --label "openke-build-pid=$$" --rm --user root \
 set -e
 cp "/repo/artifacts/buildroot-halley5-v30-image/buildroot.config" "/repo/vendor/buildroot-x2000/.config"
 mkdir -p "/repo/vendor/buildroot-x2000/board"
-cp "/repo/artifacts/buildroot-halley5-v30-image/halley5-openke-fragment.config" "/repo/vendor/buildroot-x2000/board/halley5-openke-fragment.config"
-cp "/repo/artifacts/buildroot-halley5-v30-image/halley5-openke-busybox-fragment.config" "/repo/vendor/buildroot-x2000/board/halley5-openke-busybox-fragment.config"
+cp "/repo/artifacts/buildroot-halley5-v30-image/halley5-nebulaos-fragment.config" "/repo/vendor/buildroot-x2000/board/halley5-nebulaos-fragment.config"
+cp "/repo/artifacts/buildroot-halley5-v30-image/halley5-nebulaos-busybox-fragment.config" "/repo/vendor/buildroot-x2000/board/halley5-nebulaos-busybox-fragment.config"
 cat > "/repo/vendor/buildroot-x2000/local.mk" <<EOF
 LINUX_OVERRIDE_SRCDIR = /kernel_6_6/kernel/kernel-6.6
 EOF
-rm -rf "/repo/vendor/buildroot-x2000/board/halley5-openke-overlay"
-mkdir -p "/repo/vendor/buildroot-x2000/board/halley5-openke-overlay"
-cp -r "/repo/scripts/build/overlay/." "/repo/vendor/buildroot-x2000/board/halley5-openke-overlay/"
-mkdir -p "/repo/vendor/buildroot-x2000/board/halley5-openke-overlay/opt/printer_data/comms" \
-         "/repo/vendor/buildroot-x2000/board/halley5-openke-overlay/opt/printer_data/logs" \
-         "/repo/vendor/buildroot-x2000/board/halley5-openke-overlay/opt/printer_data/gcodes"
-rm -rf "/repo/vendor/buildroot-x2000/board/halley5-openke-wheels"
-mkdir -p "/repo/vendor/buildroot-x2000/board/halley5-openke-wheels"
-cp "/repo/scripts/build/vendor-wheels/"*.whl "/repo/vendor/buildroot-x2000/board/halley5-openke-wheels/"
+rm -rf "/repo/vendor/buildroot-x2000/board/halley5-nebulaos-overlay"
+mkdir -p "/repo/vendor/buildroot-x2000/board/halley5-nebulaos-overlay"
+cp -r "/repo/scripts/build/overlay/." "/repo/vendor/buildroot-x2000/board/halley5-nebulaos-overlay/"
+mkdir -p "/repo/vendor/buildroot-x2000/board/halley5-nebulaos-overlay/opt/printer_data/comms" \
+         "/repo/vendor/buildroot-x2000/board/halley5-nebulaos-overlay/opt/printer_data/logs" \
+         "/repo/vendor/buildroot-x2000/board/halley5-nebulaos-overlay/opt/printer_data/gcodes"
+rm -rf "/repo/vendor/buildroot-x2000/board/halley5-nebulaos-wheels"
+mkdir -p "/repo/vendor/buildroot-x2000/board/halley5-nebulaos-wheels"
+cp "/repo/scripts/build/vendor-wheels/"*.whl "/repo/vendor/buildroot-x2000/board/halley5-nebulaos-wheels/"
 cp "/repo/scripts/build/vendor-patches/python-matplotlib/python-matplotlib.mk" "/repo/vendor/buildroot-x2000/package/python-matplotlib/python-matplotlib.mk"
 '
 
@@ -122,7 +122,7 @@ cp "/repo/scripts/build/vendor-patches/python-matplotlib/python-matplotlib.mk" "
 docker run --label "openke-build-pid=$$" --rm --user root \
 	-v "$REPO_ROOT:/repo" \
 	pellcorp/k1-bash-build \
-	chown -R "$(id -u):$(id -g)" "/repo/vendor/buildroot-x2000/board/halley5-openke-overlay"
+	chown -R "$(id -u):$(id -g)" "/repo/vendor/buildroot-x2000/board/halley5-nebulaos-overlay"
 
 echo "== normalizing .config (resolves any derived Kconfig selects) =="
 docker run --label "openke-build-pid=$$" --rm --user root \

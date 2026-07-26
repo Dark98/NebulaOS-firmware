@@ -17,7 +17,7 @@ if [ ! -f "$IMAGES/rootfs.ext2" ]; then
 fi
 
 # ns2009, the display panel, brcmfmac and the RNG are all built statically
-# into vmlinux (=y, not =m) - see halley5-openke-fragment.config's own
+# into vmlinux (=y, not =m) - see halley5-nebulaos-fragment.config's own
 # comments for why each one was switched. A built-in driver produces no
 # separate .ko file under /lib/modules at all, so these are checked against
 # the actual built kernel .config instead of debugfs'd out of rootfs.ext2 -

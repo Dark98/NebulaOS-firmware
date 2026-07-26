@@ -15,8 +15,8 @@ SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
 
 # 2026-07-23: see 02-configure-buildroot.sh for why this lock exists.
-exec 9>"$REPO_ROOT/.openke-build.lock"
-flock -n 9 || { echo "another build stage already owns $REPO_ROOT/.openke-build.lock" >&2; exit 1; }
+exec 9>"$REPO_ROOT/.nebulaos-build.lock"
+flock -n 9 || { echo "another build stage already owns $REPO_ROOT/.nebulaos-build.lock" >&2; exit 1; }
 
 # Orphaned-container cleanup (2026-07-23) - a real incident this session: a
 # killed build wrapper left its `docker run` process running independently
@@ -36,7 +36,7 @@ for cid_pid in $(docker ps --filter "label=openke-build-pid" --format '{{.ID}}={
 done
 VENDOR="$REPO_ROOT/vendor"
 BUILDROOT_DIR="$VENDOR/buildroot-x2000"
-OVERLAY="$BUILDROOT_DIR/board/halley5-openke-overlay"
+OVERLAY="$BUILDROOT_DIR/board/halley5-nebulaos-overlay"
 TOOLCHAIN_HOST="$BUILDROOT_DIR/output/host"
 SYSROOT="$TOOLCHAIN_HOST/mipsel-buildroot-linux-gnu/sysroot"
 WORK="$REPO_ROOT/build-work/app-stack-extras"

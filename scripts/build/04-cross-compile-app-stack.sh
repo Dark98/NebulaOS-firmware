@@ -254,7 +254,50 @@ cp "$VENDOR"/k1-ustreamer/build/ustreamer-deps/lib/*.so* "$OVERLAY/usr/lib/"
   ln -sf libmd.so.0.1.0 libmd.so.0 && \
   ln -sf libbsd.so.0.11.7 libbsd.so.0 )
 
-### 4. Mainsail static build (already unpacked by 00-fetch-vendor-sources.sh)
+### 4. v4l2-ctl (USB/webcam stock-parity mission, FIRMWARE.md sec 60)
+#
+# The camera-macro warning found in an earlier (Mainsail-warnings) mission
+# ("v4l2-ctl: command not found") was a genuinely unresolved gap: this
+# project's vendored Buildroot tree (a trimmed BSP subset) has no
+# package/v4l-utils at all. S50webcam's own dynamic UVC-node discovery (see
+# its own header comment) also depends on a real v4l2-ctl being present, not
+# just the camera macro. Built from the real upstream source pinned in
+# 00-fetch-vendor-sources.sh (v4l-utils-1.20.0, the last autotools release
+# before the 1.22 meson migration - this build container has no python3/
+# meson/ninja). Only utils/v4l2-ctl is built, not the whole suite; static
+# libv4l2 is skipped entirely (--disable-v4l2-ctl-libv4l means v4l2-ctl uses
+# raw ioctls directly, so it doesn't need libv4l2's own broken .la ordering
+# fixed) - same minimal-footprint approach as ustreamer above, same
+# toolchain, same reasoning for appending (not prepending) buildroot-host/
+# bin to PATH.
+echo "== cross-compiling v4l2-ctl (this project's own Buildroot toolchain) =="
+docker run --label "openke-build-pid=$$" --rm \
+	-v "$VENDOR/v4l-utils:/src" \
+	-v "$TOOLCHAIN_HOST:/buildroot-host" \
+	-w /src pellcorp/k1-bash-build bash -c '
+	set -e
+	apt-get update >/dev/null 2>&1
+	apt-get install -y autoconf automake libtool gettext autopoint pkg-config >/dev/null 2>&1
+	export PATH=$PATH:/buildroot-host/bin
+	export CC=mipsel-buildroot-linux-gnu-gcc
+	export AR=mipsel-buildroot-linux-gnu-gcc-ar
+	export LD=mipsel-buildroot-linux-gnu-ld
+	export STRIP=mipsel-buildroot-linux-gnu-strip
+
+	autoreconf -fiv
+	./configure --host=mipsel-buildroot-linux-gnu \
+		--disable-libdvbv5 --disable-qv4l2 --disable-qvidcap \
+		--disable-gconv --disable-bpf --disable-v4l2-ctl-libv4l \
+		--disable-shared --enable-static --without-jpeg
+
+	make -C lib/libv4lconvert
+	make -C utils/v4l2-ctl
+	mipsel-buildroot-linux-gnu-strip --strip-unneeded utils/v4l2-ctl/v4l2-ctl
+'
+cp "$VENDOR/v4l-utils/utils/v4l2-ctl/v4l2-ctl" "$OVERLAY/usr/bin/v4l2-ctl"
+chmod 755 "$OVERLAY/usr/bin/v4l2-ctl"
+
+### 5. Mainsail static build (already unpacked by 00-fetch-vendor-sources.sh)
 echo "== copying Mainsail static build =="
 mkdir -p "$OVERLAY/usr/share/mainsail"
 cp -r "$VENDOR"/mainsail-dist/dist/* "$OVERLAY/usr/share/mainsail/"

@@ -58,6 +58,17 @@ clone_pinned k1-ustreamer https://github.com/pellcorp/k1-ustreamer.git \
 	18e30bb313d54b1b01dd995bd31ce5a3d5adffd6 "--recurse-submodules"
 git -C k1-ustreamer submodule update --init --recursive
 
+# v4l2-ctl (USB/webcam stock-parity mission, 2026-07-26): the camera macro
+# warning found earlier ("v4l2-ctl: command not found") needs a real,
+# genuinely-present binary, not a suppressed error - and this vendored
+# Buildroot tree (a trimmed vendor BSP subset) has no v4l-utils package at
+# all. Pinned to v1.20.0, the last release before v4l-utils' 1.22 meson
+# migration - the container this project already uses for the Buildroot-
+# toolchain cross-compiles (pellcorp/k1-bash-build) has no python3/meson/
+# ninja, so staying on the plain autotools ./configure && make build here
+# avoids adding that whole toolchain just for one diagnostic utility.
+clone_pinned v4l-utils https://git.linuxtv.org/v4l-utils.git v4l-utils-1.20.0
+
 # Mainsail - a built Vue app, fetched as a real release archive, not built
 # from source here (no Node.js toolchain needed for this build at all).
 mkdir -p mainsail-dist

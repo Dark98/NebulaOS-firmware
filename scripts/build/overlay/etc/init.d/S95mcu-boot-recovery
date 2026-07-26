@@ -77,6 +77,23 @@ start() {
 				pinfo=$(get_printer_info)
 				case "$pinfo" in
 					*"$KNOWN_SHUTDOWN_MSG"*)
+						# Defense in depth: this exact message is only ever
+						# raised in mcu.py's _connect(), structurally before
+						# printer.cfg is parsed - a genuine instance can never
+						# carry a "status" object (no heater targets, no
+						# print_stats, nothing to preserve). Checked
+						# explicitly here rather than trusting that argument
+						# alone - if a "status" key is somehow present this
+						# is not the narrow case this guard was built for
+						# (config did load, e.g. a runtime shutdown that
+						# merely echoes similar-looking text), so recovery is
+						# denied and left for manual attention instead.
+						case "$pinfo" in
+							*'"status"'*)
+								echo "S95mcu-boot-recovery: message matched but a status object is present (config already loaded) - not the narrow pre-config transient this guard handles, leaving untouched for manual attention"
+								exit 0
+								;;
+						esac
 						echo "S95mcu-boot-recovery: known early-boot MCU-shutdown transient detected - issuing one bounded FIRMWARE_RESTART"
 						wget -q -O - --timeout=5 --post-data='' \
 							"http://127.0.0.1:7125/printer/firmware_restart" >/dev/null 2>&1

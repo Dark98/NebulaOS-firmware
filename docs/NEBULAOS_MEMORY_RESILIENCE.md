@@ -128,4 +128,31 @@ USB:               still auto-mounted (sda visible under gcodes/USB)
 
 **The Memory Resilience Gate is complete.** Every acceptance item from the governing mission brief is met: kernel swap support enabled and proven; zram active as the high-priority primary layer; the NebulaOS-owned disk swap file active as the lower-priority fallback (not the stock file); zero OOM events during the exact workload that originally failed; the activation manager correctly activated all three previously-immutable apps once they became genuinely valid. Three real, independent bugs were found and fixed by testing directly against the device rather than trusting any single build or boot: the BusyBox `swapon` priority feature flag, the `mv`-into-existing-directory seeding bug, and the `known-good.json` write-once guard — none of which were the original memory/OOM problem, but all of which were blocking its full resolution from being observable.
 
+## 7. Live HTTPS qualification (Phase 7 gate) — two more real bugs found and fixed, one permanent limitation documented
+
+Attempting to prove live HTTPS ahead of Phase 7 (per the mission's own required commands) found two further real, permanent (not just early-boot-transient) gaps:
+
+- **No NTP client existed on this image at all** (`which ntpd chronyd sntp` all empty). The clock was not just briefly wrong at boot (the already-known, already-handled RTC-before-NTP window, `docs/NEBULAOS_RETENTION_POLICY.md` §2.6) — it was **permanently** stuck at its post-reset default (confirmed live: `date -u` read `Sun Mar 1 2020` on a device that had been running for hours). Every TLS handshake to GitHub failed with `certificate is not yet valid` as a direct consequence, on every boot, forever, not just for the first minute.
+- **BusyBox's `wget` had no HTTPS support compiled in at all** (`wget --help` showed only "HTTP or FTP"; a real `https://` URL was rejected outright with `not an http or ftp url`) — a separate gap that would have blocked `wget --spider https://github.com/` even with a correct clock.
+
+**Fixes**: enabled `CONFIG_NTPD` and `CONFIG_FEATURE_WGET_HTTPS` in the busybox fragment; added `S40nebulaos-ntpsync` (backgrounded, one-shot `ntpd -n -q`, tries `pool.ntp.org`/`time.google.com`/`time.cloudflare.com` in order, after `S39wifi`, fails silently rather than blocking boot if none are reachable).
+
+**Rebuilt, reflashed, and proven live** (same strict safety discipline as every prior flash):
+```
+date -u:                                    Sun Jul 26 20:57:45 UTC 2026  (correct - was permanently stuck at 2020 before)
+git ls-remote .../NebulaOS-klipper.git HEAD: 386fde4fd38e8eda6999e58bf260eceb00051188  (real, correct commit)
+curl --fail --location --head https://api.github.com/:  HTTP/1.1 200 OK (full real GitHub response headers)
+curl backend:                               libcurl/8.5.0 OpenSSL/3.1.4 (real TLS, not a stub)
+wget --spider https://github.com/:          "remote file exists"
+python3 urllib.request.urlopen(...):        status 200
+```
+
+**Real, important finding requiring a permanent policy, not a bug to fix**: `wget`'s own output for the HTTPS request above included the line `wget: note: TLS certificate validation not implemented` — confirmed this is not a flag or a misconfiguration but a hard limitation of BusyBox's minimal internal TLS stack (the feature this project just enabled, `CONFIG_FEATURE_WGET_HTTPS`, exists specifically for basic connectivity use, not security-critical fetching). This means `wget` "succeeding" over HTTPS is **functionally equivalent to always running with certificate verification disabled** — exactly the outcome the mission's own rules explicitly forbid achieving via `wget --no-check-certificate`, except here it happens unconditionally with no flag involved at all.
+
+**Positive and negative proof that `curl`/`git`/`python3` are genuinely trustworthy, unlike `wget`**: `curl` was tested against `https://wrong.host.badssl.com/` (a public certificate-mismatch test endpoint) and correctly **failed** with `SSL: no alternative certificate subject name matches target host name` — proving its validation is real and active, not merely that the earlier success was a fluke of an unreachable negative case.
+
+**Policy going forward**: `curl` and `git` (both linked against the real system OpenSSL, both proven with positive and negative controls) are the only tools this project should use for any HTTPS fetch where content authenticity matters (cloning/fetching real repositories, checking release archives, anything Phase 7/10's update logic does over the network). `wget` remains fine for its existing uses in this project (plain HTTP - local Moonraker API calls, webcam snapshot fetches - all on the trusted local loopback/LAN) but must never be relied upon for HTTPS where the content's authenticity matters, since it cannot actually verify who it's talking to.
+
+Live HTTPS qualification: **passed**, with this documented, permanent caveat rather than a false "all green."
+
 Ready to resume Phase 7 (mutable Klipper/Moonraker/Mainsail installs, writable Moonraker environment) on top of this now-proven foundation.

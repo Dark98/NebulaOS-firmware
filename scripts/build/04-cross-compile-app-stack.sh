@@ -161,16 +161,90 @@ cp "$WORK"/streaming-form-data-1.11.0/streaming_form_data/*.py \
    "$SITEPKG/streaming_form_data/"
 
 ### 3. ustreamer (camera pipeline)
-echo "== cross-compiling ustreamer =="
-docker run --label "openke-build-pid=$$" --rm -v "$VENDOR/k1-ustreamer:/home/tim/k1-ustreamer" \
-	-w /home/tim/k1-ustreamer pellcorp/k1-camera-build \
-	/home/tim/k1-ustreamer/docker.sh all
+#
+# OpenKE fix (USB/webcam stock-parity mission, FIRMWARE.md sec 60): this
+# used to build via pellcorp's own `pellcorp/k1-camera-build` docker image,
+# which bundles Ingenic's stock vendor toolchain
+# (/opt/toolchains/mips-gcc720-glibc229, glibc 2.29). That toolchain's
+# glibc uses a DIFFERENT MIPS ABI than this project's own Buildroot-built
+# target glibc (2.38, confirmed via /lib/libc.so.6's own banner:
+# "libc ABIs: MIPS_PLT UNIQUE MIPS_O32_FP64 ABSOLUTE MIPS_XHASH") - the
+# resulting ustreamer.bin's own dynamic-linker request
+# (`readelf -l` -> "Requesting program interpreter:
+# /lib/ld-linux-mipsn8.so.1") never matched this rootfs's real interpreter
+# (plain /lib/ld.so.1), so the binary could never actually execute here -
+# busybox ash reports this as a confusing "not found" (it's really the
+# missing interpreter, not the file itself; confirmed real files/libs were
+# all present and correctly staged). This was never caught before because
+# no prior session had a real UVC webcam physically attached to test with.
+#
+# Fix: build the *exact same*, untouched pellcorp/k1-ustreamer source
+# (still vendor/k1-ustreamer at its pinned commit, submodules unchanged)
+# with this project's own internal Buildroot toolchain instead - the same
+# one already used for Klipper's chelper and Moonraker's streaming-form-
+# data above, guaranteeing ABI consistency with the rest of the rootfs.
+# Mirrors docker.sh's own real, proven build steps (jpeg-9d, libevent,
+# libmd, libbsd, then ustreamer itself) with the toolchain swapped.
+echo "== cross-compiling ustreamer (this project's own Buildroot toolchain, not pellcorp/k1-camera-build's incompatible one) =="
+rm -rf "$VENDOR/k1-ustreamer/build"
+docker run --label "openke-build-pid=$$" --rm \
+	-v "$VENDOR/k1-ustreamer:/src" \
+	-v "$TOOLCHAIN_HOST:/buildroot-host" \
+	-w /src pellcorp/k1-bash-build bash -c '
+	set -e
+	# Append, not prepend: Buildroot's own host/bin also carries its
+	# internal automake-1.16/autoconf wrappers (built for its own package
+	# builds), which are broken when found ahead of the container's real
+	# system automake/autoconf - they hardcode paths only valid inside
+	# Buildroot's own build tree. Appending still finds the uniquely-named
+	# mipsel-buildroot-linux-gnu-* cross tools (no name collision with
+	# anything in the container's own PATH) without shadowing them.
+	export PATH=$PATH:/buildroot-host/bin
+	export BUILD_PREFIX=/src/build/ustreamer-deps
+	export CC=mipsel-buildroot-linux-gnu-gcc
+	export AR=mipsel-buildroot-linux-gnu-gcc-ar
+	export LD=mipsel-buildroot-linux-gnu-ld
+	export STRIP=mipsel-buildroot-linux-gnu-strip
+	export CFLAGS="-I$BUILD_PREFIX/include/"
+	export LDFLAGS="-L$BUILD_PREFIX/lib/"
+	mkdir -p /src/build
+
+	cd /src/jpeg-9d && git clean -xdf
+	cd /src/ustreamer && make clean PKG_CONFIG=true
+
+	cd /src/build
+	tar xf ../libevent-2.1.12-stable.tar.gz && cd libevent-2.1.12-stable
+	./configure --host=mipsel-buildroot-linux-gnu --prefix=$BUILD_PREFIX \
+		--disable-openssl --disable-samples --disable-libevent-regress
+	make && make install
+
+	cd /src/build
+	tar xf ../libmd-1.1.0.tar.xz && cd libmd-1.1.0
+	./configure --host=mipsel-buildroot-linux-gnu --prefix=$BUILD_PREFIX
+	make && make install
+
+	cd /src/build
+	tar xf ../libbsd-0.11.7.tar.xz && cd libbsd-0.11.7
+	./configure --host=mipsel-buildroot-linux-gnu --prefix=$BUILD_PREFIX
+	make && make install
+
+	cd /src/jpeg-9d
+	./configure --host=mipsel-buildroot-linux-gnu --build=x86_64-pc-linux-gnu --prefix=$BUILD_PREFIX
+	make && make install
+
+	cd /src/ustreamer
+	export CFLAGS="$CFLAGS -Os -march=mips32r2 -ffunction-sections -fdata-sections"
+	export LDFLAGS="$LDFLAGS -Wl,--gc-sections -s"
+	make PKG_CONFIG=true WITH_PTHREAD_NP=0 WITH_SETPROCTITLE=0
+	mipsel-buildroot-linux-gnu-strip --strip-unneeded src/ustreamer.bin
+'
 mkdir -p "$OVERLAY/usr/bin" "$OVERLAY/usr/lib"
 cp "$VENDOR/k1-ustreamer/ustreamer/src/ustreamer.bin" "$OVERLAY/usr/bin/ustreamer"
 chmod 755 "$OVERLAY/usr/bin/ustreamer"
 cp "$VENDOR"/k1-ustreamer/build/ustreamer-deps/lib/*.so* "$OVERLAY/usr/lib/"
-# re-create the SONAME symlinks the binary actually needs (readelf -d
-# ustreamer | grep NEEDED confirms these exact names)
+# re-create the SONAME symlinks the binary actually needs - verified fresh
+# against this rebuilt binary via `readelf -d ustreamer | grep NEEDED`,
+# not assumed from the old pellcorp-toolchain build.
 ( cd "$OVERLAY/usr/lib" && \
   ln -sf libjpeg.so.9.4.0 libjpeg.so.9 && \
   ln -sf libevent-2.1.so.7.0.1 libevent-2.1.so.7 && \

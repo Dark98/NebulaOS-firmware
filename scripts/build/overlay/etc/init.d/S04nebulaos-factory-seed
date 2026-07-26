@@ -178,6 +178,48 @@ seed_mainsail() {
 	log "mainsail seeded successfully"
 }
 
+# NebulaOS mutable-runtime mission, Phase 7: writable Moonraker Python
+# environment. Confirmed live (docs/NEBULAOS_MEMORY_RESILIENCE.md sec 7's
+# companion investigation) that every one of Moonraker's real dependencies
+# (scripts/moonraker-requirements.txt in the vendored checkout) already
+# imports successfully against the system Python - Buildroot's own python
+# packages plus this project's existing pywheels-flatten step
+# (04-cross-compile-app-stack.sh) already cover the full set, including
+# the C-extension ones (numpy, streaming_form_data) that would otherwise
+# need on-device compilation. `--system-site-packages` means this venv
+# starts out fully functional immediately, with zero new package
+# installs required - "reproducible on MIPS" is satisfied by reuse, not
+# by a fragile on-device pip/compile step. Future updates (Phase 10) can
+# still `pip install` into this venv specifically without touching the
+# system-wide Python.
+#
+# Confirmed live this takes ~59s of CPU time (not memory - no swap use
+# observed) on this device - accounted for by running inside the same
+# maintenance-gate/expendable-oom-priority window as the rest of this
+# script's work, not because it is itself memory-heavy.
+setup_moonraker_env() {
+	envdir=/usr/data/nebulaos/envs/moonraker
+	if [ -x "$envdir/bin/python3" ]; then
+		log "moonraker venv already present ($envdir) - skipping"
+		return 0
+	fi
+	log "creating writable Moonraker Python environment at $envdir"
+	rm -rf "$envdir.partial"
+	if ! python3 -m venv --system-site-packages "$envdir.partial" 2>/tmp/moonraker-venv-error.log; then
+		log "ERROR: venv creation failed - see /tmp/moonraker-venv-error.log - leaving no partial state"
+		rm -rf "$envdir.partial"
+		return 1
+	fi
+	if ! "$envdir.partial/bin/python3" -c "import tornado, numpy, streaming_form_data" 2>/tmp/moonraker-venv-error.log; then
+		log "ERROR: moonraker venv failed its own import smoke test - see /tmp/moonraker-venv-error.log - rejecting"
+		rm -rf "$envdir.partial"
+		return 1
+	fi
+	rm -rf "$envdir"
+	mv "$envdir.partial" "$envdir"
+	log "moonraker venv created and verified successfully"
+}
+
 record_known_good() {
 	# Phase 8's rollback/health-check machinery consumes this - record the
 	# very first known-good version for each component right after a
@@ -216,7 +258,8 @@ start() {
 	# Nothing to do - already fully seeded from a prior boot. Skip the
 	# gate/pause/resume dance entirely rather than pausing services for
 	# no reason on every normal boot after the first.
-	if [ -e "$APPS/klipper/.git" ] && [ -e "$APPS/moonraker/.git" ] && [ -e "$APPS/mainsail/index.html" ]; then
+	if [ -e "$APPS/klipper/.git" ] && [ -e "$APPS/moonraker/.git" ] && [ -e "$APPS/mainsail/index.html" ] \
+		&& [ -x /usr/data/nebulaos/envs/moonraker/bin/python3 ]; then
 		log "all components already seeded - nothing to do"
 		return 0
 	fi
@@ -235,6 +278,7 @@ start() {
 	# compete with the next step's own memory needs.
 	seed_git_app klipper nebulaos "https://github.com/coreflake1/NebulaOS-klipper.git"
 	seed_git_app moonraker master "https://github.com/Arksine/moonraker.git"
+	setup_moonraker_env
 	seed_mainsail
 	sync
 

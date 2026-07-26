@@ -27,10 +27,20 @@ LOGFILE=/opt/printer_data/logs/moonraker.log
 UNIXSOCKET=/opt/printer_data/comms/moonraker.sock
 PIDFILE=/var/run/moonraker.pid
 
+# NebulaOS mutable-runtime mission, Phase 7: prefer the writable venv
+# S04nebulaos-factory-seed creates at /usr/data/nebulaos/envs/moonraker
+# (matches this same path in moonraker.conf's own
+# [update_manager moonraker] virtualenv: setting) - falls back to the
+# system interpreter if the venv doesn't exist yet (e.g. a freshly wiped
+# namespace on its very first boot, before S04 has run) so this script
+# never fails to start Moonraker over a missing venv.
+PYTHON3=/usr/bin/python3
+[ -x /usr/data/nebulaos/envs/moonraker/bin/python3 ] && PYTHON3=/usr/data/nebulaos/envs/moonraker/bin/python3
+
 start() {
-	echo "Starting moonraker"
+	echo "Starting moonraker (using $PYTHON3)"
 	start-stop-daemon -S -b -m -p "$PIDFILE" \
-		-x /usr/bin/python3 -- \
+		-x "$PYTHON3" -- \
 		"$MOONRAKER" -d "$DATAPATH" -c "$CONFIG" -l "$LOGFILE" \
 		-u "$UNIXSOCKET"
 	# NebulaOS Memory Resilience Gate: moderately protected - Moonraker

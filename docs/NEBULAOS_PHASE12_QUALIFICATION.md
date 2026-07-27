@@ -1,6 +1,6 @@
 # NebulaOS Phase 12: Full Real-Device Qualification
 
-**Status:** Complete and live-qualified. The original Mainsail-update-rollback gap was closed in a follow-up closure mission (2026-07-27, §6/§6b/§10), which also found and fixed two additional real bugs (a Linux bind-mount pinning issue and a pre-existing service-restart race) plus a genuine near-miss in `flash-spare-slot.sh`'s own safety check (§7) - recorded in full rather than omitted. Every scenario below was live-tested against the actual physical device (Ender-3 V3 KE / Nebula Pad, Ingenic X2000), not simulated or assumed. Evidence is quoted or paraphrased from the actual command output captured during testing, not reconstructed after the fact.
+**Status:** Complete and live-qualified. The original Mainsail-update-rollback gap was closed in a follow-up closure mission (2026-07-27, §6/§6b/§10), which also found and fixed two additional real bugs (a Linux bind-mount pinning issue and a pre-existing service-restart race) plus a genuine near-miss in `flash-spare-slot.sh`'s own safety check (§7) - recorded in full rather than omitted. A subsequent final-seal mission (2026-07-27, §7a) went further: rewrote the flash script's safety logic around an explicit, deterministic slot model with a no-write `--check-only` preflight, added a 14-case offline test suite, and proved the live-slot refusal path directly via negative/positive control with zero-write evidence - not just inferred from one incident's outcome. Every scenario below was live-tested against the actual physical device (Ender-3 V3 KE / Nebula Pad, Ingenic X2000), not simulated or assumed. Evidence is quoted or paraphrased from the actual command output captured during testing, not reconstructed after the fact.
 
 ---
 
@@ -106,6 +106,19 @@ Exercised on every single flash cycle this entire mission - conservatively 20+ f
 
 **Result: PASS**, including the incident above - recorded here in full rather than omitted, per this mission's own established standard of only ever calling something safety-critical "solved" once it's actually been proven to fail loudly instead of silently.
 
+### 7a. Final-seal mission (2026-07-27): the live-slot refusal path itself, qualified rather than inferred
+
+The fix above was live-verified in the closure mission only by observing that a *real* re-flash attempt correctly refused - useful, but not a designed, repeatable qualification of the refusal path in isolation. This mission closed that gap:
+
+- **Redesign**: `flash-spare-slot.sh` was rewritten around a deterministic, explicit two-slot model (slot1=stock kernel/rootfs p5/p7, slot2=custom kernel/rootfs p6/p8 - verified against real partlabel symlinks and, where checkable, real major:minor device identity, not assumed correct because it always had been). A `--check-only` preflight mode performs every destructive-safety check with zero writes; the real write path re-runs the identical preflight function immediately before writing, so a stale check-only pass is never treated as standing authorization. Every refusal path fails closed (`unknown` is always a refusal, never `probably safe`) - see `scripts/flash-spare-slot.sh`'s own header for the full design rationale.
+- **Offline test coverage**: `tests/flash-spare-slot-preflight-tests.sh`, 14 cases against fixture device trees (no real block devices, no root required) - active-pair collision, inactive-pair allow, mixed slot pair, PARTUUID=/LABEL= root= resolution, unresolved root device, ambiguous slot-table mapping, wrong partlabel target, oversized image, manifest hash mismatch, unrecognized CLI option, extra CLI arguments, and a structural proof that `write_and_verify()` (the only caller of `dd`) has exactly its two expected real-write call sites, none reachable from `--check-only`. All 14 pass.
+- **A real bug the live test caught that the offline suite structurally could not** (fixtures can't be real block devices): `dev_id()`'s major:minor cross-check used plain `ls -ldn`, which does not dereference symlinks - given a partlabel symlink it reported the symlink's own metadata (link-target length, mtime) instead of the resolved device's real major:minor, producing a false refusal with a nonsensical reason (`"does not match its own label symlink (15:Mar)"`) on the very first live run. Fixed to `ls -ldnL` (follow symlinks). Re-run immediately after, clean.
+- **Live negative control** (device booted on custom, i.e. the fixed target slot - exactly the condition that caused the original incident): `--check-only` against the real inactive-vs-active real-hardware state correctly identified active slot 2, target slot 2, and refused with `"target rootfs (/dev/mmcblk0p8) is the currently active/live root device - refusing..."`, exit code 1. Proof of zero writes: sha256 of `/dev/mmcblk0p6` and `/dev/mmcblk0p8` recorded before and after the refused invocation are byte-for-byte identical.
+- **Live positive control** (device booted on stock, target slot genuinely inactive): `--check-only` against the same real hardware correctly identified active slot 1, target slot 2, all preflight stages (slot mapping, image sizes, manifest hash) passed, printed `SAFE TO FLASH`, exit code 0. No real write was performed for this qualification pass, since the already-installed custom image was independently confirmed (sha256) to already match the exact build under test - per this mission's own explicit allowance.
+- **Final qualified script hash** (matches the production copy at `scripts/flash-spare-slot.sh` after the live-caught `ls -ldnL` fix): `ef045bc701ec578ee1d092d8c28817c64a95496ec10897315967c9dc87e21c6d`.
+
+**Result: QUALIFIED** - the refusal path is now proven by direct live negative control with zero-write evidence, not merely inferred from one real incident's outcome.
+
 ## 8. Shared G-code
 
 Confirmed via `activation-state.json`'s `"shared_gcode": "persistent"` on every boot this mission where the namespace was valid (including the fresh-reseed test in §2). `S05nebulaos-activate`'s own logic (bind-mount order: `printer_data` first, then the shared stock gcode tree inside it, with the USB mount-point directory pre-created) was reviewed and has produced this correct result consistently.
@@ -124,6 +137,16 @@ A gap not anticipated by the original Phase 12 scenario list, discovered while r
 
 **Result: PASS**, live-verified on first boot (not just after a workaround).
 
+### 10a. GuppyScreen Wi-Fi status display
+
+During the same closure mission, GuppyScreen's own display briefly showed wpa_supplicant as not running immediately after a reboot, despite the network itself being genuinely healthy (real IP, control socket present at `/var/run/wpa_supplicant/wlan0`, `ctrl_interface` correctly configured). Root-caused as a one-time display/boot-ordering race (GuppyScreen's own `wpa_ctrl_open2` check running before the control socket had appeared), not a configuration or code defect - the relocated `wpa_supplicant.conf` was confirmed already correct. After a subsequent full stock→custom reboot cycle (final-seal mission, 2026-07-27), **the user personally confirmed on the physical device's own screen that Wi-Fi networks are now correctly listed and the status displays as healthy.**
+
+```text
+GUPPYSCREEN_WIFI_STATUS: PASS
+```
+
+Not left as an open question - closed by direct user confirmation, not inferred from network-layer evidence alone.
+
 ## Summary
 
 | Scenario | Result | Evidence type |
@@ -141,3 +164,6 @@ A gap not anticipated by the original Phase 12 scenario list, discovered while r
 | Disk/memory pressure | PASS | Live (Memory Resilience Gate) |
 | Retention disk-pressure floors | **PASS** (closure mission, measured not guessed) | Live measurement, see `NEBULAOS_RETENTION_POLICY.md` §4 |
 | `/usr/data/openke` removal | **PASS** (closure mission) | Live, two-cold-boot proof |
+| Flash-spare-slot live-target positive path | **QUALIFIED** (final-seal mission) | Live, `--check-only` from stock, SAFE TO FLASH |
+| Flash-spare-slot live-target refusal path | **QUALIFIED** (final-seal mission) | Live negative control, zero-write hash proof |
+| GuppyScreen Wi-Fi status | **PASS** (final-seal mission) | User-confirmed on physical device screen |

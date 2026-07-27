@@ -283,6 +283,47 @@ mainsail_snapshot_to_backup() {
 	atomic_directory_replace "$path" "$MAINSAIL_BACKUP"
 }
 
+# Real bug found live (Mainsail rollback retest, 2026-07-27): restoring the
+# backup INTO $NEBULAOS_ROOT/apps/mainsail via atomic_directory_replace
+# renames that directory away and creates a new one at the same name - but
+# S05nebulaos-activate's bind mount (/usr/share/mainsail) was established
+# against the ORIGINAL directory's inode, which Linux keeps valid at its
+# new (renamed-away) location rather than "following" the name back to
+# whatever now occupies the old path. nginx kept serving the stale,
+# now-unlinked old content the whole time, while direct inspection of the
+# path by name showed the freshly-restored good content - stage2-mainsail's
+# real HTTP check correctly saw broken/stale content and correctly failed,
+# it was atomic_directory_replace's rename semantics that were wrong for a
+# path with an active bind mount sourced from it. Klipper/Moonraker's own
+# git reset --hard never hits this because it rewrites file content INSIDE
+# the same directory/inode, never renaming the directory itself - only
+# Mainsail's restore path (the only user of atomic_directory_replace on an
+# actively bind-mounted source) needed this fix.
+remount_mainsail_bind() {
+	target=/usr/share/mainsail
+	if awk -v t="$target" '$2==t {found=1} END{exit !found}' /proc/mounts; then
+		umount "$target" 2>/dev/null
+	fi
+	mount --bind "$NEBULAOS_ROOT/apps/mainsail" "$target"
+}
+
+# A first live test looked like a transient WiFi-blip false positive
+# (single failed wget sample right after an atomic directory swap) - the
+# real cause, found on a second reproduction, was the bind-mount desync
+# documented above at remount_mainsail_bind(), now fixed at the source.
+# Kept as a real, if now mostly redundant, defense: nginx serves static
+# files with no restart/reload needed, so a few quick retries cost nothing
+# if an actual transient hiccup ever does occur.
+stabilized_stage2_mainsail() {
+	i=0
+	while [ "$i" -lt 3 ]; do
+		"$HEALTHCHECK" stage2-mainsail && return 0
+		sleep 3
+		i=$((i + 1))
+	done
+	return 1
+}
+
 validate_mainsail() {
 	name="mainsail"
 	path="$NEBULAOS_ROOT/apps/mainsail"
@@ -295,10 +336,23 @@ validate_mainsail() {
 
 	log "$name: new version detected ($new_version) - validating"
 
+	# Real bug found live (2026-07-27): this same desync also affects a
+	# genuine Mainsail update via Moonraker's own net_deploy.py, which does
+	# the same shutil.rmtree()+mkdir() on this bind-mount's source
+	# directory - a Linux bind mount stays pinned to the original inode
+	# regardless of what happens to the path used to create it, so nginx
+	# would otherwise keep serving stale pre-update content indefinitely
+	# (invisible to any HTTP-based health check, since the check itself
+	# would only ever see the OLD content) until a reboot happened to
+	# re-run S05nebulaos-activate. Remounting here, on every detected
+	# version change and before any health check runs, makes the check
+	# actually test what was just installed - not what used to be there.
+	remount_mainsail_bind
+
 	stage1_ok=true
 	"$HEALTHCHECK" stage1 "$name" "$path" || stage1_ok=false
 
-	if [ "$stage1_ok" = "true" ] && "$HEALTHCHECK" stage2-mainsail; then
+	if [ "$stage1_ok" = "true" ] && stabilized_stage2_mainsail; then
 		log "$name: new version $new_version passed full validation - recording as known-good"
 		write_state "$name" "$new_version" "$new_version" "healthy" ""
 		mainsail_snapshot_to_backup
@@ -320,7 +374,8 @@ validate_mainsail() {
 	fi
 
 	atomic_directory_replace "$MAINSAIL_BACKUP" "$path"
-	if "$HEALTHCHECK" stage1 "$name" "$path" && "$HEALTHCHECK" stage2-mainsail; then
+	remount_mainsail_bind
+	if "$HEALTHCHECK" stage1 "$name" "$path" && stabilized_stage2_mainsail; then
 		log "$name: restored backup re-validated healthy"
 		write_state "$name" "$known_good" "$known_good" "rolled-back" "${reason}:$new_version"
 		rm -f "$LOCKDIR/$name.lock"

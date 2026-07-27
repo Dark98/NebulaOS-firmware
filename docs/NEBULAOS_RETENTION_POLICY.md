@@ -1,6 +1,6 @@
 # NebulaOS Retention Policy
 
-**Status:** Design draft, informed by direct investigation of SimpleAF's real, currently-shipping cleanup mechanism (Section 1). Not yet implemented (Phase 9). This document will be updated as implementation proceeds; Section 3 records open decisions.
+**Status:** Implemented (Phase 9) — `/etc/nebulaos-retention.sh` + `/etc/init.d/S45nebulaos-cleanup`, verified present by `06-verify.sh`. Informed by direct investigation of SimpleAF's real, currently-shipping cleanup mechanism (Section 1). Section 3's open decisions (exact disk-pressure floor values, env-versioning-dependent rotation) were not revisited against real-device measurement during this pass — see `docs/NEBULAOS_MUTABLE_RUNTIME_IMPLEMENTATION_REPORT.md` for what Phase 12 did and did not exercise live.
 
 ---
 

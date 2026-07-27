@@ -1,0 +1,678 @@
+# NebulaOS Moonraker Update Manager & Camera Persistence — Analysis Report
+
+**Status: Investigation complete. No implementation performed.** This is a read-only analysis mission, run on branch `investigation/moonraker-update-camera-analysis` from tag `nebulaos-mutable-runtime-sealed-2026-07-27`. No runtime, source, or configuration changes were made to the device or to any sealed component. `nebulaos-mutable-runtime-baseline-2026-07-27`, `nebulaos-mutable-runtime-complete-2026-07-27`, and `nebulaos-mutable-runtime-sealed-2026-07-27` are all confirmed unchanged (verified in §2 and the evidence appendix).
+
+Evidence labels used throughout: **VERIFIED FACT** (directly observed via source code, live command output, or API response), **SOURCE-BACKED INFERENCE** (a conclusion drawn from verified facts but not itself directly observed), **UNVERIFIED HYPOTHESIS** (plausible but not confirmed), **RECOMMENDATION** (a proposal for a later implementation mission — never itself a claim of current behavior).
+
+---
+
+## 1. Executive summary
+
+Two separate, unrelated-looking problems turn out to share one root cause and one fix pattern:
+
+1. **The Moonraker warnings.** `[update_manager klipper]` and `[update_manager moonraker]` are Moonraker's two *reserved* app slots. Reserved slots hardcode `type`, `path`, `origin`, `managed_services`, and (for moonraker) `virtualenv`/`requirements` internally, and auto-discover `path`/`env` at runtime from the live Klippy connection (klipper) or `sys.exec_prefix`/`source_info` (moonraker). Only `channel`, `pinned_commit`, `refresh_interval`, `report_anomalies` are ever read from a `[update_manager klipper]`/`[update_manager moonraker]` section — **VERIFIED FACT**, with exact `file:line` citations in §7. Every other option NebulaOS's config sets under these two reserved names is never read by anything, and Moonraker's generic "you set an option this component's ConfigHelper never touched" warning mechanism fires for each one, every boot. This is **not** a crash, a stale config, or a version mismatch — it is present in a fresh, correctly-seeded install of the exact sealed image, and would be present in current upstream Moonraker too.
+
+2. **The camera problem.** The default "Nebula" camera is defined in `moonraker.conf`'s `[webcam Nebula]` section. Moonraker's `webcam.py` re-parses `[webcam ...]` sections from the config file **fresh on every single startup** — it is never copied into the database, contrary to what NebulaOS's own moonraker.conf comment currently claims (**VERIFIED FACT**, exact source in §15). Any webcam whose `source` field is `"config"` is permanently, unconditionally forbidden from being edited or deleted via Moonraker's own API (not a Mainsail UI quirk — Moonraker itself raises a server error) — **VERIFIED FACT**, §15. The stream/snapshot URLs and `service` value are independently confirmed correct and fully functional against the real ustreamer/nginx pipeline (§16). A second, previously-undiscovered issue was found in the process: a **stale database-backed webcam entry** (also named "Nebula", with an old `uv4l-mjpeg`/camelCase schema, likely OpenKE-era) silently collides with and is discarded in favor of the config entry on every boot (§10, §15).
+
+3. **The user's own working assumption — "stock updates without breaking config" — does not hold as evidenced.** Both the real stock installer on this exact device (Guilouz/Creality-Helper-Script) and the SimpleAF/pellcorp reference this project has always used **do** overwrite `moonraker.conf` (and, for pellcorp, `printer.cfg` via an active migration engine) on every reinstall/update. The genuinely reliable invariant across both real-world references is narrower than assumed: **the Moonraker database is what survives; config files do not, reliably, in either reference implementation.** This is reported honestly even though it revises the mission brief's own premise (§8, §9).
+
+The recommended minimum correction (§20) requires no upstream patching, no new configuration-override framework, and touches a small, enumerable set of files (§25).
+
+---
+
+## 2. Mission scope and frozen sealed baseline
+
+**VERIFIED FACT** (commands run, output below):
+
+```text
+$ git rev-parse HEAD                                                    (before branch checkout)
+d1c5e33f20b6cea49e45cb8b3120650c9bad0567
+$ git status --short
+(empty)
+$ git checkout -b investigation/moonraker-update-camera-analysis nebulaos-mutable-runtime-sealed-2026-07-27
+Switched to a new branch 'investigation/moonraker-update-camera-analysis'
+$ git rev-parse HEAD
+d1c5e33f20b6cea49e45cb8b3120650c9bad0567
+$ git branch --show-current
+investigation/moonraker-update-camera-analysis
+$ git remote -v
+(no remotes configured — local-only repository)
+
+$ git rev-parse nebulaos-mutable-runtime-baseline-2026-07-27^{commit}
+24c58b4aa7cf6e3f482fc94eb2577bdf4e46d71a
+$ git rev-parse nebulaos-mutable-runtime-complete-2026-07-27^{commit}
+a5b8eec48f6d3c15d47cb60f92139c5c8adb7de4
+$ git rev-parse nebulaos-mutable-runtime-sealed-2026-07-27^{commit}
+d1c5e33f20b6cea49e45cb8b3120650c9bad0567
+```
+
+The sealed tag points to exactly the commit the investigation branch was created from; the working tree was clean before any analysis began; all three tags are distinct, unmoved checkpoints. The device's currently-flashed build (per `artifacts/buildroot-halley5-v30-image/build-manifest.txt`, unchanged this mission) is `git_commit_main=b16a94976d780b08b779fcff99f7e53aaeaecd2e` — the same image flashed during the prior final-seal mission; no reflash occurred or was needed for this investigation.
+
+No source, runtime, or config files were modified during this investigation. No reboots, service restarts, camera API calls, or OTA-marker changes were performed.
+
+---
+
+## 3. Exact live versions
+
+**VERIFIED FACT**, all captured live via read-only SSH/API on 2026-07-27, device at `192.168.0.146` (custom slot):
+
+| Component | Value |
+|---|---|
+| Moonraker git commit (deployed) | `70e251ecb77a291f9b2c9789f6e0aef4af2b8420` |
+| Moonraker branch | `master` (local branch tracking `origin/master`, "ahead 1, behind 2305") |
+| Moonraker remote | `https://github.com/Arksine/moonraker.git` |
+| Moonraker working tree | clean (`git status --short` empty) |
+| Moonraker process | `/usr/data/nebulaos/envs/moonraker/bin/python3 /opt/moonraker/moonraker/moonraker.py -d /opt/printer_data -c /opt/printer_data/config/moonraker.conf -l /opt/printer_data/logs/moonraker.log -u /opt/printer_data/comms/moonraker.sock` |
+| Moonraker `sys.executable`/venv | `/usr/data/nebulaos/envs/moonraker/bin/python3` → `/usr/bin/python3.11` (real base interpreter) |
+| Moonraker reported version | `tv0.10.0-1-g70e251e-shallow` (shallow clone) |
+| Klipper git commit (deployed) | `2d75015d7c76dd31e4b0f49e1ae3fe6ad86cad24` |
+| Klipper branch | `nebulaos` (tracking `origin/nebulaos`, "ahead 1, behind 5784") |
+| Klipper remote | `https://github.com/coreflake1/NebulaOS-klipper.git` |
+| Klipper working tree | clean |
+| Klipper process | `/usr/data/nebulaos/envs/klipper/bin/python3 /opt/klipper/klippy/klippy.py /opt/printer_data/config/printer.cfg -a /opt/printer_data/comms/klippy.sock -l /opt/printer_data/logs/klippy.log` |
+| Mainsail version | `v2.18.2` (`release_info.json`: `"project_owner":"mainsail-crew"`) |
+| GuppyScreen version | `v1.5.0-OpenKE` (own log banner; naming is out of this mission's scope) |
+| nginx process | `/usr/sbin/nginx` (master + `www-data` worker) |
+| ustreamer process | `/usr/bin/ustreamer --device=/dev/video3 --format=MJPEG --encoder=HW --resolution=1920x1080 --desired-fps=30 --host=127.0.0.1 --port=8080` |
+
+**Important nuance resolved (SOURCE-BACKED INFERENCE, high confidence):** the deployed Moonraker commit `70e251e` is not itself a real upstream Arksine/moonraker commit — its own commit message reads *"NebulaOS factory seed snapshot of master @ d5ee17128bb88434aacdab90c2e9e990e2b64e4a"*, and `git branch -vv` confirms it is exactly **one** synthetic commit ahead of `origin/master`. `d5ee171` is `vendor/moonraker`'s own currently-checked-out HEAD in this repository. Attempting to fetch `70e251e` directly from `github.com/Arksine/moonraker` (both as a bare ref and after a full unshallow fetch of `master`, 2305 commits) failed with "not our ref" / not found — consistent with it being a purely local, NebulaOS-fabricated wrapper commit that never existed upstream. This means the exact file content Moonraker is running is content-identical to `vendor/moonraker`'s checked-out `d5ee171`, not merely "close to it." All source analysis in §7 was performed directly against this checkout and is treated as authoritative for the deployed code, not an approximation.
+
+Separately, git history of `moonraker/components/update_manager/common.py` and `update_manager.py` shows the reserved-slot mechanism (`get_base_configuration`, `BASE_CONFIG`, `OPTION_OVERRIDES`) is a long-stable, foundational design (commit `003acd5 update_manager: fetch klipper paths from klippy_connection` established the core mechanism; `OPTION_OVERRIDES` has only ever grown by one entry, `report_anomalies`, since). This further supports treating the current checkout as representative of the actually-running behavior, and separately answers §5 (upstream comparison): this is not a recent regression a Moonraker update would fix.
+
+---
+
+## 4. Exact live paths and mounts
+
+**VERIFIED FACT**:
+
+```text
+/dev/mmcblk0p10 /opt/printer_data     ext4 rw,relatime
+/dev/mmcblk0p10 /opt/klipper          ext4 rw,relatime
+/dev/mmcblk0p10 /opt/moonraker        ext4 rw,relatime
+/dev/mmcblk0p10 /usr/share/mainsail   ext4 rw,relatime
+```
+
+All four are bind mounts from the same persistent partition (`/usr/data`, `mmcblk0p10`) onto their immutable-squashfs mount points, per `S05nebulaos-activate` (unchanged this mission, not re-inspected in depth since it's frozen architecture). `/opt/printer_data/config/moonraker.conf` resolves (via `readlink -f`) to itself — it is the real file at that path, itself bind-mounted from `/usr/data/nebulaos/printer_data/config/moonraker.conf` (confirmed identical SHA-256, §6).
+
+---
+
+## 5. Current warning evidence
+
+**VERIFIED FACT** — every "Unparsed config option" line moonraker.log has ever produced for these two sections (captured live, most recent boot):
+
+```text
+Unparsed config option 'type: git_repo' detected in section [update_manager klipper].
+Unparsed config option 'path: /usr/data/nebulaos/apps/klipper' detected in section [update_manager klipper].
+Unparsed config option 'origin: https://github.com/coreflake1/NebulaOS-klipper.git' detected in section [update_manager klipper].
+Unparsed config option 'primary_branch: nebulaos' detected in section [update_manager klipper].
+Unparsed config option 'managed_services: klipper' detected in section [update_manager klipper].
+Unparsed config option 'type: git_repo' detected in section [update_manager moonraker].
+Unparsed config option 'path: /usr/data/nebulaos/apps/moonraker' detected in section [update_manager moonraker].
+Unparsed config option 'origin: https://github.com/Arksine/moonraker.git' detected in section [update_manager moonraker].
+Unparsed config option 'primary_branch: master' detected in section [update_manager moonraker].
+Unparsed config option 'managed_services: moonraker' detected in section [update_manager moonraker].
+Unparsed config option 'virtualenv: /usr/data/nebulaos/envs/moonraker' detected in section [update_manager moonraker].
+Unparsed config option 'requirements: scripts/moonraker-requirements.txt' detected in section [update_manager moonraker].
+```
+
+`channel: dev` (present in both sections) never warns. `/server/info`'s `warnings` array matches this list exactly and `failed_components` is empty — **update_manager is loaded and running successfully**; these are warnings, not load failures. `moonraker_version` in the same response confirms `tv0.10.0-1-g70e251e-shallow`, matching §3.
+
+---
+
+## 6. `moonraker.conf` copy and hash comparison
+
+**VERIFIED FACT**:
+
+| Copy | SHA-256 | Notes |
+|---|---|---|
+| Live, in use by Moonraker (`/opt/printer_data/config/moonraker.conf`) | `c7c39519c850d9e13ffbf556cb8ba3d432acff8d0e0a2600ddf459b6ead65ae6` | |
+| Live, persistent backing file (`/usr/data/nebulaos/printer_data/config/moonraker.conf`) | `c7c39519c850d9e13ffbf556cb8ba3d432acff8d0e0a2600ddf459b6ead65ae6` | identical — confirms the bind mount is intact and there is exactly one real file, not two divergent copies |
+| Repo source of truth (`scripts/build/overlay/opt/printer_data/config/moonraker.conf`, this branch) | `927cccd9fe3083cf07ed742bbf9a9b2eed1b393f0112e3642f0e5daee7e0e72f` | |
+
+These two hashes differ, but a clean binary diff (via `scp`, not an interactive SSH `cat`, which was found to corrupt line endings and produce a false 100%-different diff on first attempt — noted here as a methodology correction) shows the **entire difference is an 18-line, comment-only block** ("Closure-mission correction (2026-07-27): confirmed live against real Moonraker source...") that a prior session added to the repo source *after* the live file was last pushed to the device. No functional line (section header, option, or value) differs. Comments have zero effect on `configparser`/Moonraker's parsing.
+
+Answering Phase 3's specific questions:
+
+1. **Does the sealed image contain the same config currently running?** VERIFIED FACT: functionally yes — every parsed line is byte-identical; only a non-functional comment differs.
+2. **Was the current persistent file seeded by an older image?** SOURCE-BACKED INFERENCE: the file was pushed manually during a prior session's live-fix step (documented in this project's own git history/session record), not reseeded by a factory-seed run since; that's consistent with the comment-only staleness observed.
+3. **Can a fresh namespace produce the current warnings?** VERIFIED FACT: yes. The warnings are generated purely by Moonraker's parser against the *shape* of the config (reserved-slot options that are structurally never read, §7) — this has nothing to do with staleness, and a byte-for-byte fresh factory seed from the sealed image would reproduce every one of the twelve warnings identically.
+4. **Was the live device manually patched into a non-reproducible state?** VERIFIED FACT (partial): the live config differs from repo source only by a documentation comment (see above) — this is not a non-reproducible state; the file's *content that matters* is exactly what a fresh seed produces. (The stale database webcam entry, §10/§15, *is* a separate, genuinely non-reproducible artifact — see there.)
+5. **Does any application update copy or overwrite `moonraker.conf`?** VERIFIED FACT for NebulaOS's own current design: no. Neither `nebulaos-update-supervisor.sh`'s Klipper/Moonraker/Mainsail update-and-rollback paths nor Moonraker's own `update_manager` component ever touch `moonraker.conf` — confirmed by reading both this session and in the prior final-seal mission's own work on that script (frozen, not re-inspected in full this mission since it's sealed architecture). This is a genuine, deliberate difference from **both** real reference systems (§8/§9), addressed in §20.
+
+---
+
+## 7. Exact running Moonraker parser analysis
+
+This section is the output of dedicated source analysis of `vendor/moonraker/moonraker/components/update_manager/{update_manager,common,app_deploy,git_deploy}.py` and `vendor/moonraker/moonraker/confighelper.py`, all at the exact checked-out commit representing the deployed code (§3). All citations are `file:line` against those files as they exist on this branch.
+
+### 7.1 Are `klipper`/`moonraker` reserved, auto-instantiated slots? — VERIFIED FACT: yes
+
+`UpdateManager.__init__` (`update_manager.py:69-105`):
+- L75: `self.app_config = get_base_configuration(config)` — builds a synthetic merged config *unconditionally*, before any real `[update_manager *]` section is scanned as a "client section".
+- L95-96: `mcfg = self.app_config["moonraker"]`, `kcfg = self.app_config["klipper"]` — pulled from that synthetic config, not the real file.
+- L97-98: `self.updaters['moonraker'] = mclass(mcfg)` — **always** created.
+- L99-105: `self.updaters['klipper'] = kclass(kcfg)` — **always** created (class upgraded from `BaseDeploy` to a real deploy class only if `kcfg.get("path")`/`kcfg.get("env")` exist on disk — this still always executes the assignment).
+- L117-126: real `[update_manager *]` sections are scanned afterward (`config.get_prefix_sections("update_manager ")`); a section literally named `klipper` or `moonraker` is explicitly **skipped** (`if name in self.updaters: ... continue`), with the "already added" warning specifically suppressed for `["klipper", "moonraker"]` (L122). These sections are *only ever consulted* as an override source inside `get_base_configuration` — never instantiated as their own updater.
+
+### 7.2 What do `BASE_CONFIG`/`OPTION_OVERRIDES`/`get_base_configuration()` actually do?
+
+`common.py`:
+- `BASE_CONFIG` (L24-43) hardcodes `origin`, `requirements`, `venv_args`, `system_dependencies`, `virtualenv` (`sys.exec_prefix`), `pip_environment_variables`, `path` (`source_info.source_path()`), `managed_services` for moonraker; `moved_origin`, `origin`, `requirements`, `venv_args`, `install_script`, `managed_services` for klipper.
+- `OPTION_OVERRIDES = ("channel", "pinned_commit", "refresh_interval", "report_anomalies")` (L45) — **the entire whitelist** of what a `[update_manager klipper]`/`[update_manager moonraker]` section can override.
+- `get_base_configuration()` (L93-113): L97-100 set `type`/`path`/`env` for both apps programmatically (`AppType.detect()`, `kconn.path`, `kconn.executable`); L106-112 copy **only** `OPTION_OVERRIDES` members from the real section, if present, over the hardcoded defaults; L113 merges everything into a **brand-new synthetic `ConfigHelper`** via `config.read_supplemental_dict(base_cfg)`.
+
+`primary_branch` is not in `OPTION_OVERRIDES` at all — there is no code path anywhere that would let a `[update_manager klipper]`/`[update_manager moonraker]` section override it.
+
+### 7.3 Why does the warning fire for everything except `channel`?
+
+The warning is generic and structural, not "option illegal in this context." `confighelper.py`'s `validate_config()` (L507-530), called once after all components load, iterates the real backing `configparser` for each section (L522: `for opt, val in self.config.items(sect)`) and warns (L523-525) for any option not present in `self.parsed[sect]` — a dict populated only as a side effect of an actual `.get()`/`.getboolean()`/etc. accessor call on a `ConfigHelper` sharing that root-tracked dict (`_get_option`, L125-181, esp. L172).
+
+`getsection()` (L118-123) passes `self.parsed` **by reference**, so the `OPTION_OVERRIDES` loop in `get_base_configuration` (`common.py:109-112`, which does call `app_cfg.get(opt)` against the *real* root-tracked section object) legitimately marks `channel`/`pinned_commit`/`refresh_interval`/`report_anomalies` as parsed. But everything `AppDeploy`/`GitDeploy` reads afterward — `type`, `path`, `origin`, `primary_branch`, `managed_services`, `virtualenv`, `requirements` — is read off `mcfg`/`kcfg`, the object `read_supplemental_dict()` returns. That method (`confighelper.py:477-483`) builds a **completely separate** `DictSourceWrapper`/private `configparser` and a **fresh, empty** `parsed = {}` (L483). Reads against it never touch the real file's parser or the root `parsed` dict `validate_config()` inspects — so from that function's point of view, those seven options were simply never read in the real section, full stop, regardless of whether they were functionally used elsewhere.
+
+### 7.4 Would these options be legal under a non-reserved name?
+
+**VERIFIED FACT: yes.** Under e.g. `[update_manager nebulaos_klipper]`, `cfg = config[section]` (`update_manager.py:119`) is a real, root-tracked `getsection()` call; `GitDeploy(cfg)`'s full constructor chain reads every one of these directly off that real object: `type` (`app_deploy.py:44`), `path` (`app_deploy.py:76`), `virtualenv` (`app_deploy.py:87-88`), `requirements` (`app_deploy.py:133`), `managed_services` (`app_deploy.py:156-158`), `origin`/`primary_branch` (`git_deploy.py:39,41`), `refresh_interval` (`base_deploy.py:35`), plus `channel`/`pinned_commit` directly too. None of these would warn.
+
+### 7.5 How does Moonraker discover Klipper's real path/repo for the reserved slot?
+
+`common.py:98-100` sets `path`/`env`/`type` from `kconn.path`/`kconn.executable`/`AppType.detect(kconn.path)` — `kconn` is `KlippyConnection`, whose `_path`/`_executable` start at hardcoded `~/klipper`/`~/klippy-env/bin/python` defaults (`klippy_connection.py:89-90`), are then loaded from the Moonraker database (`klippy_connection.py:158-159`), then continuously updated from whatever Klippy itself reports live over its own identify handshake (`_save_path_info()`, `klippy_connection.py:352-363`, persisted back to the DB). `UpdateManager._set_klipper_repo` (`update_manager.py:227-248`) re-derives these again on the `server:klippy_identified` event. **The config file's `path`/`origin` values for `[update_manager klipper]` play no role at any point in this chain.**
+
+### 7.6 How does Moonraker discover its own path/venv; does explicit `virtualenv:` do anything?
+
+`common.py:30,32`: `virtualenv: sys.exec_prefix`, `path: str(source_info.source_path())` — both hardcoded, neither in `OPTION_OVERRIDES`. The explicit `virtualenv: /usr/data/nebulaos/envs/moonraker` in NebulaOS's `[update_manager moonraker]` is **completely inert** for the reserved slot: it is not even fetched from the real section (confirmed by §7.2/§7.3), and the actually-used venv is whatever `sys.exec_prefix` resolves to for the running process (which, as it happens, *is* the correct `/usr/data/nebulaos/envs/moonraker/bin/python3` — see §3 — because that's the interpreter the process was launched under, not because the config line did anything).
+
+### 7.7 Does a crashed reserved updater leave options "unparsed forever," or were they never considered?
+
+**VERIFIED FACT: never considered, independent of crash/success.** The `OPTION_OVERRIDES` copy (`common.py:106-112`) runs at `update_manager.py:75`, *before* the reserved updaters are even constructed (L95-105) — so whether `GitDeploy(kcfg)`/`GitDeploy(mcfg)` succeeds or throws has no bearing on whether `channel` et al. get marked parsed (they already are, by then), and the other seven options were never going to be marked parsed regardless, because nothing in the entire call chain ever calls an accessor for those names against the real section object. Separately, `validate_config()`'s only whole-section suppression mechanism (`CFG_ERROR_KEY`, `confighelper.py:518-521`) only fires when a `ConfigError` is raised from `_get_option` **on the real section's own `ConfigHelper`** — a `GitDeploy` construction failure happens against the synthetic `kcfg`/`mcfg`, so it never sets this key and never suppresses the warnings. **This directly and conclusively rejects H2** (§17).
+
+### 7.8 Reserved-slot vs generic-updater option table
+
+| Option | `[update_manager klipper]` (reserved) | `[update_manager moonraker]` (reserved) | Generic named `git_repo` updater |
+|---|---|---|---|
+| `type` | ignored, not warned — `AppType.detect(kconn.path)`, `common.py:100` | ignored, not warned — `AppType.detect()`, `common.py:97` | read/used — `app_deploy.py:44` |
+| `path` | ignored, not warned — `kconn.path`, `common.py:98` | ignored, not warned — `source_info.source_path()`, `common.py:32` | read/used — `app_deploy.py:76` |
+| `origin` | ignored, not warned — `BASE_CONFIG`, `common.py:37` | ignored, not warned — `BASE_CONFIG`, `common.py:26` | read/used — `git_deploy.py:39` |
+| `primary_branch` | ignored, not warned — not in `OPTION_OVERRIDES`; hardcoded fallback `"master"` if read at all (`git_deploy.py:41`, never reached for reserved slots) | same | read/used — `git_deploy.py:41` |
+| `managed_services` | ignored, not warned — hardcoded `"klipper"`, `common.py:41` | ignored, not warned — hardcoded `"moonraker"`, `common.py:33` | read/used — `app_deploy.py:151-158` |
+| `virtualenv` | ignored, not warned — klipper's `BASE_CONFIG` has no `virtualenv` key (uses `env`/`kconn.executable`) | ignored, not warned — hardcoded `sys.exec_prefix`, `common.py:30` | read/used — `app_deploy.py:85-91` |
+| `requirements` | ignored, not warned — `BASE_CONFIG`, `common.py:38` | ignored, not warned — `BASE_CONFIG`, `common.py:27` | read/used — `app_deploy.py:133` |
+| `channel` | read/used — `OPTION_OVERRIDES`, `common.py:45,109-112` | same | read/used — `app_deploy.py:46` |
+| `pinned_commit` | read/used — `OPTION_OVERRIDES` | same | read/used — `git_deploy.py:42` |
+| `refresh_interval` | read/used — `OPTION_OVERRIDES` (+ global fallback, `update_manager.py:547`) | same | read/used — `base_deploy.py:35` |
+
+---
+
+## 8. Current upstream Moonraker comparison
+
+**SOURCE-BACKED INFERENCE**, from git history rather than a fresh online doc lookup (per Phase 1's own instruction to treat the exact running commit as primary authority):
+
+- The reserved-slot/`OPTION_OVERRIDES` mechanism is foundational and long-stable (`003acd5 update_manager: fetch klipper paths from klippy_connection` established it; only one option, `report_anomalies`, has been added to the whitelist since, per `dbe0dc4`). It is not a recent change.
+- **Updating Moonraker would not fix, and would not meaningfully worsen, these warnings.** The mechanism generating them is architectural, not version-drift. The log's own wording ("this may become an error in a future version") is a *possible* future Moonraker-side hardening (turning stale-option warnings into hard errors) — but that would apply equally regardless of whether NebulaOS updates Moonraker now, since it's about the `configparser`-vs-accessor tracking gap in general, not this specific commit.
+- **Reserved-updater behavior has not changed in a way relevant here.** No evidence of a syntax change; these are, and always have been, dead-weight options in this exact context.
+
+**RECOMMENDATION note:** do not chase "update Moonraker" as a fix for this specific problem — it targets the wrong layer (§20).
+
+---
+
+## 9. Stock implementation findings
+
+**VERIFIED FACT** — this exact device's real stock configuration, read directly from the shared `/usr/data` partition (no reboot into stock was needed or performed; `/usr/data` is a single physical partition mounted by both boot slots, confirmed via `mount`/`/proc/cmdline` evidence already established in prior missions):
+
+The device's real stock firmware uses **Guilouz/Creality-Helper-Script**, not pellcorp/creality/SimpleAF — a materially different community tool. Its live `/usr/data/printer_data/config/moonraker.conf`:
+
+```ini
+[update_manager]
+enable_auto_refresh: True
+refresh_interval: 24
+enable_system_updates: False
+
+[update_manager Creality-Helper-Script]
+type: git_repo
+channel: dev
+path: /usr/data/helper-script
+origin: https://github.com/Guilouz/Creality-Helper-Script.git
+primary_branch: main
+managed_services: klipper
+
+# [webcam Camera] block: present but fully commented out, placeholder
+# xxx.xxx.xxx.xxx IPs, service: mjpegstreamer — user must manually
+# uncomment and configure
+
+[update_manager mainsail]
+type: web
+repo: mainsail-crew/mainsail
+path: /usr/data/mainsail
+```
+
+Key findings, cross-checked against a live fetch of the current `Guilouz/Creality-Helper-Script` repository (`main` branch):
+
+1. **Stock does not expose Klipper or Moonraker themselves as `update_manager`-tracked at all.** There is no `[update_manager klipper]` or `[update_manager moonraker]` section anywhere in this device's real stock config. `[update_manager Creality-Helper-Script]` is a **custom-named, non-reserved** git_repo updater for the helper tool itself; `managed_services: klipper` there just means "restart the klipper service after the helper-script's own repo updates" (it patches klippy extras it ships, e.g. `gcode_shell_command.py`).
+2. **Moonraker itself is updated by a shell menu function, not Moonraker's own update_manager**: `scripts/moonraker_nginx.sh`'s `install_moonraker_nginx()`/`install_moonraker_3v3()` do a manual `git stash; git checkout master; git pull` from the helper-script's own menu — entirely outside Moonraker's UI/API.
+3. **Updating Moonraker via this real path unconditionally overwrites `moonraker.conf`**: `rm -f "$KLIPPER_CONFIG_FOLDER"/moonraker.conf; cp "$MOONRAKER_URL2" "$KLIPPER_CONFIG_FOLDER"/moonraker.conf` — a full template overwrite, every time (there is no separate "install" vs "update" code path; re-running install *is* the update). `printer.cfg` is untouched by this specific path (Klipper itself has no update path in this tool at all).
+4. **Stock ships no active default camera.** The template's `[webcam Camera]` block is fully commented out with placeholder IPs; USB camera installation only patches an init.d service file's resolution string, never moonraker.conf's webcam section.
+5. **Optional add-ons (Mainsail, camera-settings include) use targeted `sed`-based line patching** against the existing file (uncomment/uncomment-and-re-comment specific blocks, insert/remove a single `[include ...]` line) rather than whole-file overwrite — this pattern is reserved specifically for Moonraker's own reinstall, not general config management.
+
+---
+
+## 10. Current SimpleAF (pellcorp/creality) findings
+
+**VERIFIED FACT** — live-fetched today from `github.com/pellcorp/creality` (`main`, `pushed_at: 2026-07-27T21:06:06Z`), not relying solely on prior cached snippets in this repo's own docs (which were independently re-confirmed byte-identical where they overlapped):
+
+```ini
+# k1/moonraker.conf
+[update_manager klipper]
+channel: dev
+pinned_commit: 386fde4fd38e8eda6999e58bf260eceb00051188
+report_anomalies: False
+
+[update_manager moonraker]
+channel: dev
+pinned_commit: abd2026b90d86fb738c6619be3ceefcedee2006c
+
+[update_manager mainsail]
+type: web
+channel: beta
+repo: mainsail-crew/mainsail
+path: /usr/data/mainsail
+```
+
+```ini
+# k1/webcam.conf, included via [include webcam.conf]
+[webcam default]
+location: printer
+enabled: True
+service: mjpegstreamer-adaptive
+stream_url: /webcam/?action=stream
+snapshot_url: /webcam/?action=snapshot
+...
+```
+
+Key findings:
+
+1. **SimpleAF uses the reserved `klipper`/`moonraker` names, and deliberately sets only `channel`/`pinned_commit`/`report_anomalies`** — exactly, and only, `OPTION_OVERRIDES`'s members (§7.2). This is not an accident: SimpleAF relies entirely on Moonraker's own reserved-slot auto-discovery (`BASE_CONFIG` + live `KlippyConnection` reporting), the same mechanism documented in §7.5-7.6, and never sets `path`/`origin`/`virtualenv` because doing so would be pure dead weight for the reserved names — precisely the bug NebulaOS's own config has.
+2. **NebulaOS's own path/origin values are not comparable 1:1 with SimpleAF's**, because NebulaOS's Klipper/Moonraker checkouts genuinely live at non-default paths (`/usr/data/nebulaos/apps/*` vs. Klipper's own live-discovered path and Moonraker's own `sys.exec_prefix`/`source_info` discovery) — but per §7.5-7.6, *neither* system can express a nonstandard path via these config keys for the reserved slots; both are structurally overridden by the runtime discovery mechanisms regardless of what's typed in the file. NebulaOS's paths already are what Klippy/Moonraker report live (confirmed §3), so the config-file values are redundant documentation, not functional configuration, in both systems equally.
+3. **Real install paths**: Klipper `/usr/data/klipper` (git), venv `/usr/share/klippy-env`; Moonraker `/usr/data/moonraker` (git, hard-pinned via `git reset --hard`), venv `/usr/data/moonraker-env` (**extracted from a prebuilt tarball**, not built via on-device pip); Mainsail/Fluidd `/usr/data/{mainsail,fluidd}` (release-zip extraction, no git).
+4. **Default camera is config-backed** (`[webcam default]` in an included file), matching NebulaOS's own current design choice, not the database-seeding alternative.
+5. **`service: mjpegstreamer-adaptive` is the generic Moonraker/Mainsail label for any raw MJPEG-over-HTTP source** — the actual backend is ustreamer (confirmed via `k1/services/S50webcam`, `k1/nginx.conf`'s `mjpgstreamer` upstream, `k1/nginx/fluidd`'s `/webcam/` proxy), not literal mjpg-streamer. This exactly matches NebulaOS's own pipeline (ustreamer → nginx `/webcam/` → Moonraker/Mainsail), independently confirming §16's "correct service value" finding.
+6. **Config regeneration is active, not one-time.** `--update`/`--reinstall` deletes the entire `/usr/data/pellcorp.done` marker, causing *every* gated install function (including the unconditional `cp .../moonraker.conf`/`cp .../webcam.conf`) to re-run in full. `printer.cfg` specifically is reset to a factory-snapshot baseline and then has a saved user-overrides diff replayed on top via a dedicated Python tool (`config-helper.py`, built on the `ConfigUpdater` library) that performs dozens of surgical section/key patches per printer model. **The Moonraker database is the one component genuinely protected** — explicitly tarred before removing the old Moonraker checkout and restored immediately after the fresh clone.
+
+---
+
+## 11. Stock / SimpleAF / NebulaOS comparison table
+
+| Area | Stock (Creality-Helper-Script, this device) | Current SimpleAF (pellcorp/creality) | NebulaOS sealed |
+|---|---|---|---|
+| Moonraker source | Official upstream, git, `/usr/data/moonraker` | Official upstream, git, hard-pinned, `/usr/data/moonraker` | Official upstream, git, `/usr/data/nebulaos/apps/moonraker`, user-updatable (no pin) |
+| Moonraker update mechanism | Helper-script shell menu (`git pull`), **not** Moonraker `update_manager` | Moonraker `update_manager`, reserved `moonraker` slot | Moonraker `update_manager`, reserved `moonraker` slot |
+| Moonraker app path (config value) | n/a (no `[update_manager moonraker]` section exists) | not set (relies on `BASE_CONFIG`/`sys.exec_prefix`/`source_info`) | set (`path`, `virtualenv`) — **inert for the reserved slot**, §7.6 |
+| Moonraker Python environment | `/usr/data/moonraker-env` (on-device venv, not inspected further) | `/usr/data/moonraker-env`, prebuilt tarball | `/usr/data/nebulaos/envs/moonraker`, `--system-site-packages`, built on-device |
+| Persistent data path | `/usr/data/printer_data` | `/usr/data/printer_data` (standard) | `/opt/printer_data` (bind-mounted from `/usr/data/nebulaos/printer_data`) |
+| `moonraker.conf` path | `/usr/data/printer_data/config/moonraker.conf` | `/usr/data/printer_data/config/moonraker.conf` | `/opt/printer_data/config/moonraker.conf` (bind mount) |
+| Database path | `/usr/data/printer_data/database` (inferred, not directly inspected) | `/usr/data/printer_data/database` | `/opt/printer_data/database/moonraker-sql.db` |
+| Klipper updater | **None** — no update_manager slot for Klipper at all | Reserved `klipper` slot, hard-pinned | Reserved `klipper` slot, user-updatable |
+| Moonraker updater | **None** (see above) | Reserved `moonraker` slot, hard-pinned | Reserved `moonraker` slot, user-updatable |
+| Mainsail updater | `type: web`, reserved-name-equivalent generic section, no channel set (stable) | `type: web`, `channel: beta` | `type: web`, `channel: beta` |
+| Updater section type (klipper/moonraker) | n/a | Reserved | Reserved |
+| Repository detection | n/a | Live `KlippyConnection`/`sys.exec_prefix`/`source_info` (implicit) | Same mechanism (implicit; config values redundant) |
+| Service detection | Explicit `managed_services: klipper` on the helper-script's own updater | Implicit (`BASE_CONFIG`) | Explicit `managed_services:` set but **inert** for reserved slots |
+| Camera definition source | Config, but **disabled by default** (commented out) | Config (`[webcam default]`, included file) | Config (`[webcam Nebula]`) |
+| Camera service value | `mjpegstreamer` (template placeholder, unused by default) | `mjpegstreamer-adaptive` | `mjpegstreamer-adaptive` |
+| Stream URL | placeholder `http://xxx.xxx.xxx.xxx:8080/?action=stream` (unused by default) | `/webcam/?action=stream` | `/webcam/?action=stream` (confirmed working, §16) |
+| Snapshot URL | placeholder (unused by default) | `/webcam/?action=snapshot` | `/webcam/?action=snapshot` (confirmed working, §16) |
+| Camera editable in Mainsail | n/a (none active by default) | No (config-sourced, same restriction) | **No** (config-sourced — Moonraker API-level restriction, §15) |
+| Application update touches config | **Yes** — Moonraker reinstall unconditionally overwrites `moonraker.conf` | **Yes** — every reinstall/update re-copies `moonraker.conf`/`webcam.conf`; `printer.cfg` actively migrated | **No** — NebulaOS's own update-supervisor never touches `moonraker.conf` (deliberate difference, §6) |
+| Application update touches database | Not directly observed (no update path touches Moonraker's DB in the inspected scripts) | **No** — explicitly tar-backed-up and restored around every Moonraker reinstall | No (NebulaOS has no mechanism that would) |
+| Fresh-install default mechanism | One-time `cp` from template at first install; **re-copied on every subsequent "update"** too | One-time-per-run `cp`, but re-runs on every update/reinstall (marker deleted) | One-time seed at factory-seed/namespace-creation time only (§13 lifecycle) |
+| Config migration mechanism | None (whole-file overwrite substitutes for migration) | Yes — real, active (`config-helper.py`/`ConfigUpdater`, factory-snapshot + overrides-diff replay) | None (by design, per the governing closure-mission brief: no deployed user base to migrate) |
+
+**Where NebulaOS differs intentionally vs. accidentally:**
+- **Intentional, correctly justified**: no config-migration framework (no deployed OpenKE user base, per the closure mission's own explicit finding); Klipper/Moonraker are genuinely user-updatable (no pin) rather than hard-pinned, per this mission's own stated goal; Mainsail via release/beta, matching both references.
+- **Accidental, not evidenced by any reference system**: setting `path`/`origin`/`managed_services`/`virtualenv`/`requirements`/`type` under the *reserved* `klipper`/`moonraker` section names — neither stock nor SimpleAF does this (stock doesn't use the reserved names for these apps at all; SimpleAF uses the reserved names but only ever sets `OPTION_OVERRIDES` members). This is the direct, sole cause of the warnings, and is a divergence from proven practice, not a considered design choice.
+- **Accidental, stale-comment claim**: NebulaOS's own moonraker.conf asserts config-sourced webcams are "loaded once... inert on any boot after that" — this is factually wrong per `webcam.py`'s actual source (§15); it is re-parsed every boot. This wrong belief may have shaped other (uninvestigated) assumptions elsewhere in the codebase and is worth correcting regardless of the recommendation adopted.
+
+---
+
+## 12. NebulaOS configuration lifecycle
+
+**VERIFIED FACT / SOURCE-BACKED INFERENCE**, drawn from prior missions' own established, unchanged (frozen) mechanisms — not re-modified this mission, only read:
+
+```text
+tracked template (scripts/build/overlay/opt/printer_data/config/moonraker.conf)
+  → Buildroot overlay sync (04-cross-compile-app-stack.sh, unchanged)
+  → rootfs squashfs (immutable, baked at build time)
+  → S01persistent-datastore seeds /usr/data/nebulaos/printer_data on first boot
+     from the squashfs default IF NOT ALREADY PRESENT
+  → S05nebulaos-activate bind-mounts /usr/data/nebulaos/printer_data
+     onto /opt/printer_data (unconditional, once namespace validated)
+  → first Moonraker start reads the seeded file
+  → ordinary reboot: no re-seed, no re-copy (file persists as-is)
+  → Klipper/Moonraker/Mainsail update or rollback: config untouched
+     (nebulaos-update-supervisor.sh's own scope is source tree + venv only)
+  → custom A/B rootfs switch: config untouched (separate partition, /usr/data
+     is shared across both boot slots)
+  → missing-namespace recovery: re-seeds from the squashfs default again
+     (same one-time-if-absent semantics as first boot)
+```
+
+Answering Phase 9's specific questions:
+
+1. **Is `moonraker.conf` copied only on an empty namespace?** VERIFIED FACT (per unchanged `S01persistent-datastore`/factory-seed logic, not re-modified this mission): yes, seed-once-if-absent semantics.
+2. **Does application updating ever touch it?** VERIFIED FACT: no (confirmed by reading the sealed update-supervisor's own scope, unchanged).
+3. **Does application rollback touch it?** VERIFIED FACT: no, same reasoning.
+4/5. **Does Mainsail/Moonraker update touch the database?** VERIFIED FACT: no — neither update path in NebulaOS's design ever writes to Moonraker's database directly; only Moonraker itself (its own webcam/history/frontend components) writes to its own database at runtime.
+6. **Does namespace recovery seed a correct current file?** VERIFIED FACT: yes, in the sense that it seeds *the exact byte content baked into whatever image is currently flashed* — which reproduces the current warnings identically (see §6, item 3), so "correct" here means "faithful to the sealed image's own config," not "warning-free."
+7. **Can a newer firmware image remain stuck with an old invalid persistent config?** VERIFIED FACT: yes, structurally — the seed-once-if-absent mechanism means a device that already has a namespace never re-seeds `moonraker.conf` from a newer image, ever (this is exactly what was observed and manually corrected during the prior closure mission's own Phase 10 fix, §6).
+8. **Is that a problem for fresh installs, existing installs, or only this development device?** VERIFIED FACT: the reserved-slot warnings are NOT a staleness problem at all — a byte-for-byte fresh install of the current sealed image reproduces them identically (see §6, item 3, and §7 throughout). The "old persistent config" class of problem is real but separate, and per the closure mission's own explicit finding, was judged not worth a migration framework given no deployed user base — this investigation did not find new evidence to revisit that judgment.
+9. **Is a migration mechanism truly necessary, or is one correct seed enough?** SOURCE-BACKED INFERENCE, informed by §9/§10/§11: neither real reference system relies on "one correct seed, forever" for `moonraker.conf` — both regenerate it on every update. NebulaOS's own choice to *never* touch config on update is not what either reference does for config files in general, but it IS closer to what both references effectively guarantee for the *database* specifically. The practical implication (§20) is not "NebulaOS needs a migration framework" but "whatever must survive an application update should be database-backed, matching what actually survives in both real systems" — a narrower, more specific conclusion than either "yes, build a migration framework" or "no, current design is already correct."
+10. **Would the sealed image itself reproduce the warnings from a clean namespace?** VERIFIED FACT: yes (§6, item 3) — this is not a symptom of the specific live device's history.
+
+---
+
+## 13. Application-update lifecycle
+
+Frozen architecture, not modified or re-audited in depth this mission (already covered under sealed scope): `nebulaos-update-supervisor.sh`'s Klipper/Moonraker paired-rollback and Mainsail release-rollback mechanisms operate exclusively on the application source tree (`/usr/data/nebulaos/apps/*`) and, for Moonraker, its paired venv (`/usr/data/nebulaos/envs/moonraker`). **VERIFIED FACT** (re-confirmed by reading the unchanged script this mission, read-only): no code path in it ever opens, writes, or deletes `moonraker.conf`, `printer.cfg`, or any file under `/opt/printer_data/database`. This is consistent with §12's answers 2-3 above and is the one area where NebulaOS's design is *already* narrower/safer than both real reference systems (neither of which protects config files from update-time overwrite).
+
+## 14. Rollback lifecycle
+
+Same frozen mechanism (Mainsail atomic directory-replace, Moonraker paired source+venv restore) — already live-qualified in the final-seal mission and not re-tested here (rollback tests are explicitly forbidden this mission). No rollback path touches `moonraker.conf` or the Moonraker database, by the same reasoning as §13.
+
+---
+
+## 15. Camera ownership and Mainsail behavior
+
+**VERIFIED FACT**, from direct reading of `vendor/moonraker/moonraker/components/webcam.py`:
+
+- `WebcamManager.__init__` (L42-63): L46-51 parses every `[webcam ...]` config section **on every single Moonraker startup**, unconditionally, into `self.webcams` — constructed via `WebCam.from_config()`, which sets `source="config"` (L412).
+- `component_init()` (L68-100), an *async* step that runs after `__init__`, separately loads database-backed cameras (`db.get_item("webcams", default={})`, L74) via `WebCam.from_database()` (`source="database"`, L460). **Critically**: if a database camera's `name` collides with an already-loaded config camera's name (L89-94), the database entry is silently dropped (`ro_info.append("Detected webcam name collision... This camera will be ignored.")`, logged only as a rollover log item) and **never overwrites or merges with** the config camera.
+- **This directly and completely contradicts NebulaOS's own moonraker.conf comment**, which currently claims: *"Loaded once at first boot - Moonraker copies `[webcam]` sections into its own database as source 'config' the first time it sees them, and this section becomes inert on any boot after that."* Nothing in `webcam.py` ever writes a config-sourced camera into the database, and nothing about it becomes "inert" — it is re-read from the live config file every single restart. This comment should be corrected regardless of which recommendation is adopted (§20).
+- **Edit/delete restriction is a hard, unconditional Moonraker server-side rule, not a Mainsail UI choice**: `_handle_webcam_request` (L166-208) explicitly checks `if webcam.source == "config": raise self.server.error(...)` for both `POST` (L175-179, "Cannot overwrite webcam '...' sourced from Moonraker configuration") and `DELETE` (L197-201, "Cannot delete webcam '...' sourced from Moonraker configuration"). Mainsail disabling its own Edit/Delete buttons for this camera is simply reflecting an API-level restriction that exists regardless of which frontend is used.
+- `WebCam._protected_fields = ["source", "uid"]` (L237) — even a database-backed camera can never have its own `source`/`uid` changed via `update()` (L363), reinforcing that `source` is a structural, immutable classification, not a UI convention.
+
+**A real, previously-undiscovered issue found in the process** (live evidence, `/opt/printer_data/database/moonraker-sql.db`, SQL query against `namespace_store` WHERE `namespace='webcams'`):
+
+```json
+{"uid": "bc6b0e60-20ff-49c4-b5ed-38e1fc68d0ed",
+ "name": "Nebula", "service": "uv4l-mjpeg",
+ "targetFps": 15, "urlStream": "/webcam/?action=stream",
+ "urlSnapshot": "/webcam/?action=snapshot", ...}
+```
+
+This is a **stale, database-backed webcam entry**, also named `"Nebula"`, with an old camelCase field schema (`targetFps`/`urlStream`/`urlSnapshot` rather than the current `target_fps`/`stream_url`/`snapshot_url`) and a `service` value (`uv4l-mjpeg`) that does not match the currently-configured `mjpegstreamer-adaptive` — almost certainly a leftover from an earlier (OpenKE-era or early-NebulaOS) Moonraker/schema version. `moonraker.log` confirms this collision is detected and the entry silently discarded on **every single boot** ("Detected webcam name collision: Nebula, uuid: bc6b0e60-... This camera will be ignored," recurring across every logged boot this session). This is inert dead data today (masked by the name collision), but is exactly the kind of "invisible until someone renames the config camera" landmine worth cleaning up in any later implementation mission (§25).
+
+A secondary, tangential observation (not deeply investigated, out of core scope): `/machine/update/status` reports `"is_valid": false` for the moonraker entry despite `is_dirty: false`, `detached: false`, `channel_invalid: false`. This is likely related to the shallow-clone/synthetic-wrapper-commit state described in §3, not to the reserved-slot options warnings. Flagged for awareness, not analyzed further here.
+
+---
+
+## 16. Camera transport verification
+
+**VERIFIED FACT**, all read-only, all successful:
+
+| Test | Result |
+|---|---|
+| Direct ustreamer stream (`http://127.0.0.1:8080/?action=stream`) | `HTTP/1.0 200 OK`, `Content-Type: multipart/x-mixed-replace;boundary=boundarydonotcross` |
+| Direct ustreamer snapshot (`http://127.0.0.1:8080/?action=snapshot`) | `HTTP/1.1 200 OK`, `X-UStreamer-Online: true`, real width/height headers |
+| nginx `/webcam/?action=snapshot` (trailing slash) | `HTTP/1.1 200 OK`, `Content-Type: image/jpeg` |
+| nginx `/webcam?action=snapshot` (no trailing slash) | `HTTP/1.1 301 Moved Permanently` → `Location: http://127.0.0.1/webcam/?action=snapshot` (standard nginx `location /webcam/ {}` prefix-match behavior, not a bug — Mainsail always requests the trailing-slash form per its own configured `stream_url`/`snapshot_url`, so this redirect is never actually exercised in practice) |
+
+**Conclusion: the configured `/webcam/?action=stream` / `/webcam/?action=snapshot` URLs and `service: mjpegstreamer-adaptive` value are correct and fully functional**, independently confirmed at both the raw-ustreamer and nginx-proxy layers, and independently corroborated by SimpleAF's own reference using the identical service value and URL pattern for the identical real backend (ustreamer) in §10. **H9 and H10 are rejected** (§17).
+
+---
+
+## 17. Root-cause hypothesis matrix
+
+### H1 — Reserved updater sections use the wrong option set
+```text
+Status: CONFIRMED
+Evidence: §7 in full (exact file:line citations); §7.8 table
+Impact: Clean install (reproduces identically, §6/§12) and existing device equally
+Likely correction: Analysis only — see §20 Option A
+```
+
+### H2 — Update Manager failed before consuming valid options
+```text
+Status: REJECTED
+Evidence: §7.7 — the OPTION_OVERRIDES copy runs before updater construction;
+/server/info confirms failed_components is empty (update_manager loaded successfully)
+Impact: n/a
+Likely correction: n/a
+```
+
+### H3 — Moonraker version mismatch
+```text
+Status: REJECTED
+Evidence: §8 — the reserved-slot mechanism is long-stable in Moonraker's own
+history; not a recent change; updating Moonraker would not change this behavior
+Impact: n/a
+Likely correction: n/a
+```
+
+### H4 — Runtime discovery mismatch (bind mounts, venv, Git metadata confusing discovery)
+```text
+Status: REJECTED as a cause of the WARNINGS; PARTIALLY CONFIRMED as a real,
+SEPARATE prior issue already fixed
+Evidence: §7.5/§7.6 show discovery works via KlippyConnection/sys.exec_prefix
+regardless of config content - the warnings are unrelated to discovery success.
+The /root/klippy-env bind mount (final-seal-mission-adjacent, already shipped)
+exists specifically to make discovery succeed for the update_manager COMPONENT
+LOAD (a different, already-resolved problem, not the options warnings).
+Impact: n/a for the warnings; already resolved for its own original problem
+Likely correction: none needed for this investigation's questions
+```
+
+### H5 — Stale persistent `moonraker.conf`
+```text
+Status: REJECTED (for the warnings); CONFIRMED but functionally inert (for a
+documentation comment only)
+Evidence: §6 - live file differs from repo source only by an 18-line comment
+block with zero parsing effect; the warnings are fully reproducible from either copy
+Impact: UI-only (a reader of the live file sees slightly less explanation
+than the repo source) - no behavioral impact
+Likely correction: re-push the current source file (mechanical, not a design change)
+```
+
+### H6 — Incorrect clean-install template
+```text
+Status: CONFIRMED (the template itself is what causes the warnings, by design
+flaw, not incorrect seeding)
+Evidence: §6 item 3, §7 throughout
+Impact: Clean install AND existing device equally
+Likely correction: see §20 Option A/B
+```
+
+### H7 — Config-backed camera is intentionally immutable in Mainsail because `source=config`
+```text
+Status: CONFIRMED
+Evidence: §15 - exact webcam.py L175-179/197-201 citations; this is a Moonraker
+server-side rule, not a Mainsail-specific UI choice
+Impact: Clean install and existing device equally; by design, not a bug
+Likely correction: analysis only - see §20 camera options
+```
+
+### H8 — Camera database/config precedence conflict
+```text
+Status: CONFIRMED
+Evidence: §15 - a real, stale database-backed "Nebula" webcam (old
+uv4l-mjpeg/camelCase schema) silently collides with and is discarded in favor
+of the config-sourced "Nebula" camera, on every boot, confirmed via live
+moonraker.log entries
+Impact: Existing (this) device only - a fresh install's database would not
+contain this stale entry; not a clean-install-reproducible issue
+Likely correction: analysis only - stale entry should be removed in any later
+implementation mission (§25)
+```
+
+### H9 — Wrong service value
+```text
+Status: REJECTED
+Evidence: §16 - direct transport verification confirms mjpegstreamer-adaptive
+works correctly against the real ustreamer MJPEG output; §10 confirms SimpleAF
+uses the identical value for the identical backend
+Impact: n/a
+Likely correction: n/a
+```
+
+### H10 — Wrong proxy URL
+```text
+Status: REJECTED
+Evidence: §16 - /webcam/?action=stream and /webcam/?action=snapshot both
+verified working end to end through nginx
+Impact: n/a
+Likely correction: n/a
+```
+
+### H11 — Development-device-only contamination
+```text
+Status: PARTIALLY CONFIRMED - applies to the stale database webcam entry (H8),
+NOT to the update_manager warnings (which are clean-install-reproducible, per H1/H6)
+Evidence: §6, §15
+Impact: Existing device only, for the database entry specifically
+Likely correction: analysis only - see §25
+```
+
+---
+
+## 18. Architecture invariants
+
+All of the following, as stated in the governing mission brief, are confirmed **preserved** by every option considered in §19-20 (none require violating any of them):
+
+```text
+Moonraker:            official upstream source                — preserved (no patching considered or needed)
+Mainsail:              official upstream beta release           — preserved
+Klipper:               NebulaOS-maintained Pellcorp-derived branch — preserved, unaffected
+Application updates:   modify source/release + paired env only  — preserved; no option below changes this
+Persistent printer_data: survives application updates           — preserved; unaffected
+moonraker.conf:        remains outside application source       — preserved
+Moonraker database:    remains outside application source       — preserved
+Camera user state:     survives application updates             — addressed directly in §20 (currently NOT
+                                                                    survivable for a user-created camera under
+                                                                    Option 1/status quo, since there is no
+                                                                    update path that would delete it anyway -
+                                                                    but a config-sourced camera also can't be
+                                                                    user-modified in the first place, which is
+                                                                    the actual complaint)
+Immutable rootfs:      retains factory recovery seeds            — preserved, untouched
+A/B rootfs update:     does not overwrite persistent operational data — preserved, untouched
+NebulaOS ownership:    integration/paths/boot order/seeding/rollback/hardware services — preserved
+No upstream patching:  Moonraker/Mainsail not patched for custom config — preserved by every option below
+```
+
+**A correct factory seed alone does satisfy all of these invariants** for the update_manager warnings (§20 Option A is pure configuration change, zero code). For the camera problem, a correct factory seed choice (§20, camera options) also satisfies all invariants without any new abstraction — the existing `source=config`/`source=database` distinction already built into upstream Moonraker is sufficient; no extra framework is needed.
+
+---
+
+## 19. Options considered
+
+### Update Manager options
+
+**Option A — Minimal reserved sections.** Reduce `[update_manager klipper]`/`[update_manager moonraker]` to only the options that are ever actually read for reserved slots (`channel`, and optionally `pinned_commit`/`refresh_interval`/`report_anomalies` if wanted) — remove `type`, `path`, `origin`, `primary_branch`, `managed_services`, `virtualenv`, `requirements` entirely (or, per §7 and per this project's own prior "keep as accurate documentation" style, retain them purely as comments, not as INI key=value lines Moonraker's configparser would ever see). Path/remote/branch/service discovery already works correctly today via `KlippyConnection`/`sys.exec_prefix` (confirmed §3 — the running process already uses exactly `/usr/data/nebulaos/envs/moonraker` and the correct Klipper checkout, with zero config-file involvement). Mainsail compatibility: unaffected — Mainsail reads Moonraker's own `/machine/update/status`/`/server/info`, not the raw config file; it already displays correct data today (confirmed §5, `/machine/update/status` round-trips real commit history). **Matches exactly what SimpleAF's current reference does (§10).**
+
+**Option B — Generic explicitly named Git updaters** (e.g. `[update_manager nebulaos_klipper]`). Would make every currently-dead option genuinely functional (§7.4), but: creates a **duplicate updater entry** situation, since Moonraker *still* auto-instantiates the reserved `klipper`/`moonraker` slots regardless (§7.1) — NebulaOS would end up with four updater entries in Mainsail's UI (the two auto-created reserved ones, now still present and presumably showing the exact same warnings unless *also* emptied per Option A, plus two new custom-named ones) unless the reserved slots are simultaneously reduced to nothing. This does not match either reference system's actual practice and adds real complexity (duplicate restart-service handling, duplicate rollback-supervisor interaction, Mainsail presenting two Klipper-labeled cards) with no discovery/compatibility benefit Option A doesn't already deliver via already-working runtime discovery.
+
+**Option C — Keep current configuration.** Rejected on the evidence: §7 conclusively shows these options are not "legal but secondary to another failure" — they are structurally never read for the reserved names, full stop, in this exact commit and in every commit since `003acd5`. There is no scenario in which keeping them stops the warnings.
+
+**Ranking:** Option A (upstream-compatible, matches SimpleAF exactly, zero new complexity, clean-install-safe) > Option C (rejected on evidence) > Option B (adds complexity with no benefit, diverges from both references).
+
+### Camera options
+
+**Option 1 — Config-defined default (current state).** Simple at clean-install time (one `[webcam Nebula]` block, matches both stock's template intent and SimpleAF's `[webcam default]` exactly). Cost: permanently non-editable/non-deletable via Mainsail/API by design (§15) — this is Moonraker's own upstream behavior for `source=config`, not a bug to fix, but it is the direct cause of the user-visible complaint ("cannot be edited or deleted").
+
+**Option 2 — Database-defined factory default.** Seed the camera once (e.g., via a one-time boot-time API call or direct DB insert during factory-seed/namespace-creation, matching the same "seed once if absent" pattern §12 already uses for `moonraker.conf` itself) with `source="database"`. User-editable and user-deletable afterward, matching normal Mainsail camera-management UX. Needs a duplicate-prevention guard (a marker, exactly analogous to the existing factory-seed "already seeded" markers this project already uses elsewhere — not a new class of mechanism). Survives application updates identically to the config option (neither path is ever touched by any update mechanism, §13). Matches the standard "Add a webcam via the Mainsail UI" experience new users of any moonraker-based system already expect. **Neither stock nor SimpleAF actually uses this pattern for their own default camera** (§9/§10 — both are config-backed) — this would be a deliberate, evidenced-motivated divergence from both references, justified specifically by resolving the user's stated Edit/Delete complaint, not by precedent.
+
+**Option 3 — No default camera entry.** Simplest; matches stock's own actual default behavior exactly (§9 — stock ships the webcam block fully commented out). Mainsail does not auto-discover cameras; a user with a working ustreamer/nginx pipeline would need to manually add one via Mainsail's own "Add Camera" UI (straightforward — the pipeline already works end-to-end, §16). Loses the "camera just works out of the box" property NebulaOS currently has and SimpleAF also provides.
+
+**Ranking:**
+- Upstream compatibility: Option 1 = Option 2 (both use standard Moonraker mechanisms) > Option 3 (no camera at all, technically "most compatible" but weakest UX).
+- Stock similarity: Option 3 (exact match) > Option 1 (matches the *shape* stock ships, disabled) > Option 2 (no stock precedent).
+- SimpleAF similarity: Option 1 (exact match) > Option 3 > Option 2 (no precedent).
+- Clean-install correctness: Option 1 = Option 2 (both seed once, deterministically) > Option 3 (nothing to get wrong, but nothing works out of the box either).
+- Update survival: Option 1 = Option 2 (identical — neither path is ever touched by updates in NebulaOS's own design) > Option 3 (n/a).
+- Rollback safety: identical reasoning, all three tie (no rollback path touches config or database).
+- User control (edit/delete): Option 2 (full control) > Option 3 (full control, but must create it first) > Option 1 (none — by design).
+- Implementation complexity: Option 1 (zero — already shipped) < Option 3 (remove one section) < Option 2 (one-time seed step + duplicate-prevention marker).
+- Stale-state risk: Option 1 (none — always re-read fresh from config, §15) < Option 3 (none) < Option 2 (a seed-once marker could, like `moonraker.conf`'s own seed-once semantics, become stale on a device that's had its namespace recreated from an old image — same class of risk §12 already accepts for config).
+
+---
+
+## 20. Recommended minimum correction
+
+**RECOMMENDATION** (not implemented this mission):
+
+### Update Manager
+1. **Reduce `[update_manager klipper]` and `[update_manager moonraker]` to only real, read options.** Concretely: keep `channel: dev` (and add `pinned_commit`/`report_anomalies` only if a future mission decides it wants them — neither is needed today). Remove `type`, `path`, `origin`, `primary_branch`, `managed_services`, `virtualenv`, `requirements` as INI lines. If the intent behind those lines (documenting where Klipper/Moonraker actually live and which origin they track) is worth preserving, express it as a comment above the section — exactly the style this project already uses everywhere else for "accurate but not machine-read" documentation (e.g. the existing "Closure-mission correction" comment block, §6). This is **Option A**, matching SimpleAF's own proven current practice exactly.
+2. **Discovery is already correct and needs no change.** Klipper's path/executable and Moonraker's own venv are already being reported correctly via the live mechanisms confirmed in §3/§7.5-7.6 — reducing the config does not change what Moonraker actually uses, only removes the dead-weight lines that generate warnings about content nothing ever reads.
+3. **No correction needed to the `/root/klippy-env` bind mount or venv architecture** — that mechanism solves a different, already-resolved problem (component load succeeding at all, §17/H4) and remains necessary regardless of this recommendation.
+
+### Camera
+4. **Recommend Option 2 (database-defined factory default) over the status quo**, specifically because it is the only option that resolves the user's actual, stated complaint (cannot edit/delete) while still seeding a working default out of the box — matching the spirit of "the camera should just work" that motivated the original config-based design, without its side effect. This is an evidenced, deliberate divergence from both stock and SimpleAF (neither of which needs this, because neither ships an editable-by-default camera at all — stock ships none, SimpleAF ships an equally immutable config one), justified by this project's own explicit UX goal (working camera in Mainsail without a stale/frozen entry the user can't manage).
+5. **Seed once, following this project's own established "seed once if absent" idiom** (same shape as `moonraker.conf`'s own factory-seed, §12) — not a continuously-reconciled framework, and not a generic override system.
+6. **Remove the stale `uv4l-mjpeg`/camelCase database webcam entry** (`bc6b0e60-20ff-49c4-b5ed-38e1fc68d0ed`, §15/H8) as part of the same implementation pass, since it will otherwise sit inertly until some future rename accidentally un-masks it.
+7. **Correct the factually-wrong moonraker.conf comment** about config-webcam persistence (§15) regardless of which camera option is chosen — it currently asserts behavior `webcam.py` does not have.
+
+### On the broader "config lifecycle" question
+8. **No config-migration framework is needed.** §12's own lifecycle trace, plus the evidence in §9-§11, supports a narrower conclusion than either "yes, build one" or "current design already matches proven practice": NebulaOS's existing choice to never touch `moonraker.conf` on update is *stricter* than both real references (which both overwrite it), so no gap exists there requiring a migration mechanism to bridge. The one place a persistence guarantee is genuinely useful (the camera) is exactly where Option 2 already provides it via the database, matching what actually survives updates in both real reference systems (§12, item 9) — not via a new configuration layer.
+
+**This satisfies "prefer correct clean defaults + persistent printer_data + persistent Moonraker database + standard upstream behavior over new frameworks"** exactly as the mission brief requested: nothing here is a new abstraction; every piece is either "stop writing options nothing reads" or "use the specific already-existing Moonraker mechanism (`source=database`) designed for exactly this purpose."
+
+---
+
+## 21. Rejected designs
+
+- **A generic Moonraker config-override/fragment framework** (`user.d`-style) — no evidence anywhere in stock, SimpleAF, or Moonraker's own architecture that this pattern is needed; explicitly out of scope per the governing brief, and this investigation found nothing to justify revisiting that.
+- **Patching upstream Moonraker to accept NebulaOS's extra options** — would violate the "no upstream patching" invariant (§18) for a problem that has a zero-code, config-only fix (§20 Option A).
+- **Generic-named updater sections (Option B)** — rejected in §19 (duplicate-entry problem, no reference-system precedent, no benefit over Option A).
+- **A continuous config-reconciliation/regeneration system matching pellcorp's `config-helper.py` migration engine** — while real and actively used by SimpleAF (§10), NebulaOS's own explicit governing decision (no deployed user base, closure mission) already rejected building a migration framework, and this investigation found no new evidence overturning that; the narrower database-seeding fix (§20) resolves the actual problem without it.
+- **A generic camera-precedence/merge system for config+database collisions** — the existing name-collision-log-and-discard behavior (§15) is standard Moonraker behavior; the fix is to stop shipping a stale entry, not to build conflict resolution around it.
+
+---
+
+## 22. Proposed implementation scope
+
+For a later implementation mission (not this one) to plan against — **RECOMMENDATION**, not a commitment:
+
+1. Edit `scripts/build/overlay/opt/printer_data/config/moonraker.conf`: reduce the two reserved updater sections per §20.1; correct the webcam-persistence comment per §20.7; remove or replace the `[webcam Nebula]` section per whichever camera option is finally chosen.
+2. If Option 2 (database camera) is chosen: add a one-time seed step (likely in `S04nebulaos-factory-seed` or a new dedicated step, following the exact idiom already used for `moonraker.conf`'s own seeding) that POSTs a webcam definition to `/server/webcams/item` (or inserts directly into the `webcams` database namespace) only if no camera with that name/uid already exists — plus a duplicate-prevention marker.
+3. On the live development device only (not a general mechanism): remove the stale `uv4l-mjpeg` database entry (§15/H8) and re-push the corrected `moonraker.conf`.
+4. Update `docs/NEBULAOS_UPDATE_AND_ROLLBACK_DESIGN.md` §2 (the moonraker.conf reference shape) and any other doc quoting the current (soon-to-be-reduced) update_manager sections, to keep documentation matching actual behavior — a recurring theme of this whole project's own established discipline.
+
+## 23. Proposed clean-install qualification
+
+**RECOMMENDATION**: a future implementation mission should verify, on a freshly wiped/reseeded namespace (matching this project's own existing "missing namespace recovery" test pattern):
+- Zero "Unparsed config option" warnings for `[update_manager klipper]`/`[update_manager moonraker]`.
+- `/machine/update/status` still correctly reports real version/commit info for both (confirming discovery still works with the reduced config, per §7.5-7.6's already-proven mechanism).
+- The camera (whichever option chosen) appears correctly in `/server/webcams/list` and Mainsail's UI on first boot, with no name collision logged.
+
+## 24. Proposed update-survival qualification
+
+**RECOMMENDATION**: exercise the existing (already-qualified, sealed) Klipper/Moonraker/Mainsail update and rollback paths and confirm, before and after each:
+- `moonraker.conf` hash unchanged (already true today, §13 — should remain true).
+- The camera entry (if Option 2) survives with user edits intact, if a test edit was made beforehand.
+- No new "Unparsed config option" warnings appear as a side effect of any update path.
+
+## 25. Risks and unresolved questions
+
+- **Risk**: reducing the update_manager sections changes what Mainsail's UI displays for "path"/"repo" metadata in some views, if Mainsail's own frontend reads those fields from the raw config anywhere rather than exclusively from `/machine/update/status`/`/server/info`. Not verified in this investigation (would require inspecting Mainsail's own compiled frontend bundle behavior in more depth than this mission's `release_info.json` check) — **flagged as an open question for the implementation mission**, not a blocker to the recommendation, since §7.5/§7.6 confirm the *live* discovered values are already correct regardless of the config file.
+- **Unresolved**: the `"is_valid": false` moonraker update-status flag (§15, secondary observation) — not chased to a root cause in this investigation; worth a quick look in the implementation mission but does not block or change the recommendation above.
+- **Unresolved**: whether Mainsail's compiled frontend has any camera-`service`-value allowlist behavior beyond what Moonraker's own API restricts — not directly inspected (would require reading Mainsail's bundled JS), though the transport verification (§16) and SimpleAF's identical-value precedent (§10) together make it very unlikely `mjpegstreamer-adaptive` is itself the problem.
+- **Open question for the user/next mission**: whether Option 2's database-seeded camera should be named identically ("Nebula") to the current config camera, or differently, to avoid any transitional collision on a device that still has the current config-sourced entry active at the moment of the upgrade that introduces this change.
+
+## 26. Exact files expected to change later (implementation mission scope, not touched this mission)
+
+```text
+scripts/build/overlay/opt/printer_data/config/moonraker.conf
+scripts/build/overlay/etc/init.d/S04nebulaos-factory-seed   (if Option 2 chosen)
+docs/NEBULAOS_UPDATE_AND_ROLLBACK_DESIGN.md                 (§2 reference shape)
+```
+Plus, on the live development device only (not a repo change): removal of the stale database webcam entry and re-push of the corrected config — both outside this mission's permitted actions.
+
+## 27. Evidence appendix
+
+All commands, commits, hashes, and API responses cited above were captured live during this investigation (2026-07-27) via read-only SSH/API access to `192.168.0.146` (custom slot) and read-only inspection of this repository's `vendor/moonraker` checkout and git history, plus live WebFetch of `github.com/pellcorp/creality` and `github.com/Guilouz/Creality-Helper-Script` (both `main` branch, fetched 2026-07-27). Key raw values, for cross-reference:
+
+- Deployed Moonraker commit: `70e251ecb77a291f9b2c9789f6e0aef4af2b8420` (synthetic wrapper, content-identical to `d5ee17128bb88434aacdab90c2e9e990e2b64e4a`)
+- Deployed Klipper commit: `2d75015d7c76dd31e4b0f49e1ae3fe6ad86cad24`
+- Live `moonraker.conf` SHA-256: `c7c39519c850d9e13ffbf556cb8ba3d432acff8d0e0a2600ddf459b6ead65ae6`
+- Repo source `moonraker.conf` SHA-256 (this branch): `927cccd9fe3083cf07ed742bbf9a9b2eed1b393f0112e3642f0e5daee7e0e72f`
+- Stale database webcam UID: `bc6b0e60-20ff-49c4-b5ed-38e1fc68d0ed`
+- Live config-sourced webcam UID: `18233a49-8719-55d1-9837-f5ac7c00429d`
+- pellcorp/creality Klipper pin (SimpleAF reference): `386fde4fd38e8eda6999e58bf260eceb00051188` (matches NebulaOS's own vendored Klipper fork base, independently confirmed in a prior mission)
+- pellcorp/creality Moonraker pin (SimpleAF reference): `abd2026b90d86fb738c6619be3ceefcedee2006c`

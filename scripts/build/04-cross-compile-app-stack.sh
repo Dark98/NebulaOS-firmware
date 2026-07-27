@@ -62,6 +62,23 @@ docker run --label "openke-build-pid=$$" --rm \
 '
 mkdir -p "$OVERLAY/opt/klipper"
 rm -rf "$OVERLAY/opt/klipper/klippy"
+
+# NebulaOS mutable-runtime closure mission (2026-07-27): empty mount-point
+# baked into the squashfs so S05nebulaos-activate can bind-mount the real,
+# persistent Klipper venv ($NEBULAOS_ROOT/envs/klipper) onto it at boot.
+# Required specifically because Moonraker's update_manager hardcodes
+# "~/klippy-env/bin/python" as its bootstrap default for the klipper slot
+# (klippy_connection.py's own __init__, used synchronously at Moonraker
+# startup, before Klippy's real identify handshake has a chance to report
+# its actual executable) - with no config override available for this
+# slot (confirmed live: path/env/virtualenv aren't in update_manager's own
+# OPTION_OVERRIDES), the only way to make update_manager succeed on the
+# very first Moonraker start (not just self-heal after a lucky second
+# restart once Klippy's real path gets persisted to Moonraker's own db)
+# is to make that exact hardcoded default path real. /root is part of the
+# read-only squashfs, so this directory must exist here at build time -
+# mkdir at runtime would fail (read-only filesystem).
+mkdir -p "$OVERLAY/root/klippy-env"
 cp -r "$VENDOR/klipper/klippy" "$OVERLAY/opt/klipper/"
 find "$OVERLAY/opt/klipper" -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 rm -f "$OVERLAY/opt/klipper/klippy/chelper"/*.o "$OVERLAY/opt/klipper/klippy/chelper"/*.a

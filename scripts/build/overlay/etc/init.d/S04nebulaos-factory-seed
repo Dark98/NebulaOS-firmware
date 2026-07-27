@@ -220,6 +220,46 @@ setup_moonraker_env() {
 	log "moonraker venv created and verified successfully"
 }
 
+# NebulaOS mutable-runtime closure mission (2026-07-27): writable Klippy
+# Python environment, added late after discovering live that Moonraker's
+# update_manager component hardcodes its "klipper" slot's virtualenv
+# detection from Klippy's own reported executable (get_base_configuration()
+# in vendor/moonraker's update_manager/common.py) with no config override
+# available - running klippy under bare /usr/bin/python3 (this build's
+# original S55klipper invocation) makes Moonraker infer a bogus venv root
+# at "/usr" and raise a ConfigError that crashes the *entire*
+# update_manager component (Moonraker's and Mainsail's own update-manager
+# entries included, not just klipper's), confirmed live 2026-07-27. Exactly
+# the same `--system-site-packages` reasoning as setup_moonraker_env()
+# above applies: klippy's real dependencies (vendor/klipper/scripts/
+# klippy-requirements.txt - greenlet, cffi, Jinja2, pyserial, python-can,
+# msgspec) already import successfully against the system Python this
+# build ships, so this venv starts out fully functional with zero new
+# package installs, matching S56moonraker's own identical venv pattern
+# (S55klipper prefers this venv's python the same way).
+setup_klipper_env() {
+	envdir=/usr/data/nebulaos/envs/klipper
+	if [ -x "$envdir/bin/python3" ]; then
+		log "klipper venv already present ($envdir) - skipping"
+		return 0
+	fi
+	log "creating writable Klippy Python environment at $envdir"
+	rm -rf "$envdir.partial"
+	if ! python3 -m venv --system-site-packages "$envdir.partial" 2>/tmp/klipper-venv-error.log; then
+		log "ERROR: venv creation failed - see /tmp/klipper-venv-error.log - leaving no partial state"
+		rm -rf "$envdir.partial"
+		return 1
+	fi
+	if ! "$envdir.partial/bin/python3" -c "import greenlet, cffi, jinja2, serial, can" 2>/tmp/klipper-venv-error.log; then
+		log "ERROR: klipper venv failed its own import smoke test - see /tmp/klipper-venv-error.log - rejecting"
+		rm -rf "$envdir.partial"
+		return 1
+	fi
+	rm -rf "$envdir"
+	mv "$envdir.partial" "$envdir"
+	log "klipper venv created and verified successfully"
+}
+
 record_known_good() {
 	# Phase 8's rollback/health-check machinery consumes this - record the
 	# very first known-good version for each component right after a
@@ -259,7 +299,8 @@ start() {
 	# gate/pause/resume dance entirely rather than pausing services for
 	# no reason on every normal boot after the first.
 	if [ -e "$APPS/klipper/.git" ] && [ -e "$APPS/moonraker/.git" ] && [ -e "$APPS/mainsail/index.html" ] \
-		&& [ -x /usr/data/nebulaos/envs/moonraker/bin/python3 ]; then
+		&& [ -x /usr/data/nebulaos/envs/moonraker/bin/python3 ] \
+		&& [ -x /usr/data/nebulaos/envs/klipper/bin/python3 ]; then
 		log "all components already seeded - nothing to do"
 		return 0
 	fi
@@ -277,6 +318,7 @@ start() {
 	# `sync` after each step flushes rather than leaving dirty pages to
 	# compete with the next step's own memory needs.
 	seed_git_app klipper nebulaos "https://github.com/coreflake1/NebulaOS-klipper.git"
+	setup_klipper_env
 	seed_git_app moonraker master "https://github.com/Arksine/moonraker.git"
 	setup_moonraker_env
 	seed_mainsail

@@ -61,11 +61,37 @@ die() {
 [ "$(readlink -f "$ROOTFS_LABEL_LINK")" = "$ROOTFS_DEV" ] || \
 	die "rootfs2 label resolves to $(readlink -f "$ROOTFS_LABEL_LINK"), expected $ROOTFS_DEV"
 
-# 2. Confirm we are NOT about to write to whatever is currently mounted as
+# 2. Confirm we are NOT about to write to whatever is currently booted as
 #    root - the entire point of using the spare slot is that it's idle.
-CURRENT_ROOT_SRC=$(awk '$2 == "/" {print $1}' /proc/mounts)
-[ "$CURRENT_ROOT_SRC" != "$KERNEL_DEV" ] || die "$KERNEL_DEV is the current root device - refusing"
-[ "$CURRENT_ROOT_SRC" != "$ROOTFS_DEV" ] || die "$ROOTFS_DEV is the current root device - refusing"
+#
+# Real bug found live (closure mission, 2026-07-27): this used to compare
+# against /proc/mounts' root source, which on this device reads as the
+# literal string "/dev/root" - a legacy kernel label that (confirmed live)
+# doesn't even exist as a file in /dev on this image. Comparing that
+# string against $KERNEL_DEV/$ROOTFS_DEV can never match regardless of
+# which partition is actually live, so this check was silently dead code
+# from the very first time this script ran. It went unnoticed for the
+# entire mission because every prior use happened to run while the device
+# was genuinely booted from stock (p5/p7) - kernel2/rootfs2 (p6/p8) really
+# was idle every time, by circumstance, not because this check caught
+# otherwise. The first time this device was already confirmed-good and
+# permanently running custom (p6/p8) when this script ran again, nothing
+# stopped it from writing straight onto the live, currently-executing
+# rootfs - which produced a cascade of segfaults across running processes
+# (pages faulted in against a backing device being concurrently
+# overwritten) and left the device unresponsive until a manual power
+# cycle. The write itself completed and was verified byte-correct
+# afterward (lucky, not safe), but this check must actually work.
+# /proc/cmdline's own root= parameter is the reliable source (confirmed
+# live: "root=/dev/mmcblk0p8" is always the real, concrete boot device on
+# this hardware, unlike /proc/mounts' aliased name).
+ROOT_CMDLINE=$(sed -n 's/.*\broot=\(\S*\).*/\1/p' /proc/cmdline)
+[ -n "$ROOT_CMDLINE" ] || die "could not determine the live root device from /proc/cmdline - refusing to proceed without this safety check"
+ROOT_RESOLVED=$(readlink -f "$ROOT_CMDLINE" 2>/dev/null || echo "$ROOT_CMDLINE")
+[ "$ROOT_RESOLVED" != "$(readlink -f "$KERNEL_DEV")" ] || \
+	die "$KERNEL_DEV is the live root device (cmdline root=$ROOT_CMDLINE) - refusing. If you are re-flashing a custom-OS-level (squashfs) change on a device that's already confirmed-good on custom, cycle back to stock first: write_ota_marker \"ota:kernel\" (see /etc/ota_marker.sh) and reboot, confirm this slot is genuinely idle, then retry - per the established procedure in FIRMWARE.md (Phase 7's own \"found the device already on the custom slot ... cycled to stock\" note)."
+[ "$ROOT_RESOLVED" != "$(readlink -f "$ROOTFS_DEV")" ] || \
+	die "$ROOTFS_DEV is the live root device (cmdline root=$ROOT_CMDLINE) - refusing. If you are re-flashing a custom-OS-level (squashfs) change on a device that's already confirmed-good on custom, cycle back to stock first: write_ota_marker \"ota:kernel\" (see /etc/ota_marker.sh) and reboot, confirm this slot is genuinely idle, then retry - per the established procedure in FIRMWARE.md (Phase 7's own \"found the device already on the custom slot ... cycled to stock\" note)."
 
 # 3. Confirm the source images actually fit, with size compared as real
 #    numbers, not assumed.

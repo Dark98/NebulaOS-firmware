@@ -147,6 +147,23 @@ start() {
 		bind_if_not_already "$NEBULAOS_ROOT/apps/moonraker" /opt/moonraker
 	fi
 
+	# Closure mission (2026-07-27): bind the real Klipper venv onto the
+	# exact path ("~/klippy-env", i.e. /root/klippy-env since moonraker
+	# runs as root) Moonraker's update_manager hardcodes as its bootstrap
+	# default for the klipper slot - not a mutable "app" with its own
+	# rollback lifecycle like klipper/moonraker/mainsail above, so no
+	# validate_app dance (ownership/marker/lock checks) needed, just a
+	# plain existence check + bind. Real bug this fixes, confirmed live:
+	# without this, update_manager crashes on every Moonraker startup that
+	# hasn't already had a lucky prior boot persist Klipper's real
+	# executable path into Moonraker's own database - i.e. always, on a
+	# genuinely fresh device.
+	if [ -x "$NEBULAOS_ROOT/envs/klipper/bin/python3" ]; then
+		bind_if_not_already "$NEBULAOS_ROOT/envs/klipper" /root/klippy-env
+	else
+		log "klipper venv not present at $NEBULAOS_ROOT/envs/klipper - leaving /root/klippy-env unmounted (update_manager's klipper slot will fail to load until S04 provisions it)"
+	fi
+
 	if validate_app mainsail "$NEBULAOS_ROOT/apps/mainsail" "index.html"; then
 		bind_if_not_already "$NEBULAOS_ROOT/apps/mainsail" /usr/share/mainsail
 	fi

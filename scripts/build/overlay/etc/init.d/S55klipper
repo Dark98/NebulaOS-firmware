@@ -10,10 +10,27 @@ APISOCK=/opt/printer_data/comms/klippy.sock
 LOGFILE=/opt/printer_data/logs/klippy.log
 PIDFILE=/var/run/klippy.pid
 
+# NebulaOS mutable-runtime closure mission (2026-07-27): prefer the
+# writable venv S04nebulaos-factory-seed creates at
+# /usr/data/nebulaos/envs/klipper - matches S56moonraker's own identical
+# pattern. Required, not cosmetic: Moonraker's update_manager hardcodes
+# klipper's AppType/virtualenv detection from Klippy's own reported
+# executable (get_base_configuration() in vendor/moonraker's
+# update_manager/common.py) with no config override available - running
+# under bare /usr/bin/python3 makes Moonraker infer a bogus venv root at
+# "/usr" (parent.parent of the executable) and raise a ConfigError that
+# crashes the *entire* update_manager component (Moonraker's and
+# Mainsail's entries included), confirmed live 2026-07-27. Falls back to
+# the system interpreter if the venv doesn't exist yet, same as
+# S56moonraker, so this script never fails to start Klipper over a
+# missing venv.
+PYTHON3=/usr/bin/python3
+[ -x /usr/data/nebulaos/envs/klipper/bin/python3 ] && PYTHON3=/usr/data/nebulaos/envs/klipper/bin/python3
+
 start() {
-	echo "Starting klippy"
+	echo "Starting klippy (using $PYTHON3)"
 	start-stop-daemon -S -b -m -p "$PIDFILE" \
-		-x /usr/bin/python3 -- \
+		-x "$PYTHON3" -- \
 		"$KLIPPY" "$CONFIG" -a "$APISOCK" -l "$LOGFILE"
 	# NebulaOS Memory Resilience Gate: Klipper/MCU communication is the
 	# most protected process on this system - -700, not -1000 (this

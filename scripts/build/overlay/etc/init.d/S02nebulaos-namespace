@@ -42,6 +42,7 @@ create_layout() {
 		"$NEBULAOS_ROOT/apps/mainsail" \
 		"$NEBULAOS_ROOT/apps/guppyscreen" \
 		"$NEBULAOS_ROOT/envs/moonraker" \
+		"$NEBULAOS_ROOT/envs/klipper" \
 		"$NEBULAOS_ROOT/printer_data/config/GuppyScreen/scripts" \
 		"$NEBULAOS_ROOT/printer_data/logs" \
 		"$NEBULAOS_ROOT/printer_data/database" \
@@ -87,7 +88,7 @@ write_manifest() {
   "layout": {
     "apps": ["klipper", "moonraker", "mainsail", "guppyscreen"],
     "guppyscreen_status": "reserved_not_implemented",
-    "envs": ["moonraker"],
+    "envs": ["moonraker", "klipper"],
     "printer_data": "private",
     "shared_gcode_path": "/usr/data/printer_data/gcodes"
   }

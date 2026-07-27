@@ -38,15 +38,25 @@ Unlike SimpleAF's script (which operates directly on `/usr/data`), NebulaOS's re
 | `/usr/data/nebulaos/maintenance/*.log`, retention-manager's own log | Rotate | Age > 7 days, adapted from SimpleAF's own 7-day log threshold | Never delete the live/active log |
 | `/usr/data/nebulaos/backups/mainsail/last-known-good`, `/usr/data/nebulaos/backups/moonraker/last-known-good-env` | **Never touched by this script at all** | N/A | Resolves the original open decision about env-rotation: Phase D didn't version envs as `envs/moonraker-<n>` — it maintains exactly one continuously-refreshed paired backup per component, owned and rotated by the update-supervisor itself (`nebulaos-update-supervisor.sh`), not by retention. |
 
-### 2.3 Disk-pressure levels (update-blocking)
+### 2.3 Disk-pressure levels (maintenance admission control)
 
 Three levels, adapting SimpleAF's single 1000MB threshold into a graduated response since NebulaOS's namespace-restricted retention has less to reclaim than SimpleAF's whole-partition script:
 
-1. **Normal** (free space above a "safe" floor — **800MB, now measured, see §4**): no action beyond routine rotation above.
-2. **Caution** (below the safe floor): block new update downloads/staging (refuse to start a new update transaction) but do not delete anything beyond the routine rotation in §2.2; log a warning.
-3. **Critical** (below a hard floor — **300MB, now measured, see §4**): in addition to Caution's blocking, run the emergency shared-gcode cleanup (§2.4) and purge the pip cache (adapting SimpleAF's unconditional `.cache` purge into a Critical-only action here, since NebulaOS's `wheel`/`pip` tooling, Phase 2, is new and this cache did not previously exist).
+1. **Normal** (free space above a "safe" floor — **800MB, measured, see §4**): no action beyond routine rotation above.
+2. **Caution** (below the safe floor): block NebulaOS's own maintenance-heavy operations (refuse to start a new factory-seed or update transaction) but do not delete anything beyond the routine rotation in §2.2; log a warning.
+3. **Critical** (below a hard floor — **300MB, measured, see §4**): in addition to Caution's blocking, run the emergency shared-gcode cleanup (§2.4) and purge the pip cache (adapting SimpleAF's unconditional `.cache` purge into a Critical-only action here, since NebulaOS's `wheel`/`pip` tooling, Phase 2, is new and this cache did not previously exist).
 
-**Real, honest limitation confirmed during the closure mission (matches the same class of constraint already documented for Klipper/Moonraker/Mainsail rollback in `docs/NEBULAOS_UPDATE_AND_ROLLBACK_DESIGN.md` §6.1)**: "block new update downloads" cannot mean intercepting Moonraker's own update button before it starts a download - there is no hook for that, confirmed against the same vendored `update_manager` source. What Caution/Critical actually gate in this implementation is this project's own maintenance-heavy operations (factory-seed, retention itself) and is logged clearly for a human/future integration to act on; it is not a true pre-download admission control. Recorded as a known gap, not silently assumed solved.
+**Documented platform limitation (final-seal mission, 2026-07-27) — the exact, consistent wording used everywhere this is described:**
+
+> NebulaOS blocks its own factory-seeding, rollback, repair, cleanup, and other maintenance-heavy operations when free space is below the measured safety floor. Moonraker's native Update Manager does not provide a supported pre-download admission hook in the shipped integration, so NebulaOS cannot universally stop a user-triggered Moonraker-managed download before it begins. Low-space state is reported and cleanup protections remain active, but universal pre-download blocking is not claimed.
+
+Confirmed against the same vendored `update_manager` source already cited for the same class of constraint in `docs/NEBULAOS_UPDATE_AND_ROLLBACK_DESIGN.md` §6.1. This is an accepted, documented limitation of the current integration, not an open implementation item - a Moonraker fork, plugin, UI-only button disable, or invasive interception mechanism was deliberately not built to close it.
+
+```text
+RETENTION_THRESHOLDS: COMPLETE
+NEBULAOS_MAINTENANCE_ADMISSION_CONTROL: COMPLETE
+MOONRAKER_NATIVE_PRE_DOWNLOAD_BLOCKING: NOT AVAILABLE IN CURRENT INTEGRATION
+```
 
 ### 2.4 Emergency shared-gcode cleanup (special exception to the namespace rule)
 

@@ -229,6 +229,73 @@ check /etc/init.d/S50nginx
 check /opt/printer_data/config/printer.cfg
 check /opt/printer_data/config/moonraker.conf
 
+echo "=== Moonraker update_manager / camera defaults (final implementation mission, 2026-07-27) ==="
+check /usr/libexec/nebulaos-seed-camera
+check /etc/init.d/S57nebulaos-camera-seed
+
+# Content checks against the actual shipped moonraker.conf, not just its
+# presence - the whole point of this mission was that a real, previously
+# undetected content-level defect (unsupported options under the reserved
+# klipper/moonraker update_manager sections; an active, permanently
+# un-editable config-sourced default camera) shipped in a build that
+# passed every existence-only check that came before it. debugfs extracts
+# the real file content from the built image itself, not from the source
+# tree, so a build where the overlay sync silently dropped or mismatched
+# the edit will not pass this check.
+#
+# NOTE for future edits to this section: everything in this file from the
+# earlier "docker run ... bash -c" line through its own matching close
+# further below is one single-quoted string as far as the real, top-level
+# shell running this script is concerned - a literal single-quote
+# character anywhere in this region (even inside a # comment) would
+# terminate that outer quoting early and corrupt the rest of the file.
+# Use double quotes for every string/pattern added below instead - none
+# of them need a literal dollar sign or backtick, so double-quoting is
+# always safe here.
+MOONRAKER_CONF_CONTENT=$(debugfs -R "cat /opt/printer_data/config/moonraker.conf" /img/rootfs.ext2 2>/dev/null)
+
+check_conf_absent() {
+	pattern="$1"; desc="$2"
+	if echo "$MOONRAKER_CONF_CONTENT" | grep -qE "$pattern"; then
+		echo "MISS moonraker.conf still contains: $desc"
+	else
+		echo "OK   moonraker.conf does not contain: $desc"
+	fi
+}
+check_conf_present() {
+	pattern="$1"; desc="$2"
+	if echo "$MOONRAKER_CONF_CONTENT" | grep -qE "$pattern"; then
+		echo "OK   moonraker.conf contains: $desc"
+	else
+		echo "MISS moonraker.conf missing: $desc"
+	fi
+}
+# Extracts just the [update_manager klipper] and [update_manager moonraker]
+# sections own body (up to the next [section] header) - scoped
+# deliberately, since path/type ARE legitimate, needed options under the
+# DIFFERENT (generic, type: web) [update_manager mainsail] section; a
+# whole-file check would wrongly flag those as a regression.
+RESERVED_SECTIONS_BODY=$(echo "$MOONRAKER_CONF_CONTENT" | awk "
+	/^\[update_manager klipper\]\$/ || /^\[update_manager moonraker\]\$/ { grab=1; next }
+	/^\[/ { grab=0 }
+	grab { print }
+")
+
+check_conf_absent "^\[webcam " "an active [webcam ...] section"
+if echo "$RESERVED_SECTIONS_BODY" | grep -qE "^(type|path|origin|primary_branch|managed_services|virtualenv|requirements): "; then
+	echo "MISS [update_manager klipper]/[update_manager moonraker] still contain unsupported options (type/path/origin/primary_branch/managed_services/virtualenv/requirements) - these are reserved slots, see docs/NEBULAOS_MOONRAKER_UPDATE_AND_CAMERA_ANALYSIS.md"
+else
+	echo "OK   [update_manager klipper]/[update_manager moonraker] contain no unsupported options"
+fi
+check_conf_present "^\[update_manager klipper\]\$" "the reserved [update_manager klipper] section"
+check_conf_present "^\[update_manager moonraker\]\$" "the reserved [update_manager moonraker] section"
+check_conf_present "^\[update_manager mainsail\]\$" "the Mainsail web updater section"
+if echo "$RESERVED_SECTIONS_BODY" | grep -qE "^channel: dev\$"; then
+	echo "OK   [update_manager klipper]/[update_manager moonraker] set channel: dev"
+else
+	echo "MISS [update_manager klipper]/[update_manager moonraker] missing channel: dev"
+fi
+
 echo "=== SSH/console/recovery (FIRMWARE.md sec 18/21/22/24) ==="
 check /usr/sbin/dropbear
 check /usr/sbin/wpa_cli

@@ -60,17 +60,17 @@ log() {
 	echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) nebulaos-update-supervisor: $1"
 }
 
-# $1=component name -> echoes: path|init_script|opt_path
+# $1=component name -> echoes: path|init_script|opt_path|pidfile
 component_info() {
 	case "$1" in
 		klipper)
-			echo "$NEBULAOS_ROOT/apps/klipper|/etc/init.d/S55klipper|/opt/klipper"
+			echo "$NEBULAOS_ROOT/apps/klipper|/etc/init.d/S55klipper|/opt/klipper|/var/run/klippy.pid"
 			;;
 		moonraker)
-			echo "$NEBULAOS_ROOT/apps/moonraker|/etc/init.d/S56moonraker|/opt/moonraker"
+			echo "$NEBULAOS_ROOT/apps/moonraker|/etc/init.d/S56moonraker|/opt/moonraker|/var/run/moonraker.pid"
 			;;
 		mainsail)
-			echo "$NEBULAOS_ROOT/apps/mainsail||/usr/share/mainsail"
+			echo "$NEBULAOS_ROOT/apps/mainsail||/usr/share/mainsail|"
 			;;
 	esac
 }
@@ -129,13 +129,49 @@ wait_for_print_idle() {
 	return 0
 }
 
+# Real bug found live (Moonraker paired-rollback test, 2026-07-27): a
+# genuinely pre-existing race in this project's own init scripts -
+# S55klipper/S56moonraker's own `restart() { stop; start; }` calls stop
+# and start back-to-back with zero delay. BusyBox's start-stop-daemon's
+# start step detects the OLD process (still genuinely mid-graceful-
+# shutdown, not yet exited - confirmed live: "python3 is already
+# running", moonraker down entirely for 3.5+ minutes afterward) and
+# silently refuses to launch a new one. Using the combined "restart"
+# action never gave this project's own fail-fast health checks anything
+# to actually detect - not a false positive that time, a real missed
+# restart. Splitting stop/start with an explicit wait for genuine process
+# exit in between avoids the race entirely; not modifying
+# S55klipper/S56moonraker's own frozen restart action itself, since
+# normal (non-rollback, lower-I/O-contention) restarts elsewhere in this
+# project have never hit this race in practice - only this supervisor's
+# own restart calls need the fix.
+safe_stop_start() {
+	# $1=component
+	info=$(component_info "$1")
+	init_script=$(echo "$info" | cut -d'|' -f2)
+	pidfile=$(echo "$info" | cut -d'|' -f4)
+	"$init_script" stop
+	if [ -n "$pidfile" ]; then
+		tries=0
+		while [ -f "$pidfile" ] && [ -d "/proc/$(cat "$pidfile" 2>/dev/null)" ] 2>/dev/null; do
+			tries=$((tries + 1))
+			if [ "$tries" -ge 20 ]; then
+				log "$1: old process still not exited after ${tries}s - proceeding with start anyway"
+				break
+			fi
+			sleep 1
+		done
+	fi
+	"$init_script" start
+}
+
 restart_component() {
 	# $1=component
 	info=$(component_info "$1")
 	init_script=$(echo "$info" | cut -d'|' -f2)
 	wait_for_print_idle || return 1
 	log "$1: restarting via $init_script"
-	"$init_script" restart
+	safe_stop_start "$1"
 	# Real bug found live (first rollback test, 2026-07-26): Klipper
 	# legitimately takes 15-25s to reconnect to the MCU and reach
 	# klippy_state=ready after a process restart (confirmed repeatedly
@@ -148,9 +184,37 @@ restart_component() {
 	return 0
 }
 
-# Repeated stage2 samples over a short window - fails fast on the first
-# bad sample rather than waiting out the full window pointlessly.
+# Real bug found live (Moonraker paired-rollback test, 2026-07-27): even
+# with restart_component's fixed grace period, a restart immediately
+# following a venv restore (real extra disk I/O from cp -a on top of the
+# git reset) sometimes needed longer than the grace period + first sample
+# to reach ready - moonraker.log showed a completely clean startup and
+# "Klippy ready" moments after the poller had already given up and gone to
+# factory-fallback. A fixed grace period can't account for variable extra
+# load from whatever the rollback itself just did. Splits stabilization
+# into two phases: first, tolerantly POLL (not fail-fast) for the system
+# to become ready at all within a generous bound; only once it has been
+# seen ready at least once do subsequent samples fail fast - a check
+# failing AFTER a prior success is a real, new problem (e.g. crashed right
+# after starting), not startup variance, and should still be caught
+# quickly.
+wait_for_initial_ready() {
+	tries=0
+	max_tries=18
+	while [ "$tries" -lt "$max_tries" ]; do
+		"$HEALTHCHECK" stage2 && return 0
+		tries=$((tries + 1))
+		sleep 10
+	done
+	return 1
+}
+
+# Confirms health STAYS true for a short window after first becoming
+# ready - fails fast on any bad sample here, since by this point the
+# system has already proven it can start; a failure now is a real
+# regression, not startup timing.
 stabilized_stage2() {
+	wait_for_initial_ready || return 1
 	i=0
 	while [ "$i" -lt "$STABILIZE_SAMPLES" ]; do
 		sleep "$STABILIZE_INTERVAL"
@@ -205,7 +269,7 @@ factory_fallback() {
 	# component_info's mainsail entry deliberately leaves this field empty.
 	[ -n "$init_script" ] || return 0
 	wait_for_print_idle
-	"$init_script" restart
+	safe_stop_start "$1"
 }
 
 # NebulaOS mutable-runtime closure mission (2026-07-27), Phase C: Mainsail
@@ -549,6 +613,21 @@ poll_once() {
 		if [ -e "$LOCKDIR/$name.lock" ] && [ "$state" = "factory-fallback" ]; then
 			continue
 		fi
+
+		# Real gap found live (2026-07-27): on a device whose moonraker
+		# state.json already existed from before this paired-venv backup
+		# mechanism shipped, last_seen_commit was never empty, so the
+		# bootstrap branch above (which is the only other place
+		# moonraker_snapshot_env() is called outside a successful
+		# validation) never ran even once - leaving the paired backup
+		# permanently missing until the next real commit change. Self-heal
+		# opportunistically: if healthy with no pending change, take the
+		# snapshot now rather than waiting indefinitely for one.
+		if [ "$name" = "moonraker" ] && [ "$state" = "healthy" ] && [ ! -d "$MOONRAKER_ENV_BACKUP" ]; then
+			log "$name: no paired venv backup yet on an already-healthy install - snapshotting now"
+			moonraker_snapshot_env
+		fi
+
 		if [ "$current" != "$last_seen" ] && [ "$state" != "validating" ]; then
 			validate_component "$name"
 		fi

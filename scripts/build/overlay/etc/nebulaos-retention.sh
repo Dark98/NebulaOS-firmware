@@ -38,9 +38,26 @@ delete() {
 	f="$1"; reason="$2"
 	if [ "$dryrun" = "true" ]; then
 		log "[DRY-RUN] would delete ($reason): $f"
+		return 0
+	fi
+	# Real bug found live (Phase E, 2026-07-27): BusyBox's `rm -f` refuses
+	# to remove a directory at all ("rm: 'x' is a directory", exit 1) -
+	# every call this function ever made against the directory-based
+	# per-component backups (klipper/moonraker/mainsail are all real
+	# directories, not flat files) has silently done nothing while this
+	# same function logged "deleting" as if it had succeeded. Only the
+	# flat-file cases (rotated logs, config backups) were ever genuinely
+	# removed. Confirmed live: a manual `rm -f` against a real populated
+	# directory left it completely intact.
+	if [ -d "$f" ]; then
+		rm -rf "$f"
+	else
+		rm -f "$f"
+	fi
+	if [ -e "$f" ]; then
+		log "FAILED to delete ($reason): $f (still present after rm)"
 	else
 		log "deleting ($reason): $f"
-		rm -f "$f"
 	fi
 }
 
@@ -114,16 +131,30 @@ clean_abandoned_staging() {
 }
 
 clean_obsolete_versions() {
-	# Keep exactly current + previous per component under backups/ - never
-	# delete the only remaining copy. BusyBox find has no -printf (found
-	# live: "unrecognized: -printf") - `ls -1t` (BusyBox ls extension,
-	# newest-first) is the portable alternative to sorting by mtime.
+	# Keeps the newest 2 *failure-evidence* directories (failed-<ts>) per
+	# component - never deletes the only remaining copy. BusyBox find has
+	# no -printf (found live: "unrecognized: -printf") - `ls -1t` (BusyBox
+	# ls extension, newest-first) is the portable alternative to sorting
+	# by mtime.
+	#
+	# Real bug found live (Phase E, 2026-07-27): this used to sort and
+	# prune EVERYTHING under backups/$comp mixed together, including
+	# last-known-good/last-known-good-env - the single, continuously-
+	# updated backup the Phase C/D update-supervisor's own rollback
+	# mechanism depends on to restore from, not an "old version" to
+	# rotate away. Confirmed live via the real retention log: this ran
+	# repeatedly across multiple boots and genuinely tried to delete it
+	# every time (masked only by a separate bug - see delete() - that
+	# made the rm itself silently fail on directories). Explicitly
+	# excluded now: only failed-* evidence directories are ever
+	# candidates, the paired backup is never touched by this script at
+	# all (it's the supervisor's own responsibility, not retention's).
 	for comp in klipper moonraker mainsail; do
 		dir="$NEBULAOS_ROOT/backups/$comp"
 		[ -d "$dir" ] || continue
-		count=$(find "$dir" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l)
+		count=$(find "$dir" -mindepth 1 -maxdepth 1 -name 'failed-*' 2>/dev/null | wc -l)
 		[ "$count" -le 2 ] && continue
-		( cd "$dir" && ls -1t ) | tail -n "+3" | while read -r name; do
+		( cd "$dir" && ls -1td failed-* 2>/dev/null ) | tail -n "+3" | while read -r name; do
 			f="$dir/$name"
 			path_is_namespace_safe "$f" && delete "$f" "obsolete-version-$comp"
 		done

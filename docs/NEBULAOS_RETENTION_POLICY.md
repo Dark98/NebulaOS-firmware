@@ -1,6 +1,6 @@
 # NebulaOS Retention Policy
 
-**Status:** Implemented (Phase 9) — `/etc/nebulaos-retention.sh` + `/etc/init.d/S45nebulaos-cleanup`, verified present by `06-verify.sh`. Informed by direct investigation of SimpleAF's real, currently-shipping cleanup mechanism (Section 1). Section 3's open decisions (exact disk-pressure floor values, env-versioning-dependent rotation) were not revisited against real-device measurement during this pass — see `docs/NEBULAOS_MUTABLE_RUNTIME_IMPLEMENTATION_REPORT.md` for what Phase 12 did and did not exercise live.
+**Status:** Implemented and closed out (Phase 9 / closure mission Phase E) — `/etc/nebulaos-retention.sh` + `/etc/init.d/S45nebulaos-cleanup`, verified present by `06-verify.sh`. Informed by direct investigation of SimpleAF's real, currently-shipping cleanup mechanism (Section 1). §3's open decisions are now resolved (§2.3's floor values against real measured data, §2.2's env-rotation row against the paired-backup mechanism Phase D actually shipped) — see §4 for the closure-mission measurement pass and §5 for two real bugs found live during it.
 
 ---
 
@@ -33,19 +33,20 @@ Unlike SimpleAF's script (which operates directly on `/usr/data`), NebulaOS's re
 |---|---|---|---|
 | `/usr/data/nebulaos/updates/*/staging` | Remove abandoned staging directories | Age > 24h AND no active transaction owns it | Transaction ownership tracked via Phase 8's state file, not just age |
 | `/usr/data/nebulaos/updates/*` (downloads) | Remove incomplete/orphaned downloads | Same as above | |
-| `/usr/data/nebulaos/backups/{klipper,moonraker,mainsail,printer_config}` | Rotate to current + previous known-good only | Keep exactly 2 (current, previous); never delete the only remaining copy | Mirrors the mission's rollback policy (one previous known-good per component) |
+| `/usr/data/nebulaos/backups/{klipper,moonraker,mainsail}/failed-*` | Rotate failure-evidence directories only | Keep newest 2 per component; never delete the only remaining copy | Real bug found live (§5): must exclude `last-known-good`/`last-known-good-env` by name, not just sort-and-keep-2 across everything in the directory |
+| `/usr/data/nebulaos/backups/printer_config` | Rotate to current + previous known-good only | Keep exactly 2 (current, previous); never delete the only remaining copy | |
 | `/usr/data/nebulaos/maintenance/*.log`, retention-manager's own log | Rotate | Age > 7 days, adapted from SimpleAF's own 7-day log threshold | Never delete the live/active log |
-| `/usr/data/nebulaos/envs/moonraker-*` (old venvs, if the venv itself is versioned per update) | Remove superseded envs beyond current + previous | Keep exactly 2 | Only once Phase 7's env-versioning scheme is implemented |
+| `/usr/data/nebulaos/backups/mainsail/last-known-good`, `/usr/data/nebulaos/backups/moonraker/last-known-good-env` | **Never touched by this script at all** | N/A | Resolves the original open decision about env-rotation: Phase D didn't version envs as `envs/moonraker-<n>` — it maintains exactly one continuously-refreshed paired backup per component, owned and rotated by the update-supervisor itself (`nebulaos-update-supervisor.sh`), not by retention. |
 
 ### 2.3 Disk-pressure levels (update-blocking)
 
 Three levels, adapting SimpleAF's single 1000MB threshold into a graduated response since NebulaOS's namespace-restricted retention has less to reclaim than SimpleAF's whole-partition script:
 
-1. **Normal** (free space above a "safe" floor — proposed 800MB, informed by SimpleAF's 1000MB reference minus this mission's own smaller footprint per the storage budget in the architecture doc): no action beyond routine rotation above.
+1. **Normal** (free space above a "safe" floor — **800MB, now measured, see §4**): no action beyond routine rotation above.
 2. **Caution** (below the safe floor): block new update downloads/staging (refuse to start a new update transaction) but do not delete anything beyond the routine rotation in §2.2; log a warning.
-3. **Critical** (below a hard floor — proposed 300MB): in addition to Caution's blocking, run the emergency shared-gcode cleanup (§2.4) and purge the pip cache (adapting SimpleAF's unconditional `.cache` purge into a Critical-only action here, since NebulaOS's `wheel`/`pip` tooling, Phase 2, is new and this cache did not previously exist).
+3. **Critical** (below a hard floor — **300MB, now measured, see §4**): in addition to Caution's blocking, run the emergency shared-gcode cleanup (§2.4) and purge the pip cache (adapting SimpleAF's unconditional `.cache` purge into a Critical-only action here, since NebulaOS's `wheel`/`pip` tooling, Phase 2, is new and this cache did not previously exist).
 
-Exact floor values are proposed, not yet validated against a real device measurement under load — to be confirmed during Phase 12 qualification, not asserted as final here.
+**Real, honest limitation confirmed during the closure mission (matches the same class of constraint already documented for Klipper/Moonraker/Mainsail rollback in `docs/NEBULAOS_UPDATE_AND_ROLLBACK_DESIGN.md` §6.1)**: "block new update downloads" cannot mean intercepting Moonraker's own update button before it starts a download - there is no hook for that, confirmed against the same vendored `update_manager` source. What Caution/Critical actually gate in this implementation is this project's own maintenance-heavy operations (factory-seed, retention itself) and is logged clearly for a human/future integration to act on; it is not a true pre-download admission control. Recorded as a known gap, not silently assumed solved.
 
 ### 2.4 Emergency shared-gcode cleanup (special exception to the namespace rule)
 
@@ -66,8 +67,39 @@ Every retention-manager run supports `--dry-run` (log intended deletions without
 
 Adapted directly from SimpleAF's own mechanism (§1): detect a start timestamp before a fixed reference date, wait for a large forward clock jump before performing any `mtime`-based comparison. NebulaOS's own implementation should use a reference date close to its own baseline (`functional-production-baseline-2026-07-23` or later) rather than SimpleAF's hardcoded 2025 date, and the same "wait for >20 minute jump" heuristic, adjusted only if real-device testing (Phase 12) shows this project's own NTP sync timing differs meaningfully from SimpleAF's board.
 
-## 3. Open decisions
+## 3. Open decisions (as originally drafted — resolved in §4/§5)
 
 - Exact Caution/Critical free-space floors (proposed 800MB/300MB above) — need real-device validation, not just adapted from SimpleAF's single 1000MB number, since NebulaOS's own footprint (~150-250MB per the architecture doc's storage budget) differs from SimpleAF's.
 - Whether Moonraker env versioning (Phase 7) actually produces multiple env directories needing rotation, or whether a single env is upgraded in place with a full backup/restore instead — affects whether the `envs/moonraker-*` row in §2.2 is real or moot.
 - Retention manager invocation mechanism: a dedicated `S45cleanup`-numbered init script (matching SimpleAF's own numbering convention and this project's existing `S*` scheme) triggered at boot, versus a periodic cron-like mechanism — NebulaOS's BusyBox init has no native cron; likely a boot-time run plus an optional periodic re-invocation hook from Moonraker itself (a component or a timer), to be decided during implementation.
+
+## 4. Closure mission (2026-07-27): real measurement, resolving the floor values
+
+Measured directly on the physical device (partition `/dev/mmcblk0p10`, 6022MB total), steady state after all four closure-mission phases were live-tested:
+
+```
+apps/klipper        233.3M   (real upstream lib/ - bundled MCU toolchain sources for every
+                               architecture Klipper supports, not NebulaOS-specific bloat)
+apps/moonraker         6.9M
+apps/mainsail         10.1M
+envs/moonraker        25.5M   (--system-site-packages: only Moonraker's own few
+                               venv-local packages, not a full duplicate of system site-packages)
+backups/mainsail/last-known-good        10.1M   (mirrors the live app directory exactly)
+backups/moonraker/last-known-good-env   25.5M   (mirrors the live venv exactly)
+backups/klipper                          4.0K   (git history is the "backup" - no directory copy needed)
+system/swapfile                       128.1M   (fixed, Memory Resilience Gate)
+---------------------------------------------------------------------
+total /usr/data/nebulaos                466.4M
+partition free space at measurement    2580MB  (43% free, 6022MB total)
+```
+
+**Temporary peak during the heaviest single operation** (a Moonraker paired source+venv rollback - the only operation this mission found that duplicates a large directory): `atomic_directory_replace()`'s staging-then-swap sequence briefly holds the venv's `.staging` copy (25.5M) alongside the still-present original (25.5M) before the old copy is removed - a real, measured peak of **~55-80MB**, never sustained (torn down again within the same operation, typically under a minute per the live rollback timings observed in Phase D testing). Mainsail's own equivalent (backup snapshot + staging swap) peaks lower, around **~30MB**, since its steady-state footprint (10.1M) is smaller.
+
+**Conclusion**: the originally *proposed* 800MB/300MB floors were not arbitrary guesses that needed correcting - real measurement confirms they already provide roughly 10x and 4x margin respectively over the heaviest actually-observed temporary peak (~80MB). **Kept unchanged, now backed by measured evidence instead of an adapted reference number.**
+
+## 5. Two real bugs found live during the closure-mission measurement pass
+
+1. **`delete()` silently failed on every directory-based backup.** BusyBox's `rm -f` refuses to remove a directory at all (`rm: 'x' is a directory`, exit 1) - confirmed live with a direct reproduction. Every one of this script's own log lines claiming `deleting (obsolete-version-<comp>): ...` against `backups/{klipper,moonraker,mainsail}` (all real directories) had been doing nothing for the entire mission; only the flat-file cases (rotated logs, config backups) were ever genuinely removed. Fixed: `delete()` now uses `rm -rf` for directory targets and verifies the target is actually gone afterward, logging a `FAILED to delete` line instead of a false `deleting` line if not.
+2. **`clean_obsolete_versions()` didn't distinguish failure evidence from the active paired backup.** It sorted and rotated *everything* under `backups/$comp` together, including `last-known-good`/`last-known-good-env` - the single, continuously-refreshed backup the Phase C/D update-supervisor's own rollback mechanism depends on to restore from, not "an old version to prune." Confirmed live via the real retention log: this had been running automatically at every boot (`S45nebulaos-cleanup`) and genuinely attempted to delete the paired backup repeatedly across multiple boots throughout this mission - masked only by bug 1 above (the `rm -f` failure meant it never actually succeeded). Fixed: only `failed-*`-prefixed evidence directories are ever candidates now; the paired backup names are structurally excluded from the glob this function operates on, not just skipped by a name check that could regress.
+
+Both fixes verified live: `sh /etc/nebulaos-retention.sh --dry-run` correctly identifies only the oldest `failed-*` entries beyond the newest 2 per component, and a direct `rm -rf` reproduction against a real populated test directory confirmed the corrected removal mechanism actually works this time.

@@ -11,14 +11,33 @@
 # Now that the kernel side is a tagged, proven production baseline
 # (functional-production-baseline-2026-07-23) with working A/B fallback, this
 # mounts the real partition - but everything this build writes lives under
-# its own /usr/data/openke/ subdirectory, never touching whatever else
-# already exists on that shared partition from stock. First-boot-only seeding
-# (checked via existence, not reseeded every boot like the tmpfs version had
-# to be) means real user state - WiFi creds, calibration, SAVE_CONFIG -
-# survives reboots from here on.
+# the single authoritative NebulaOS namespace, /usr/data/nebulaos, never
+# touching whatever else already exists on that shared partition from stock.
+# First-boot-only seeding (checked via existence, not reseeded every boot
+# like the tmpfs version had to be) means real user state - WiFi creds,
+# calibration, SAVE_CONFIG - survives reboots from here on.
+#
+# NebulaOS mutable-runtime closure mission (2026-07-27): DATA_ROOT used to be
+# /usr/data/openke, a separate legacy path this project's own S02 namespace
+# script had to migrate data OUT of. That path has been fully retired - there
+# is no deployed OpenKE user base, so no migration compatibility is needed
+# for any future device. This script now writes directly into
+# /usr/data/nebulaos, the same authoritative root S02nebulaos-namespace/
+# S05nebulaos-activate use. PDATA in particular intentionally uses the exact
+# same path S05 later validates and (re-)binds - this makes S01's own bind
+# mount here a genuine, always-available fallback: if S05's own validation
+# ever fails (namespace missing/invalid), /opt/printer_data still ends up
+# bound to this same real, writable directory rather than falling through to
+# the read-only squashfs, where klippy.log/moonraker.log writes would fail
+# outright. S05's bind_if_not_already() already no-ops cleanly when its
+# target is already mounted, so having both scripts bind the identical
+# source directory is deliberate, not a redundant double-mount.
 #
 # Runs after S00revert-safety, before anything that needs to read/write these
-# paths - webcam/klipper/moonraker/guppyscreen (S50+) all come later.
+# paths - webcam/klipper/moonraker/guppyscreen (S50+) all come later, and
+# before S02nebulaos-namespace (this script's own mkdir -p calls below only
+# ever create the specific subdirectories it needs; S02's own layout
+# creation is a superset and is unaffected by running second).
 #
 # /usr/data itself must exist as a real (if empty) directory baked into the
 # image - scripts/build/overlay/usr/data/.keep is what guarantees that. The
@@ -31,7 +50,7 @@
 # usr/data directory itself as a side effect - this whole script then failed
 # every mkdir/mount/cp call in sequence, and GuppyScreen never even started.
 
-DATA_ROOT=/usr/data/openke
+DATA_ROOT=/usr/data/nebulaos
 PDATA=$DATA_ROOT/printer_data
 GUPPY_STATE=$DATA_ROOT/guppyscreen
 

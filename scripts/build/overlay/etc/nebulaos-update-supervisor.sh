@@ -30,11 +30,27 @@
 # same printer-safety invariant as every other disruptive action in this
 # project) - a deferred restart just waits and rechecks rather than
 # skipping validation outright.
+#
+# NebulaOS mutable-runtime closure mission (2026-07-27), Phase D: Moonraker
+# source and virtualenv are now one versioned release unit, not two
+# independently-rolled-back things. Real gap this closes: Moonraker's own
+# app_deploy.py._update_python_requirements() installs into the EXISTING
+# venv in place whenever a commit changes requirements.txt - a plain
+# `git reset --hard` on the source alone does nothing to undo whatever pip
+# already did to the venv. Rather than re-implementing Moonraker's own
+# in-place venv update logic (real risk of fighting/duplicating it), this
+# supervisor instead maintains its own full backup of the venv, refreshed
+# every time a (source, venv) pairing is confirmed healthy together, and
+# always restores BOTH halves together on rollback - since only one paired
+# backup ever exists at a time and both halves are always reset in the same
+# step, there is no code path that can produce a mismatched pair.
 
 NEBULAOS_ROOT=/usr/data/nebulaos
 HEALTHCHECK=/etc/nebulaos-healthcheck.sh
 LOCKDIR="$NEBULAOS_ROOT/updates/locks"
 MOONRAKER_URL="http://127.0.0.1:7125"
+MOONRAKER_ENV="$NEBULAOS_ROOT/envs/moonraker"
+MOONRAKER_ENV_BACKUP="$NEBULAOS_ROOT/backups/moonraker/last-known-good-env"
 POLL_INTERVAL=20
 STABILIZE_SAMPLES=6
 STABILIZE_INTERVAL=10
@@ -52,6 +68,9 @@ component_info() {
 			;;
 		moonraker)
 			echo "$NEBULAOS_ROOT/apps/moonraker|/etc/init.d/S56moonraker|/opt/moonraker"
+			;;
+		mainsail)
+			echo "$NEBULAOS_ROOT/apps/mainsail||/usr/share/mainsail"
 			;;
 	esac
 }
@@ -160,6 +179,10 @@ preserve_failure_evidence() {
 	case "$name" in
 		klipper) cp /opt/printer_data/logs/klippy.log "$dir/" 2>/dev/null ;;
 		moonraker) cp /opt/printer_data/logs/moonraker.log "$dir/" 2>/dev/null ;;
+		mainsail)
+			cp /var/log/nginx/mainsail-error.log "$dir/" 2>/dev/null
+			cp "$NEBULAOS_ROOT/apps/mainsail/release_info.json" "$dir/" 2>/dev/null
+			;;
 	esac
 	log "$name: failure evidence preserved at $dir"
 }
@@ -176,9 +199,183 @@ factory_fallback() {
 	if awk -v t="$opt_path" '$2==t {found=1} END{exit !found}' /proc/mounts; then
 		umount "$opt_path" 2>/dev/null
 	fi
-	wait_for_print_idle
 	init_script=$(echo "$info" | cut -d'|' -f2)
+	# Mainsail has no managed service (static files served directly by
+	# nginx, no restart needed for the fallback content to take effect) -
+	# component_info's mainsail entry deliberately leaves this field empty.
+	[ -n "$init_script" ] || return 0
+	wait_for_print_idle
 	"$init_script" restart
+}
+
+# NebulaOS mutable-runtime closure mission (2026-07-27), Phase C: Mainsail
+# rollback. Real constraint confirmed against vendor/moonraker's own
+# net_deploy.py: unlike git (where history/reflog gives a "previous version"
+# for free), NetDeploy._extract_release() does `shutil.rmtree(self.path)`
+# on every update with NO backup of its own - the previous release's files
+# are simply gone once Moonraker's update() runs. This supervisor must
+# therefore maintain its own independent snapshot of the last-known-healthy
+# release, taken proactively (whenever a version is confirmed healthy), so
+# there is something real to restore from after the fact - not reactively
+# after detecting a bad update, by which point the old files no longer
+# exist on disk at all.
+#
+# Detection uses release_info.json's own "version" field (written by
+# Moonraker's net_deploy for a real update) rather than a git commit -
+# falls back to a content hash of index.html for the offline factory seed,
+# which ships without a release_info.json at all.
+#
+# No service restart is needed for activation/rollback - nginx serves
+# whatever static files are currently on disk, so a directory swap alone is
+# the entire "restart" for this component.
+
+MAINSAIL_BACKUP="$NEBULAOS_ROOT/backups/mainsail/last-known-good"
+
+mainsail_version() {
+	path="$1"
+	if [ -f "$path/release_info.json" ]; then
+		sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$path/release_info.json" | head -1
+	else
+		sha256sum "$path/index.html" 2>/dev/null | cut -d' ' -f1
+	fi
+}
+
+# Discards any leftover .staging/.old directories from an interrupted
+# snapshot/restore (device power-loss or reboot mid-operation) - both names
+# are, by construction, never the live/active copy, so removing them on
+# supervisor startup is always safe. Mirrors the mission's own required
+# "discard incomplete staging" boot-recovery behavior. Covers both Mainsail
+# and the Moonraker paired-venv backup, since both use the same
+# atomic_directory_replace() staging/old naming convention.
+cleanup_stale_staging() {
+	rm -rf "$NEBULAOS_ROOT/apps/mainsail.staging" "$NEBULAOS_ROOT/apps/mainsail.old" \
+		"$MAINSAIL_BACKUP.staging" "$MAINSAIL_BACKUP.old" \
+		"$MOONRAKER_ENV.staging" "$MOONRAKER_ENV.old" \
+		"$MOONRAKER_ENV_BACKUP.staging" "$MOONRAKER_ENV_BACKUP.old"
+}
+
+# Atomic-ish swap: build the full copy in a .staging sibling first, then
+# two directory renames (each a single, near-instant syscall) to cut over -
+# a process killed at any point before the first rename leaves the
+# original completely untouched; killed between the two renames leaves the
+# original moved aside as .old (recoverable) with the new copy already live.
+# Not a true atomic transaction (a reader could observe a brief window with
+# neither name present between the two renames), an accepted, documented
+# tradeoff for a local dev-printer UI, not a highly concurrent service.
+atomic_directory_replace() {
+	# $1=new content source dir  $2=final target dir
+	src="$1"; dst="$2"
+	staging="$dst.staging"
+	old="$dst.old"
+	rm -rf "$staging" "$old"
+	mkdir -p "$(dirname "$staging")"
+	cp -a "$src" "$staging"
+	if [ -e "$dst" ]; then
+		mv "$dst" "$old"
+	fi
+	mv "$staging" "$dst"
+	rm -rf "$old"
+}
+
+mainsail_snapshot_to_backup() {
+	path="$NEBULAOS_ROOT/apps/mainsail"
+	[ -d "$path" ] || return 0
+	atomic_directory_replace "$path" "$MAINSAIL_BACKUP"
+}
+
+validate_mainsail() {
+	name="mainsail"
+	path="$NEBULAOS_ROOT/apps/mainsail"
+	new_version=$(mainsail_version "$path")
+	known_good=$(read_state_field "$name" known_good_commit)
+
+	mkdir -p "$LOCKDIR"
+	: > "$LOCKDIR/$name.lock"
+	write_state "$name" "$known_good" "$new_version" "validating" ""
+
+	log "$name: new version detected ($new_version) - validating"
+
+	stage1_ok=true
+	"$HEALTHCHECK" stage1 "$name" "$path" || stage1_ok=false
+
+	if [ "$stage1_ok" = "true" ] && "$HEALTHCHECK" stage2-mainsail; then
+		log "$name: new version $new_version passed full validation - recording as known-good"
+		write_state "$name" "$new_version" "$new_version" "healthy" ""
+		mainsail_snapshot_to_backup
+		rm -f "$LOCKDIR/$name.lock"
+		return
+	fi
+
+	reason="stage2_failed"
+	[ "$stage1_ok" = "true" ] || reason="stage1_failed"
+	log "$name: $reason on new version $new_version - restoring from last-known-good backup"
+	preserve_failure_evidence "$name" "$new_version" "$reason"
+
+	if [ ! -d "$MAINSAIL_BACKUP" ]; then
+		log "$name: no backup exists yet (first-ever validation failed) - going straight to factory-fallback"
+		preserve_failure_evidence "$name" "$known_good" "no_backup_available"
+		factory_fallback "$name"
+		write_state "$name" "$known_good" "$known_good" "factory-fallback" "${reason}:$new_version;no_backup_available"
+		return
+	fi
+
+	atomic_directory_replace "$MAINSAIL_BACKUP" "$path"
+	if "$HEALTHCHECK" stage1 "$name" "$path" && "$HEALTHCHECK" stage2-mainsail; then
+		log "$name: restored backup re-validated healthy"
+		write_state "$name" "$known_good" "$known_good" "rolled-back" "${reason}:$new_version"
+		rm -f "$LOCKDIR/$name.lock"
+	else
+		preserve_failure_evidence "$name" "$known_good" "stage2_failed_after_restore"
+		factory_fallback "$name"
+		write_state "$name" "$known_good" "$known_good" "factory-fallback" "${reason}:$new_version;previous_also_unhealthy"
+	fi
+}
+
+poll_mainsail_once() {
+	name="mainsail"
+	path="$NEBULAOS_ROOT/apps/mainsail"
+	[ -f "$path/index.html" ] || return 0
+
+	current=$(mainsail_version "$path")
+	[ -z "$current" ] && return 0
+
+	last_seen=$(read_state_field "$name" last_seen_commit)
+	if [ -z "$last_seen" ]; then
+		# First observation this boot - bootstrap state and take the first
+		# backup snapshot, matching klipper/moonraker's own bootstrap
+		# behavior (whatever is running now was already proven at boot).
+		write_state "$name" "$current" "$current" "healthy" ""
+		mainsail_snapshot_to_backup
+		log "$name: bootstrapped state at $current"
+		return 0
+	fi
+
+	state=$(read_state_field "$name" state)
+	if [ -e "$LOCKDIR/$name.lock" ] && [ "$state" = "factory-fallback" ]; then
+		return 0
+	fi
+	if [ "$current" != "$last_seen" ] && [ "$state" != "validating" ]; then
+		validate_mainsail
+	fi
+}
+
+# Snapshots the current Moonraker venv as the new last-known-good pairing
+# partner. Only called immediately after the SOURCE at this same commit has
+# already passed full validation, so "the venv currently on disk" is by
+# definition the one that was just proven to work with this exact source.
+moonraker_snapshot_env() {
+	[ -d "$MOONRAKER_ENV" ] || return 0
+	atomic_directory_replace "$MOONRAKER_ENV" "$MOONRAKER_ENV_BACKUP"
+}
+
+# Restores the paired venv backup. Returns 1 (without restoring anything)
+# if no backup exists yet - caller must treat this the same as Mainsail's
+# "no backup available" case and go straight to factory-fallback rather
+# than restart Moonraker against a half-reset pairing.
+moonraker_restore_env() {
+	[ -d "$MOONRAKER_ENV_BACKUP" ] || return 1
+	atomic_directory_replace "$MOONRAKER_ENV_BACKUP" "$MOONRAKER_ENV"
+	return 0
 }
 
 validate_component() {
@@ -198,6 +395,13 @@ validate_component() {
 	if ! "$HEALTHCHECK" stage1 "$name" "$path"; then
 		log "$name: stage1 FAILED on new commit $new_commit - reverting to $known_good"
 		preserve_failure_evidence "$name" "$new_commit" "stage1_failed"
+		if [ "$name" = "moonraker" ] && ! moonraker_restore_env; then
+			log "$name: no paired venv backup exists yet - going straight to factory-fallback rather than restore a mismatched pair"
+			preserve_failure_evidence "$name" "$known_good" "no_env_backup_available"
+			factory_fallback "$name"
+			write_state "$name" "$known_good" "$known_good" "factory-fallback" "stage1_failed:$new_commit;no_env_backup_available"
+			return
+		fi
 		git -C "$path" reset --hard "$known_good" >/dev/null 2>&1
 		restart_component "$name"
 		if stabilized_stage2; then
@@ -224,12 +428,27 @@ validate_component() {
 	if stabilized_stage2; then
 		log "$name: new commit $new_commit passed full validation - recording as known-good"
 		write_state "$name" "$new_commit" "$new_commit" "healthy" ""
+		# Snapshot the venv as the new paired backup ONLY after the source
+		# at this exact commit has already been proven healthy together
+		# with whatever is currently on disk in the venv - this is what
+		# makes the pairing atomic: both halves are always captured (and
+		# later restored) as a single unit, so there is no code path that
+		# can record source commit A paired with a venv snapshot that
+		# actually belongs to a different commit.
+		[ "$name" = "moonraker" ] && moonraker_snapshot_env
 		rm -f "$LOCKDIR/$name.lock"
 		return
 	fi
 
 	log "$name: stage2 FAILED on new commit $new_commit - reverting to $known_good"
 	preserve_failure_evidence "$name" "$new_commit" "stage2_failed"
+	if [ "$name" = "moonraker" ] && ! moonraker_restore_env; then
+		log "$name: no paired venv backup exists yet - going straight to factory-fallback rather than restore a mismatched pair"
+		preserve_failure_evidence "$name" "$known_good" "no_env_backup_available"
+		factory_fallback "$name"
+		write_state "$name" "$known_good" "$known_good" "factory-fallback" "stage2_failed:$new_commit;no_env_backup_available"
+		return
+	fi
 	git -C "$path" reset --hard "$known_good" >/dev/null 2>&1
 	restart_component "$name"
 	if stabilized_stage2; then
@@ -260,6 +479,7 @@ poll_once() {
 			# checks; there is no legitimate "known good" reference to
 			# compare against yet other than this.
 			write_state "$name" "$current" "$current" "healthy" ""
+			[ "$name" = "moonraker" ] && moonraker_snapshot_env
 			log "$name: bootstrapped state at $current"
 			continue
 		fi
@@ -278,10 +498,13 @@ poll_once() {
 			validate_component "$name"
 		fi
 	done
+
+	poll_mainsail_once
 }
 
 loop() {
 	log "starting (poll interval ${POLL_INTERVAL}s)"
+	cleanup_stale_staging
 	while true; do
 		poll_once
 		sleep "$POLL_INTERVAL"

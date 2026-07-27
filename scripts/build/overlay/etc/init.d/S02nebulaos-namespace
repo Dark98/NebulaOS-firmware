@@ -2,25 +2,34 @@
 #
 # NebulaOS mutable-runtime mission, Phase 3: idempotent creation of the
 # /usr/data/nebulaos namespace (mutable apps, envs, printer state, updates,
-# backups, maintenance) and a controlled, development-only migration of
-# useful data out of the old /usr/data/openke/printer_data tree.
+# backups, maintenance) - the single authoritative NebulaOS data root.
 #
 # IMPORTANT - this script does NOT cut any running service over to the new
-# namespace. S01persistent-datastore's existing bind mounts
-# (/usr/data/openke/printer_data -> /opt/printer_data) are untouched, and
-# Klipper/Moonraker/GuppyScreen keep running exactly as before. Activating
-# the new namespace's paths is Phase 5's activation manager - this script
-# only ever creates the structure and copies data into it, so it is safe to
-# run on every boot without affecting anything currently in production.
+# namespace by itself. S01persistent-datastore's own bind mount of
+# $NEBULAOS_ROOT/printer_data -> /opt/printer_data (a genuine fallback, not
+# just an early seed) means printer_data is already live and writable before
+# this script even runs; activating the OTHER apps (klipper/moonraker/
+# mainsail) is Phase 5's activation manager - this script only ever creates
+# the structure, so it is safe to run on every boot without affecting
+# anything currently in production.
 #
-# Must run after S01persistent-datastore (needs /usr/data already mounted)
-# and before anything that might depend on the namespace existing later
-# (nothing does yet - reserved numbering for that future dependency).
+# NebulaOS mutable-runtime closure mission (2026-07-27): this script
+# previously also migrated data out of a separate legacy path,
+# /usr/data/openke/printer_data, left over from before this namespace
+# existed. That path has been fully retired (no deployed OpenKE user base
+# to migrate from), and the one-time migration this script's own
+# migrate_openke_data() performed has already completed and been verified
+# on every device that needed it - the function has been removed rather
+# than kept as permanent, unused migration-compatibility code for devices
+# that will never need it.
+#
+# Must run after S01persistent-datastore (needs /usr/data already mounted,
+# and DATA_ROOT/printer_data already seeded) and before anything that might
+# depend on the namespace existing later (nothing does yet - reserved
+# numbering for that future dependency).
 
 NEBULAOS_ROOT=/usr/data/nebulaos
-OLD_ROOT=/usr/data/openke
 SCHEMA_VERSION=1
-MIGRATION_MARKER="$NEBULAOS_ROOT/system/.openke-migration-complete"
 
 log() {
 	echo "S02nebulaos-namespace: $1"
@@ -86,56 +95,10 @@ EOF
 	log "wrote layout manifest ($manifest)"
 }
 
-# Controlled, development-only migration - copies useful config/state out
-# of the old /usr/data/openke/printer_data tree into the new namespace,
-# verifies every copied file by hash, and leaves the old tree completely
-# intact (never deleted/renamed by this script). Guarded by a marker so a
-# real device's post-migration edits (new SAVE_CONFIG state, new Moonraker
-# database entries) are never clobbered by re-running this on a later boot.
-migrate_openke_data() {
-	[ -e "$MIGRATION_MARKER" ] && return 0
-	old_pdata="$OLD_ROOT/printer_data"
-	[ -d "$old_pdata" ] || { log "no $old_pdata found - nothing to migrate (fresh namespace)"; touch "$MIGRATION_MARKER"; return 0; }
-
-	log "migrating useful data from $old_pdata to $NEBULAOS_ROOT/printer_data"
-	failures=0
-	for item in config database; do
-		[ -d "$old_pdata/$item" ] || continue
-		cp -a "$old_pdata/$item/." "$NEBULAOS_ROOT/printer_data/$item/" 2>/dev/null
-
-		# Verify every regular file actually landed with matching content -
-		# a real device's flash/copy can silently truncate under low space;
-		# do not trust "cp exited 0" alone (this project's own established
-		# discipline, docs/NEBULAOS_MUTABLE_RUNTIME_ARCHITECTURE.md).
-		find "$old_pdata/$item" -type f 2>/dev/null | while read -r src; do
-			rel=${src#"$old_pdata/"}
-			dst="$NEBULAOS_ROOT/printer_data/$rel"
-			if [ ! -e "$dst" ]; then
-				echo "MISSING after copy: $rel" >> "$NEBULAOS_ROOT/system/.migration-errors.log"
-				continue
-			fi
-			src_sum=$(sha256sum "$src" 2>/dev/null | cut -d' ' -f1)
-			dst_sum=$(sha256sum "$dst" 2>/dev/null | cut -d' ' -f1)
-			if [ "$src_sum" != "$dst_sum" ]; then
-				echo "HASH MISMATCH after copy: $rel" >> "$NEBULAOS_ROOT/system/.migration-errors.log"
-			fi
-		done
-	done
-
-	if [ -s "$NEBULAOS_ROOT/system/.migration-errors.log" ]; then
-		log "migration completed WITH ERRORS - see $NEBULAOS_ROOT/system/.migration-errors.log - old data at $old_pdata left untouched, marker NOT written, will retry next boot"
-		return 1
-	fi
-
-	touch "$MIGRATION_MARKER"
-	log "migration verified clean - old data at $old_pdata left untouched (not deleted/renamed)"
-}
-
 start() {
 	mkdir -p "$NEBULAOS_ROOT"
 	create_layout
 	write_manifest
-	migrate_openke_data
 }
 
 case "$1" in

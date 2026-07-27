@@ -11,10 +11,13 @@
 # directly from its own config key and wpa_event.cpp's directory-scan logic,
 # not guessed).
 #
-# Lives under /usr/data/openke/ (S01persistent-datastore) rather than
-# /usr/data/wpa_supplicant.conf directly - real, persistent storage now
-# (mmcblk0p10), kept in this build's own isolated subdirectory rather than
+# Lives under /usr/data/nebulaos/ (S01persistent-datastore's DATA_ROOT)
+# rather than /usr/data/wpa_supplicant.conf directly - real, persistent
+# storage now (mmcblk0p10), kept in this build's own namespace rather than
 # the shared partition's top level, same as everything else this build owns.
+# NebulaOS mutable-runtime closure mission (2026-07-27): this previously
+# lived under /usr/data/openke/, a separate legacy path now fully retired -
+# relocated into the single authoritative NebulaOS namespace instead.
 #
 # GUI workstream sec 60: the original version of this script skipped
 # starting wpa_supplicant entirely when $CONF didn't exist yet - correct
@@ -32,7 +35,7 @@
 # here - a fresh device ships with zero saved networks, exactly like stock
 # does out of the box).
 
-CONF=/usr/data/openke/wpa_supplicant.conf
+CONF=/usr/data/nebulaos/wpa_supplicant.conf
 PIDFILE=/var/run/wpa_supplicant-wlan0.pid
 
 seed_default_conf() {

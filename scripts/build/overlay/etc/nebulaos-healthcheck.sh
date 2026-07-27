@@ -32,6 +32,17 @@ stage1_component() {
 			;;
 		mainsail)
 			[ -f "$path/index.html" ] || { log "FAIL stage1 mainsail: index.html missing"; return 1; }
+			[ -d "$path/assets" ] || { log "FAIL stage1 mainsail: assets/ directory missing"; return 1; }
+			# release_info.json is written by Moonraker's own net_deploy for a
+			# real update; the offline factory seed doesn't produce one (it
+			# copies the immutable /usr/share/mainsail tree verbatim, which
+			# ships without this file) - only check it if present, don't
+			# require it, matching that this check must also pass for a
+			# freshly-seeded (not yet updated) install.
+			if [ -e "$path/release_info.json" ]; then
+				grep -q '"version"' "$path/release_info.json" 2>/dev/null \
+					|| { log "FAIL stage1 mainsail: release_info.json present but malformed"; return 1; }
+			fi
 			;;
 		*)
 			log "FAIL stage1: unknown component '$name'"
@@ -121,6 +132,33 @@ stage2_stack() {
 	fi
 }
 
+# NebulaOS mutable-runtime closure mission (2026-07-27), Phase C: Mainsail's
+# own post-activation health check. Unlike Klipper/Moonraker (real
+# processes with their own /server/info-style readiness state), Mainsail is
+# static files served directly by nginx - "healthy" means nginx actually
+# returns real content for it, not a stale/empty/error response. No process
+# restart is needed for new static files to take effect (nginx re-reads the
+# file from disk on every request), so this is safe to call immediately
+# after a file-level activation swap, unlike Klipper/Moonraker's restart-then-
+# wait pattern.
+stage2_mainsail() {
+	body=$(wget -q -O - --timeout=5 "http://127.0.0.1:80/index.html" 2>/dev/null)
+	if [ -z "$body" ]; then
+		log "FAIL stage2 mainsail: nginx returned no content for index.html"
+		return 1
+	fi
+	case "$body" in
+		*'<html'*|*'<!doctype html'*|*'<!DOCTYPE html'*)
+			log "PASS stage2 mainsail: nginx serving real index.html content"
+			return 0
+			;;
+		*)
+			log "FAIL stage2 mainsail: response doesn't look like real HTML"
+			return 1
+			;;
+	esac
+}
+
 case "$1" in
 	stage1)
 		stage1_component "$2" "$3"
@@ -128,8 +166,11 @@ case "$1" in
 	stage2)
 		stage2_stack
 		;;
+	stage2-mainsail)
+		stage2_mainsail
+		;;
 	*)
-		echo "usage: $0 stage1 <klipper|moonraker|mainsail> <path> | stage2" >&2
+		echo "usage: $0 stage1 <klipper|moonraker|mainsail> <path> | stage2 | stage2-mainsail" >&2
 		exit 2
 		;;
 esac

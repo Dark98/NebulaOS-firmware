@@ -1,8 +1,21 @@
 # NebulaOS Mutable Runtime Architecture
 
-**Status:** Phase 1 (Reconcile and investigate) — in progress. This document records verified findings only; anything not yet confirmed is marked `NEEDS_RUNTIME_EVIDENCE` or `NEEDS_DECISION`. No implementation has started. No device or build-artifact state has been changed while producing this section.
+**Status: Complete and live-qualified.** This document preserves the chronological investigation and implementation record, section by section, exactly as it was written at each point in the mission. Statements below such as "in progress," "not yet started," "NEEDS_RUNTIME_EVIDENCE," or "NEEDS_DECISION" describe the state at the historical checkpoint where they appear and are superseded by later completion sections (§3.5 onward) and the final implementation report (`docs/NEBULAOS_MUTABLE_RUNTIME_IMPLEMENTATION_REPORT.md`) - they are not the current state of the system.
 
-**Scope:** this is the architecture doc for the "NebulaOS Mutable Applications, Updates, Recovery, Shared G-code, and Retention" mission. It will be extended through each phase; Section 1 is the Phase 1 investigation record.
+**Current final state (2026-07-27, closure + final-seal missions):**
+
+```text
+/usr/data/nebulaos:
+    authoritative mutable runtime namespace
+
+/usr/data/printer_data/gcodes:
+    intentional shared G-code exception
+
+/usr/data/openke:
+    absent and forbidden as an active runtime path
+```
+
+**Scope:** this is the architecture doc for the "NebulaOS Mutable Applications, Updates, Recovery, Shared G-code, and Retention" mission. Section 1 is the original Phase 1 investigation record, written before any implementation began; later sections (§2 onward) document each phase as it was actually built, tested, and closed.
 
 ---
 

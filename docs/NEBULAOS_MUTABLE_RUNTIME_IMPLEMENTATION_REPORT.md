@@ -27,7 +27,7 @@ Before this mission, Klipper/Moonraker/Mainsail/GuppyScreen were all baked into 
 |---|---|---|---|
 | 1 | Investigation (build pipeline, OpenKE naming footprint, existing mechanisms) | Complete | `NEBULAOS_MUTABLE_RUNTIME_ARCHITECTURE.md` §1 |
 | 2 | Reproducibility checkpoint (toolchain ordering, overlay staleness) | Complete | `NEBULAOS_MUTABLE_RUNTIME_ARCHITECTURE.md` §3, §3.9 |
-| 3 | `/usr/data/nebulaos` namespace + openke-data migration | Complete | `NEBULAOS_MUTABLE_RUNTIME_ARCHITECTURE.md` §3.1-3.3; `S02nebulaos-namespace` |
+| 3 | `/usr/data/nebulaos` namespace creation and development-device cleanup | Complete | `NEBULAOS_MUTABLE_RUNTIME_ARCHITECTURE.md` §3.1-3.3; `S02nebulaos-namespace` |
 | 4 | Offline factory-seed git bundles (Klipper, Moonraker) | Complete | `04-cross-compile-app-stack.sh`; `S04nebulaos-factory-seed` |
 | 5 | Activation manager (bind-mount persistent-vs-immutable decisions) | Complete | `S05nebulaos-activate` |
 | **Memory Resilience Gate** | zram + disk swap, OOM priorities, maintenance gate | Complete, live-qualified | `NEBULAOS_MEMORY_RESILIENCE.md` (full doc) |

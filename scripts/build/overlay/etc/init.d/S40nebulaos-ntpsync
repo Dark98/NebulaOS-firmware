@@ -10,7 +10,8 @@
 # this project's other RTC-drift handling (docs/NEBULAOS_RETENTION_POLICY.md
 # sec 2.6) already accounts for.
 #
-# Runs after S39wifi (needs network up) - backgrounded, one-shot
+# Runs after S01wifi (needs network up, renumbered from S39 - see that
+# script's own header) - backgrounded, one-shot
 # (`ntpd -n -q`, query-and-exit, never a persistent daemon), so it never
 # blocks the rest of boot. Best-effort: no network, DNS failure, or NTP
 # server unreachable all fail silently rather than affecting boot.

@@ -1,9 +1,36 @@
 #!/bin/sh
 #
 # OpenKE addition (FIRMWARE.md sec 17/18, sec 60): starts wpa_supplicant on
-# wlan0 against real credentials. Numbered S39 - runs before S40network's
-# `ifup -a`, so wlan0 has already associated by the time udhcpc tries it
-# (this script also explicitly re-runs `ifup wlan0` itself after associating,
+# wlan0 against real credentials.
+#
+# NebulaOS auto-updates-camera-complete mission (2026-07-28): renumbered
+# from S39 to S01 (real bug found live on a fresh-namespace boot). At S39
+# this ran AFTER S04nebulaos-factory-seed - a step that writes real,
+# previously-uncommitted-scale amounts of data (Klipper's real git
+# history, two Python venvs) and can legitimately take several minutes on
+# this hardware. With WiFi gated behind that, a device had zero network/
+# SSH reachability for the entire factory-seed window - the only way in
+# was GuppyScreen's touchscreen, and its own WiFi panel needs
+# wpa_supplicant already running to configure anything, a real chicken-
+# and-egg lockout. Two real hard-reboots happened live specifically
+# because of this - an operator with no way to check progress assumed the
+# device was stuck and power-cycled it mid-seed, which is what actually
+# left Klipper/Moonraker's app directories incompletely seeded (not a
+# WiFi defect in itself - see S04nebulaos-factory-seed's own history for
+# the real fix to that half of the incident).
+#
+# S01 is the earliest safe position: this script's only real dependency
+# is S01persistent-datastore's mount of /usr/data (needed before
+# seed_default_conf() below can create $CONF) - it needs nothing from
+# S02nebulaos-namespace, S03nebulaos-diskswap, or S04's factory seed at
+# all. Same S-number as S01persistent-datastore is intentional and safe
+# (this project's own precedent: S00revert-safety/S00zram-swap already
+# share a number) - conflicts resolve alphabetically ("persistent-
+# datastore" < "wifi"), so the mount always completes first.
+#
+# Still runs before S40nebulaos-ntpsync's `ifup -a`-equivalent bring-up,
+# so wlan0 has already associated by the time udhcpc tries it (this
+# script also explicitly re-runs `ifup wlan0` itself after associating,
 # as a real belt-and-suspenders rather than relying on ordering alone).
 #
 # ctrl_interface=/var/run/wpa_supplicant in the config already matches what
@@ -50,7 +77,7 @@ seed_default_conf() {
 start() {
 	seed_default_conf
 	if [ ! -f "$CONF" ]; then
-		echo "S39wifi: $CONF not present, skipping"
+		echo "S01wifi: $CONF not present, skipping"
 		return 0
 	fi
 	echo "Starting wpa_supplicant on wlan0"

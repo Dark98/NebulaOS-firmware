@@ -374,6 +374,7 @@ check /usr/sbin/dropbear
 check /usr/sbin/wpa_cli
 check /etc/init.d/S00revert-safety
 check /etc/init.d/S01persistent-datastore
+check /etc/init.d/S01wifi
 check /etc/init.d/S99confirm-good
 check /etc/ota_marker.sh
 check /opt/printer_data/config/GuppyScreen/scripts/static_ip.py

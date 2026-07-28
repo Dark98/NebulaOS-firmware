@@ -183,7 +183,7 @@ Phase T (remote-checkable regression): PASS - clean dmesg, correct mounts, Mains
   session - no code path touching them changed, and their prior live qualification (§1-10 above) stands.
 ```
 
-Neither Bug 6 (stale init.d duplicates) nor Bug 7 (Moonraker self-restart) is yet baked into a rebuilt, reflashed image - both fixes are committed in source and verified live via manual reproduction/workaround on the existing device. A full clean rebuild + reflash + fresh from-scratch offline-first-boot re-qualification is required before the final tag; that record will be added here once complete.
+**Rebuild + reflash + re-qualification complete.** Rebuilt from commit `ece4c26` (clean tree), both fixes confirmed present in the actual packaged `rootfs.squashfs` (independently `unsquashfs`'d, not inferred), zero `06-verify.sh` MISS lines. Flashed to the real device via the full documented safety sequence (boot to stock, `--check-only`, real write with hash verification, marker flip, reboot) - one real interrupted-write incident occurred and was recovered from safely per the script's own sequential-write design (full details: `NEBULAOS_MOONRAKER_UPDATE_AND_CAMERA_ANALYSIS.md` §30). Live re-verification against the freshly-flashed, freshly-booted device: obsolete init.d files confirmed absent, `is_valid: true` for all three apps, camera persisted correctly through the reflash, and - the definitive proof - a real Recover-induced Moonraker death was self-healed by the live supervisor within one 20-second poll cycle with **zero manual intervention**, unlike every prior test this session which required a manual restart.
 
 ## Summary
 

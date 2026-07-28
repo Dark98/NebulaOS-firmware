@@ -167,6 +167,24 @@ mainsail:  is_valid=true
 
 The remaining Phase P/Q/R/S/T items (a real Klipper update; a real Moonraker update; the Mainsail/Moonraker Recover action; camera update-survival and user-deletion; a controlled rollback; full regression pass) are tracked separately and will be recorded here once complete - not claimed in advance of the actual test.
 
+## 12. Phase P-T real qualification (2026-07-28/29)
+
+All five items above are now complete against the same live device, still in its Phase O state. Full evidence, including two further real bugs found and fixed (stale init.d duplicates shadowing the Finding #9 fix; Moonraker's own self-restart being silently broken with no working supervisord on this image, which also meant a real Rollback got silently undone by this project's own safety net) is recorded in `docs/NEBULAOS_MOONRAKER_UPDATE_AND_CAMERA_ANALYSIS.md` §30.
+
+```text
+Phase P (real Klipper update):    PASS - is_valid=true, c_helper.so correct, mcu connected, ready
+Phase Q (real Moonraker update):  PASS - is_valid=true, camera/Klipper untouched
+Phase R (Recover, both apps):     PASS (git-side) - Moonraker's own dead-after-recover gap found+fixed (§30 Bug 7)
+Phase R2 (camera persistence):    PASS - edit survives Klipper+Moonraker restart, deletion respected, no re-creation
+Phase S (controlled rollback):   Bug found (rollback silently undone) and fixed (§30 Bug 7); fix verified live
+Phase T (remote-checkable regression): PASS - clean dmesg, correct mounts, Mainsail/camera serving real
+  content, WiFi/SSH stable throughout, no legacy /usr/data/openke, healthy disk/swap. Physical-only checks
+  (display/touch visual confirmation, USB hotplug, a live flash-slot write) were not re-executed this
+  session - no code path touching them changed, and their prior live qualification (§1-10 above) stands.
+```
+
+Neither Bug 6 (stale init.d duplicates) nor Bug 7 (Moonraker self-restart) is yet baked into a rebuilt, reflashed image - both fixes are committed in source and verified live via manual reproduction/workaround on the existing device. A full clean rebuild + reflash + fresh from-scratch offline-first-boot re-qualification is required before the final tag; that record will be added here once complete.
+
 ## Summary
 
 | Scenario | Result | Evidence type |

@@ -115,10 +115,13 @@ mkdir -p "/repo/vendor/buildroot-x2000/board/halley5-nebulaos-overlay/opt/printe
 # S04nebulaos-activate -> S04nebulaos-factory-seed/S05nebulaos-activate),
 # and the last two shipped together on a real flashed device: BOTH old and
 # new init.d scripts were present in the same booted squashfs, and because
-# the new activate script's bind_if_not_already() no-ops when its target
+# the new activate scripts bind_if_not_already() no-ops when its target
 # is already mounted, the OLD (pre-fix, less-validated) activation script -
 # which sorts earlier and ran first - was the one actually deciding every
-# real bind-mount, silently shadowing the fix. Clean every historically
+# real bind-mount, silently shadowing the fix. (Note for future edits to
+# this comment block: it lives inside a single-quoted docker bash -c
+# string below - no literal apostrophes allowed in it, or the outer shell
+# parse breaks exactly like this one did the first time.) Clean every historically
 # renamed/removed overlay-relative path from both real output copies here;
 # add to this list whenever an overlay file is renamed or deleted, the same
 # way dcf7060 does for the seed archives in 04-cross-compile-app-stack.sh.

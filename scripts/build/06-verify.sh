@@ -393,10 +393,10 @@ else
 	echo "MISS seed-manifest.json missing the real-history archive format record"
 fi
 
-echo "=== obsolete overlay files (must be absent - Buildroot's output/target copy is additive-only, see 02-configure-buildroot.sh) ==="
+echo "=== obsolete overlay files (must be absent - Buildroots output/target copy is additive-only, see 02-configure-buildroot.sh) ==="
 # Real bug found live 2026-07-28: a renamed overlay file (e.g.
 # S03nebulaos-factory-seed/S04nebulaos-activate -> S04nebulaos-factory-seed/
-# S05nebulaos-activate) leaves the OLD file sitting in Buildroot's own
+# S05nebulaos-activate) leaves the OLD file sitting in Buildroots own
 # output/target/ forever unless explicitly cleaned - and it ships in the
 # real rootfs right alongside the new one. This is not cosmetic: the old,
 # pre-fix activation script sorts earlier and silently wins over the new

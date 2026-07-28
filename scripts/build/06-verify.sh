@@ -296,6 +296,71 @@ else
 	echo "MISS [update_manager klipper]/[update_manager moonraker] missing channel: dev"
 fi
 
+echo "=== factory-seed git archives (auto-updates-camera-complete mission, 2026-07-28) ==="
+# Real bug this whole mission exists to fix: the OLD flattened-synthetic-
+# commit seed made every freshly-seeded klipper/moonraker checkout
+# diverged=true, is_valid=false, permanently blocking real updates - see
+# docs/NEBULAOS_MOONRAKER_UPDATE_AND_CAMERA_ANALYSIS.md. Existence-only
+# checks cannot see this - it needs the actual archive content dumped out
+# of the built image and inspected with real git commands, the same way
+# the moonraker.conf content checks above go beyond existence-only.
+apt-get install -y -qq git >/dev/null 2>&1
+check_seed_archive() {
+	archive_path="$1"; expected_branch="$2"; expected_origin="$3"; label="$4"
+	rm -rf /tmp/seed-check
+	mkdir -p /tmp/seed-check
+	if ! debugfs -R "dump $archive_path /tmp/seed-check.tar" /img/rootfs.ext2 >/dev/null 2>&1; then
+		echo "MISS $label archive could not be dumped from the image ($archive_path)"
+		return
+	fi
+	if ! tar -xf /tmp/seed-check.tar -C /tmp/seed-check 2>/dev/null; then
+		echo "MISS $label archive is not a valid tar file"
+		return
+	fi
+	if git -C /tmp/seed-check log --all --format=%s 2>/dev/null | grep -q "NebulaOS factory seed snapshot"; then
+		echo "MISS $label archive still contains a synthetic factory-seed wrapper commit"
+	else
+		echo "OK   $label archive contains no synthetic wrapper commit"
+	fi
+	actual_branch=$(git -C /tmp/seed-check symbolic-ref --short HEAD 2>/dev/null)
+	if [ "$actual_branch" = "$expected_branch" ]; then
+		echo "OK   $label archive is on branch $expected_branch"
+	else
+		echo "MISS $label archive is on branch \"$actual_branch\", expected $expected_branch"
+	fi
+	actual_origin=$(git -C /tmp/seed-check remote get-url origin 2>/dev/null)
+	if [ "$actual_origin" = "$expected_origin" ]; then
+		echo "OK   $label archive origin is $expected_origin"
+	else
+		echo "MISS $label archive origin is \"$actual_origin\", expected $expected_origin"
+	fi
+	actual_refspec=$(git -C /tmp/seed-check config --get remote.origin.fetch 2>/dev/null)
+	if [ "$actual_refspec" = "+refs/heads/*:refs/remotes/origin/*" ]; then
+		echo "OK   $label archive origin has the full wildcard fetch refspec"
+	else
+		echo "MISS $label archive origin fetch refspec is \"$actual_refspec\", expected the full wildcard form (a narrow refspec silently breaks a later git fetch origin from populating origin/$expected_branch, reproducing diverged=true)"
+	fi
+	if [ -z "$(git -C /tmp/seed-check status --porcelain 2>/dev/null)" ]; then
+		echo "OK   $label archive has a clean working tree"
+	else
+		echo "MISS $label archive has a dirty working tree"
+	fi
+	rm -rf /tmp/seed-check /tmp/seed-check.tar
+}
+check_seed_archive /opt/nebulaos-seeds/klipper.tar master "https://github.com/coreflake1/NebulaOS-klipper.git" "klipper"
+check_seed_archive /opt/nebulaos-seeds/moonraker.tar master "https://github.com/Arksine/moonraker.git" "moonraker"
+SEED_MANIFEST_CONTENT=$(debugfs -R "cat /opt/nebulaos-seeds/seed-manifest.json" /img/rootfs.ext2 2>/dev/null)
+if echo "$SEED_MANIFEST_CONTENT" | grep -q "git_bundle_flattened"; then
+	echo "MISS seed-manifest.json still references the removed git_bundle_flattened format"
+else
+	echo "OK   seed-manifest.json does not reference the removed git_bundle_flattened format"
+fi
+if echo "$SEED_MANIFEST_CONTENT" | grep -q "git_repo_archive_real_history"; then
+	echo "OK   seed-manifest.json records the real-history archive format"
+else
+	echo "MISS seed-manifest.json missing the real-history archive format record"
+fi
+
 echo "=== SSH/console/recovery (FIRMWARE.md sec 18/21/22/24) ==="
 check /usr/sbin/dropbear
 check /usr/sbin/wpa_cli
@@ -318,8 +383,8 @@ check /etc/init.d/S05nebulaos-activate
 check /etc/init.d/S45nebulaos-cleanup
 check /etc/nebulaos-retention.sh
 check /etc/nebulaos-healthcheck.sh
-check /opt/nebulaos-seeds/klipper.bundle
-check /opt/nebulaos-seeds/moonraker.bundle
+check /opt/nebulaos-seeds/klipper.tar
+check /opt/nebulaos-seeds/moonraker.tar
 check /opt/nebulaos-seeds/seed-manifest.json
 check /usr/sbin/ntpd
 check /etc/init.d/S40nebulaos-ntpsync

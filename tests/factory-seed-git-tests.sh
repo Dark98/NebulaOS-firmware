@@ -168,6 +168,20 @@ else
 	fail "packaged archive branch/cleanliness check failed"
 fi
 
+# Test: the packaged archive's branch has its tracking-remote config set
+# directly (real bug found live: `git branch --set-upstream-to` silently
+# no-ops when the target remote-tracking ref does not exist locally yet,
+# which it never does in an offline-built archive - leaving
+# branch.<name>.remote unset, which is exactly what Moonraker's own
+# GitDeploy reads to populate git_remote; with it unset, is_valid() fails
+# directly regardless of ancestry/dirty/detached state).
+if [ "$(git -C "$M/refspec-check" config --get branch.master.remote)" = "origin" ] \
+	&& [ "$(git -C "$M/refspec-check" config --get branch.master.merge)" = "refs/heads/master" ]; then
+	pass "packaged archive's branch has its tracking-remote config set"
+else
+	fail "packaged archive's branch is missing tracking-remote config (branch.master.remote/merge)"
+fi
+
 # Test: sparse_exclude keeps the excluded path's real history in
 # .git/objects (fsck-clean, no synthetic anything) while omitting it from
 # the working tree, and git treats this as intentional sparsity rather

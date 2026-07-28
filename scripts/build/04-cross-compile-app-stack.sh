@@ -388,6 +388,26 @@ echo "== creating offline factory-seed archives (Klipper, Moonraker) =="
 # start from a clean directory here.
 rm -rf "$OVERLAY/opt/nebulaos-seeds"
 mkdir -p "$OVERLAY/opt/nebulaos-seeds"
+# Second, separate real bug found live, one layer deeper: Buildroot's own
+# rootfs-overlay copy step (board overlay -> output/target/, and again
+# into output/build/buildroot-fs/ext2/target/) is additive-only - it never
+# deletes a file that existed in a PREVIOUS run's overlay but is absent
+# from the current one. The rm -rf above only cleans the tracked-adjacent
+# source; every earlier format this seed ever shipped (klipper.bundle/
+# moonraker.bundle from the original synthetic-commit design, then the
+# short-lived uncompressed klipper.tar/moonraker.tar) was still sitting in
+# BOTH of Buildroot's own output copies, discovered only because the
+# packaged rootfs.ext2 (fixed at 400M) failed to build with "Could not
+# allocate block" despite the tracked overlay source alone being a
+# reasonable ~46MB. Clean every one of this seed's known-historical
+# filenames from both real Buildroot output locations here too, not just
+# the tracked overlay - this is the actual root cause location, and must
+# be revisited again if this seed's filenames ever change in the future.
+for stale_dir in "$BUILDROOT_DIR/output/target/opt/nebulaos-seeds" \
+                 "$BUILDROOT_DIR/output/build/buildroot-fs/ext2/target/opt/nebulaos-seeds"; do
+	rm -f "$stale_dir/klipper.bundle" "$stale_dir/moonraker.bundle" \
+	      "$stale_dir/klipper.tar" "$stale_dir/moonraker.tar" 2>/dev/null || true
+done
 klipper_origin="https://github.com/coreflake1/NebulaOS-klipper.git"
 klipper_seed_commit=$(make_seed_archive "$VENDOR/klipper" master \
 	"$klipper_origin" "$OVERLAY/opt/nebulaos-seeds/klipper.tar.gz")

@@ -118,7 +118,26 @@ seed_git_app() {
 	log "seeding $name from offline archive $archive (real git history, no clone needed)"
 	rm -rf "$dest.partial"
 	mkdir -p "$dest.partial"
-	if ! tar -xzf "$archive" -C "$dest.partial"; then
+	# Real bug found live (first genuinely successful fresh-boot attempt,
+	# 2026-07-28): this device's real BusyBox tar has no -z support at all
+	# ("tar: invalid option -- 'z'") - `tar -xzf` failed outright on every
+	# single fresh-boot test this whole mission ran, on every rebuild,
+	# which is what actually made klipper/moonraker's app directories come
+	# up empty every time (the sparse-checkout and S01wifi fixes earlier
+	# this mission were both still real, valid improvements, but neither
+	# one was the true blocker). BusyBox's own `-a` (extension-based
+	# auto-detect) also failed live ("invalid tar magic") - it does not
+	# apply to extraction the way GNU tar's does. The portable fix that
+	# works identically on both BusyBox (device) and GNU tar (this
+	# project's own tests, run on a normal Linux host): decompress with
+	# the separate, universally-available `gzip` applet/binary, then feed
+	# plain tar data to a tar invocation neither implementation needs any
+	# format-specific flag for. `-o` (no-same-owner) is the second real
+	# fix this same test uncovered: extracted files otherwise keep the
+	# archive-creation host's original UID, which made git itself refuse
+	# to operate on the result ("detected dubious ownership") - confirmed
+	# this exact failure live before adding `-o`.
+	if ! sh -c "gzip -dc '$archive' | tar -xo -C '$dest.partial'"; then
 		log "ERROR: tar extraction failed for $name - leaving no partial state"
 		rm -rf "$dest.partial"
 		return 1

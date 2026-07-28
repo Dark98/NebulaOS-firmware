@@ -393,6 +393,29 @@ else
 	echo "MISS seed-manifest.json missing the real-history archive format record"
 fi
 
+echo "=== obsolete overlay files (must be absent - Buildroot's output/target copy is additive-only, see 02-configure-buildroot.sh) ==="
+# Real bug found live 2026-07-28: a renamed overlay file (e.g.
+# S03nebulaos-factory-seed/S04nebulaos-activate -> S04nebulaos-factory-seed/
+# S05nebulaos-activate) leaves the OLD file sitting in Buildroot's own
+# output/target/ forever unless explicitly cleaned - and it ships in the
+# real rootfs right alongside the new one. This is not cosmetic: the old,
+# pre-fix activation script sorts earlier and silently wins over the new
+# one whenever both are present. rootfs.ext2 and rootfs.squashfs are built
+# from the same stale output/target/, so debugfs against rootfs.ext2 here
+# does catch a real leftover, not just the tracked overlay source.
+check_absent() {
+	path="$1"
+	if debugfs -R "stat $path" /img/rootfs.ext2 2>&1 | grep -q "Inode:"; then
+		echo "MISS $path is present but should have been removed as obsolete"
+	else
+		echo "OK   $path is absent"
+	fi
+}
+check_absent /etc/init.d/S01tmpfs-datastore
+check_absent /etc/init.d/S39wifi
+check_absent /etc/init.d/S03nebulaos-factory-seed
+check_absent /etc/init.d/S04nebulaos-activate
+
 echo "=== SSH/console/recovery (FIRMWARE.md sec 18/21/22/24) ==="
 check /usr/sbin/dropbear
 check /usr/sbin/wpa_cli

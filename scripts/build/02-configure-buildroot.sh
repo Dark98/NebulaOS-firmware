@@ -105,6 +105,31 @@ cp -r "/repo/scripts/build/overlay/." "/repo/vendor/buildroot-x2000/board/halley
 mkdir -p "/repo/vendor/buildroot-x2000/board/halley5-nebulaos-overlay/opt/printer_data/comms" \
          "/repo/vendor/buildroot-x2000/board/halley5-nebulaos-overlay/opt/printer_data/logs" \
          "/repo/vendor/buildroot-x2000/board/halley5-nebulaos-overlay/opt/printer_data/gcodes"
+# Real bug found live on 2026-07-28: this rm -rf/cp only cleans the BOARD
+# overlay staging dir (above), not output/target/ or
+# output/build/buildroot-fs/ext2/target/ - per the IMPORTANT comment near
+# the top of this file, those two are additive-only and keep every
+# renamed-away overlay file forever unless a full clean is done. This has
+# now bitten three separate renames (S01tmpfs-datastore ->
+# S01persistent-datastore; S39wifi -> S01wifi; S03nebulaos-factory-seed/
+# S04nebulaos-activate -> S04nebulaos-factory-seed/S05nebulaos-activate),
+# and the last two shipped together on a real flashed device: BOTH old and
+# new init.d scripts were present in the same booted squashfs, and because
+# the new activate script's bind_if_not_already() no-ops when its target
+# is already mounted, the OLD (pre-fix, less-validated) activation script -
+# which sorts earlier and ran first - was the one actually deciding every
+# real bind-mount, silently shadowing the fix. Clean every historically
+# renamed/removed overlay-relative path from both real output copies here;
+# add to this list whenever an overlay file is renamed or deleted, the same
+# way dcf7060 does for the seed archives in 04-cross-compile-app-stack.sh.
+for obsolete_rel in \
+	"etc/init.d/S01tmpfs-datastore" \
+	"etc/init.d/S39wifi" \
+	"etc/init.d/S03nebulaos-factory-seed" \
+	"etc/init.d/S04nebulaos-activate"; do
+	rm -f "/repo/vendor/buildroot-x2000/output/target/$obsolete_rel" \
+	      "/repo/vendor/buildroot-x2000/output/build/buildroot-fs/ext2/target/$obsolete_rel" 2>/dev/null || true
+done
 rm -rf "/repo/vendor/buildroot-x2000/board/halley5-nebulaos-wheels"
 mkdir -p "/repo/vendor/buildroot-x2000/board/halley5-nebulaos-wheels"
 cp "/repo/scripts/build/vendor-wheels/"*.whl "/repo/vendor/buildroot-x2000/board/halley5-nebulaos-wheels/"

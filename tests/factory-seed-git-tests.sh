@@ -168,6 +168,32 @@ else
 	fail "packaged archive branch/cleanliness check failed"
 fi
 
+# Test: sparse_exclude keeps the excluded path's real history in
+# .git/objects (fsck-clean, no synthetic anything) while omitting it from
+# the working tree, and git treats this as intentional sparsity rather
+# than a modification - the real fix for the 1m51s live klipper
+# extraction that led to two impatient hard-reboots and an incompletely
+# seeded namespace.
+rm -rf "$M/sparse-src" "$M/sparse-check"
+build_real_repo "$M/sparse-src" master ""
+mkdir -p "$M/sparse-src/lib/bigdir"
+echo "large excluded content" > "$M/sparse-src/lib/bigdir/file.bin"
+git -C "$M/sparse-src" add -A
+git -C "$M/sparse-src" commit -q -m "add lib/ content"
+if out=$(make_seed_archive "$M/sparse-src" master "https://example.invalid/sparse.git" "$M/sparse.tar.gz" "/lib/" 2>&1) && [ -f "$M/sparse.tar.gz" ]; then
+	mkdir -p "$M/sparse-check"
+	tar -xzf "$M/sparse.tar.gz" -C "$M/sparse-check"
+	if [ ! -e "$M/sparse-check/lib/bigdir/file.bin" ] \
+		&& [ -z "$(git -C "$M/sparse-check" status --porcelain)" ] \
+		&& git -C "$M/sparse-check" cat-file -e "HEAD:lib/bigdir/file.bin" 2>/dev/null; then
+		pass "sparse_exclude omits the path from the working tree while keeping it in real history"
+	else
+		fail "sparse_exclude did not behave as expected (working tree/history mismatch)"
+	fi
+else
+	fail "make_seed_archive with sparse_exclude was unexpectedly rejected: $out"
+fi
+
 # --- Part 2: seed_git_app() (on-device first-boot consumption) --------
 
 S="$WORK/seed-git-app"

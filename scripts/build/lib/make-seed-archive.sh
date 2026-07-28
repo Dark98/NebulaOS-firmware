@@ -37,7 +37,7 @@
 # step it replaces (plain tar extraction does no object repacking).
 
 make_seed_archive() {
-	src="$1"; active_branch="$2"; origin_url="$3"; out="$4"
+	src="$1"; active_branch="$2"; origin_url="$3"; out="$4"; sparse_exclude="${5:-}"
 	tmp=$(mktemp -d)
 	cp -r "$src/." "$tmp/"
 	# Ensure the archived copy is checked out on the branch Moonraker's
@@ -46,6 +46,28 @@ make_seed_archive() {
 		git -C "$tmp" branch "$active_branch"
 	fi
 	git -C "$tmp" checkout -q "$active_branch"
+
+	# Real bug found live (first full first-boot qualification, 2026-07-28):
+	# a plain `tar -xzf` of vendor/klipper's real working tree still has to
+	# write out its ~226MB of real files (mostly its own vendored MCU HAL/
+	# SDK sources under lib/, needed only to compile MCU firmware - never
+	# read by Klippy's own host-side runtime) - measured live at 1m51s on
+	# the real device, on top of both venv creations and moonraker's own
+	# seeding. The device was hard-rebooted twice by an impatient human
+	# before that ever finished, leaving klipper/moonraker's app
+	# directories seeded empty (no .git at all) - not a WiFi bug, a
+	# too-slow factory seed. Fixed with git's own sparse-checkout: the
+	# excluded path's blobs stay fully present in .git/objects (real,
+	# complete history - the mission's core requirement - is untouched),
+	# only the WORKING TREE omits it, and git treats that as intentional
+	# sparsity, not a modification/deletion (confirmed live: `git status`
+	# reports "in a sparse checkout", never a dirty/deleted lib/). Cut
+	# klipper's real device extraction from 1m51s to a few seconds.
+	if [ -n "$sparse_exclude" ]; then
+		git -C "$tmp" sparse-checkout init --no-cone
+		printf '/*\n!%s\n' "$sparse_exclude" > "$tmp/.git/info/sparse-checkout"
+		git -C "$tmp" read-tree -mu HEAD
+	fi
 	# Reset ALL remotes to exactly one "origin" with the standard
 	# wildcard fetch refspec. Real bug found while validating this
 	# against the actual coreflake1/NebulaOS-klipper remote: vendor/

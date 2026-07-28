@@ -410,7 +410,7 @@ for stale_dir in "$BUILDROOT_DIR/output/target/opt/nebulaos-seeds" \
 done
 klipper_origin="https://github.com/coreflake1/NebulaOS-klipper.git"
 klipper_seed_commit=$(make_seed_archive "$VENDOR/klipper" master \
-	"$klipper_origin" "$OVERLAY/opt/nebulaos-seeds/klipper.tar.gz")
+	"$klipper_origin" "$OVERLAY/opt/nebulaos-seeds/klipper.tar.gz" "/lib/")
 klipper_is_shallow=$(git -C "$VENDOR/klipper" rev-parse --is-shallow-repository)
 
 moonraker_origin="https://github.com/Arksine/moonraker.git"

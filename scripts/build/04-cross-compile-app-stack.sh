@@ -324,89 +324,107 @@ echo "== copying Mainsail static build =="
 mkdir -p "$OVERLAY/usr/share/mainsail"
 cp -r "$VENDOR"/mainsail-dist/dist/* "$OVERLAY/usr/share/mainsail/"
 
-### 6. NebulaOS mutable-runtime mission, Phase 4: immutable offline factory
-# seeds. Git bundles (a single self-contained file holding real commit
-# history, git's own documented offline-distribution mechanism) for
-# Klipper and Moonraker, baked into the read-only squashfs so first-boot
-# namespace seeding (S03nebulaos-factory-seed) never depends on GitHub,
-# PyPI, or DNS being reachable. Mainsail needs no bundle - it is already a
-# plain static release tree, not a git repo, so the existing
+### 6. NebulaOS mutable-runtime mission, Phase 4 (revised - real-history
+# repair mission, see docs/NEBULAOS_MOONRAKER_UPDATE_AND_CAMERA_ANALYSIS.md
+# and the auto-updates-camera-complete mission): immutable offline factory
+# seeds for Klipper and Moonraker, baked into the read-only squashfs so
+# first-boot namespace seeding (S04nebulaos-factory-seed) never depends on
+# GitHub, PyPI, or DNS being reachable. Mainsail needs no seed archive - it
+# is already a plain static release tree, not a git repo, so the existing
 # /usr/share/mainsail copy above IS its own offline seed; first-boot
 # seeding just cp -a's it.
 #
-# Both vendor/klipper and vendor/moonraker are shallow clones
-# (00-fetch-vendor-sources.sh's clone_pinned, 1-2 commits deep) - found by
-# testing the obvious `git bundle create out.bundle <branch>` directly
-# against them and getting "Failed to traverse parents of commit ...";
-# `git bundle verify` reports such a bundle as fine, but a real `git clone`
-# of it fails with "did not send all necessary objects" (a real git
-# shallow-bundle limitation, not a syntax mistake). Fixed by flattening
-# each vendor checkout into a single synthetic orphan commit (same tree,
-# no shallow boundary at all) in a throwaway copy before bundling - the
-# factory seed only ever needs matching tree content plus a real branch
-# name to clone onto, not preserved history; the true upstream commit this
-# snapshot derives from is recorded in the commit message and the seed
-# manifest below instead.
-make_flat_bundle() {
-	src="$1"; branch="$2"; out="$3"; true_commit="$4"
-	tmp=$(mktemp -d)
-	cp -r "$src/." "$tmp/"
-	git -C "$tmp" checkout --orphan nebulaos-seed-tmp -q
-	git -C "$tmp" add -A
-	git -C "$tmp" -c user.email=nebulaos@localhost -c user.name=NebulaOS \
-		commit -q -m "NebulaOS factory seed snapshot of $branch @ $true_commit"
-	git -C "$tmp" branch -D "$branch" 2>/dev/null || true
-	git -C "$tmp" branch -m nebulaos-seed-tmp "$branch"
-	git -C "$tmp" bundle create "$out" HEAD "refs/heads/$branch"
-	git -C "$tmp" rev-parse HEAD
-	rm -rf "$tmp"
-}
+# PRIOR APPROACH (removed): each vendor checkout was flattened into a
+# single synthetic orphan commit ("NebulaOS factory seed snapshot of
+# <branch> @ <true_commit>") before bundling, because a plain
+# `git bundle create` of vendor/klipper's shallow clone (1-2 commits deep,
+# 00-fetch-vendor-sources.sh's clone_pinned) produces a bundle that
+# `git bundle verify` reports as fine but a real `git clone` of rejects
+# with "Failed to traverse parents of commit ..." / "remote did not send all
+# necessary objects" (confirmed again against git 2.55.0 - a genuine,
+# still-present git limitation, not a syntax mistake). That synthetic
+# commit had no shared ancestry with the real coreflake1/NebulaOS-klipper
+# or Arksine/moonraker history on GitHub, which made Moonraker's own
+# `git merge-base --is-ancestor HEAD origin/<branch>` check permanently
+# fail (return code 1) on every freshly-seeded device - HEAD could never
+# be an ancestor of a real remote branch it shared no history with. This
+# set `diverged=true` -> `has_recoverable_errors()=true` ->
+# `is_valid()=false` (vendor/moonraker/moonraker/components/update_manager/
+# git_deploy.py) permanently, blocking every real Klipper/Moonraker update.
+#
+# FIX: stop bundling/flattening entirely. Archive each vendor checkout's
+# REAL `.git` directory (shallow boundary, real branch, real commits) plus
+# its working tree as a plain tar file, with the local branch renamed to
+# match Moonraker's hardcoded reserved-slot expectation ("master" - see
+# BASE_CONFIG in update_manager/common.py, not configurable) and origin
+# rewritten to the real public remote. On-device seeding (S04) then
+# extracts the tar directly into place - no `git clone` at all, which is
+# also strictly cheaper on this 208MB device than the clone-from-bundle
+# step it replaces (plain tar extraction does no object repacking).
+# vendor/klipper's real "nebulaos" branch commit
+# (b3d5ab2b9484f1558586c3a2ea43d46ff9a473a7) is confirmed genuinely
+# present on GitHub (`git ls-remote nebulaos`) and was additionally pushed
+# as a real "master" branch on the same coreflake1/NebulaOS-klipper fork
+# (see the mission's Phase C) - so after this seed's origin fetch,
+# origin/master is a real ref whose tip HEAD is trivially an ancestor of
+# (currently: identical to). "nebulaos" remains a real branch too, kept as
+# the development/source branch this project keeps building from.
+# vendor/moonraker is already a full (non-shallow) clone of the official
+# Arksine/moonraker repo with HEAD == origin/master, so it needs no branch
+# surgery at all - only the same archive-instead-of-bundle treatment.
+#
+# make_seed_archive() itself lives in scripts/build/lib/make-seed-archive.sh,
+# shared verbatim with tests/factory-seed-git-tests.sh so the tests exercise
+# this exact function rather than a parallel reimplementation of its rules.
+. "$SCRIPT_DIR/lib/make-seed-archive.sh"
 
-echo "== creating offline factory-seed git bundles (Klipper, Moonraker) =="
+echo "== creating offline factory-seed archives (Klipper, Moonraker) =="
 mkdir -p "$OVERLAY/opt/nebulaos-seeds"
-klipper_true_commit=$(git -C "$VENDOR/klipper" rev-parse nebulaos)
-klipper_seed_commit=$(make_flat_bundle "$VENDOR/klipper" nebulaos \
-	"$OVERLAY/opt/nebulaos-seeds/klipper.bundle" "$klipper_true_commit")
-moonraker_true_commit=$(git -C "$VENDOR/moonraker" rev-parse master)
-moonraker_seed_commit=$(make_flat_bundle "$VENDOR/moonraker" master \
-	"$OVERLAY/opt/nebulaos-seeds/moonraker.bundle" "$moonraker_true_commit")
+klipper_origin="https://github.com/coreflake1/NebulaOS-klipper.git"
+klipper_seed_commit=$(make_seed_archive "$VENDOR/klipper" master \
+	"$klipper_origin" "$OVERLAY/opt/nebulaos-seeds/klipper.tar")
+klipper_is_shallow=$(git -C "$VENDOR/klipper" rev-parse --is-shallow-repository)
 
-klipper_origin=$(git -C "$VENDOR/klipper" remote get-url nebulaos 2>/dev/null || echo "https://github.com/coreflake1/NebulaOS-klipper.git")
-moonraker_origin=$(git -C "$VENDOR/moonraker" remote get-url origin 2>/dev/null || echo "https://github.com/Arksine/moonraker.git")
+moonraker_origin="https://github.com/Arksine/moonraker.git"
+moonraker_seed_commit=$(make_seed_archive "$VENDOR/moonraker" master \
+	"$moonraker_origin" "$OVERLAY/opt/nebulaos-seeds/moonraker.tar")
+moonraker_is_shallow=$(git -C "$VENDOR/moonraker" rev-parse --is-shallow-repository)
 mainsail_version=$(cat "$VENDOR/mainsail-dist/dist/.version" 2>/dev/null || echo "unknown")
 build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 cat > "$OVERLAY/opt/nebulaos-seeds/seed-manifest.json" <<EOF
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "build_date": "$build_date",
   "seeds": {
     "klipper": {
-      "format": "git_bundle_flattened",
-      "file": "klipper.bundle",
+      "format": "git_repo_archive_real_history",
+      "file": "klipper.tar",
       "repository": "$klipper_origin",
-      "branch": "nebulaos",
+      "branch": "master",
       "seed_commit": "$klipper_seed_commit",
-      "true_upstream_commit": "$klipper_true_commit",
-      "sha256": "$(sha256sum "$OVERLAY/opt/nebulaos-seeds/klipper.bundle" | cut -d' ' -f1)",
-      "compatibility_level": 1,
-      "upstream_base": "pellcorp/klipper @ 386fde4fd38e8eda6999e58bf260eceb00051188"
+      "is_shallow": $klipper_is_shallow,
+      "sha256": "$(sha256sum "$OVERLAY/opt/nebulaos-seeds/klipper.tar" | cut -d' ' -f1)",
+      "compatibility_level": 2,
+      "upstream_base": "pellcorp/klipper @ 386fde4fd38e8eda6999e58bf260eceb00051188",
+      "note": "real, genuinely-rooted shallow history - no synthetic wrapper commit; HEAD is confirmed present on the real coreflake1/NebulaOS-klipper remote as both 'master' and 'nebulaos'"
     },
     "moonraker": {
-      "format": "git_bundle_flattened",
-      "file": "moonraker.bundle",
+      "format": "git_repo_archive_real_history",
+      "file": "moonraker.tar",
       "repository": "$moonraker_origin",
       "branch": "master",
       "seed_commit": "$moonraker_seed_commit",
-      "true_upstream_commit": "$moonraker_true_commit",
-      "sha256": "$(sha256sum "$OVERLAY/opt/nebulaos-seeds/moonraker.bundle" | cut -d' ' -f1)",
-      "compatibility_level": 1
+      "is_shallow": $moonraker_is_shallow,
+      "sha256": "$(sha256sum "$OVERLAY/opt/nebulaos-seeds/moonraker.tar" | cut -d' ' -f1)",
+      "compatibility_level": 2,
+      "note": "full, non-shallow real history; HEAD equals official Arksine/moonraker origin/master at build time"
     },
     "mainsail": {
       "format": "directory_copy",
       "source_path": "/usr/share/mainsail",
       "version": "$mainsail_version",
-      "compatibility_level": 1
+      "compatibility_level": 2
     }
   }
 }

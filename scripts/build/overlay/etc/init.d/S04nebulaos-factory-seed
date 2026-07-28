@@ -2,8 +2,8 @@
 #
 # NebulaOS mutable-runtime mission, Phase 4: idempotent, offline-only
 # first-boot seeding of the mutable Klipper/Moonraker/Mainsail checkouts
-# under /usr/data/nebulaos/apps/*, from the immutable git bundles and
-# static-release copy baked into the read-only squashfs at
+# under /usr/data/nebulaos/apps/*, from the immutable real-history git
+# archives and static-release copy baked into the read-only squashfs at
 # /opt/nebulaos-seeds. Never touches GitHub/PyPI/DNS - this must work with
 # no network at all, so a wiped or first-time namespace can always recover.
 #
@@ -12,22 +12,30 @@
 # over to the seeded copies - Phase 5's activation manager does that. This
 # is purely "make sure a valid, verified mutable copy exists on disk."
 #
-# IMPORTANT for whoever writes Phase 7/10's update logic: the seeded
-# Klipper/Moonraker checkouts are flattened single-commit snapshots (see
-# 04-cross-compile-app-stack.sh's make_flat_bundle - both vendor checkouts
-# are shallow clones, and bundling a shallow repo's real history does not
-# survive a clone on this git version). Their commit has NO shared ancestry
-# with the real coreflake1/NebulaOS-klipper or Arksine/moonraker history on
-# GitHub. The first real update after seeding MUST use
-# `git fetch origin <branch> && git reset --hard origin/<branch>`
-# (discarding the synthetic local commit outright), never a merge/pull -
-# a merge would try to reconcile two unrelated histories and fail or
-# produce a nonsensical result.
+# NebulaOS auto-updates-camera-complete mission (2026-07-28, see
+# docs/NEBULAOS_MOONRAKER_UPDATE_AND_CAMERA_ANALYSIS.md): the seeded
+# Klipper/Moonraker checkouts are now REAL git repositories extracted
+# directly from a tar archive of the actual vendor checkout's `.git`
+# directory + working tree (04-cross-compile-app-stack.sh's
+# make_seed_archive) - no bundle, no `git clone`, no synthetic commit.
+# This replaces the prior "flattened single-commit snapshot" approach,
+# whose synthetic commit shared no ancestry with the real
+# coreflake1/NebulaOS-klipper or Arksine/moonraker history on GitHub and
+# made Moonraker's `git merge-base --is-ancestor HEAD origin/<branch>`
+# check permanently fail (diverged=true -> is_valid=false), blocking every
+# real update on every freshly-seeded device. The archived HEAD commit is
+# now genuinely reachable from the real remote's branch tip, so the first
+# real `/machine/update/status?refresh=true` fetch resolves cleanly with
+# no special-case reset required - ordinary `git fetch`/pull semantics
+# apply from the very first boot.
 
-SEEDS=/opt/nebulaos-seeds
-APPS=/usr/data/nebulaos/apps
-SYSTEM=/usr/data/nebulaos/system
-LOCKDIR=/usr/data/nebulaos/updates/locks
+# Overridable via env for tests/factory-seed-git-tests.sh (same
+# fixture-path convention as scripts/flash-spare-slot.sh's DEV_PREFIX) -
+# real boot never sets these, so ":=" always resolves to the real paths.
+SEEDS="${SEEDS:-/opt/nebulaos-seeds}"
+APPS="${APPS:-/usr/data/nebulaos/apps}"
+SYSTEM="${SYSTEM:-/usr/data/nebulaos/system}"
+LOCKDIR="${LOCKDIR:-/usr/data/nebulaos/updates/locks}"
 
 # NebulaOS Memory Resilience Gate (docs/NEBULAOS_MEMORY_RESILIENCE.md): this
 # is the "most expendable during maintenance" process tier - it should be
@@ -36,11 +44,12 @@ LOCKDIR=/usr/data/nebulaos/updates/locks
 echo 500 > "/proc/self/oom_score_adj" 2>/dev/null
 
 # Low-memory git settings for this 208MB-RAM device
-# (docs/NEBULAOS_MEMORY_RESILIENCE.md sec 11) - single-threaded packing/
-# delta work and bounded caches measurably reduce index-pack's peak RSS
-# during `git clone` of a bundle, which is exactly the operation the
-# kernel OOM-killer was observed killing. gc.auto=0 avoids an incidental
-# background gc competing for memory right after a clone.
+# (docs/NEBULAOS_MEMORY_RESILIENCE.md sec 11). Seeding no longer runs
+# `git clone` at all (real-history archives are extracted with plain tar,
+# removing the index-pack step the OOM-killer was originally observed
+# killing) - kept as defense in depth for the lightweight git commands
+# seed_git_app's own verification still runs (symbolic-ref, status,
+# log, rev-parse) and for any other git usage inheriting this shell's env.
 export GIT_CONFIG_COUNT=4
 export GIT_CONFIG_KEY_0=pack.threads GIT_CONFIG_VALUE_0=1
 export GIT_CONFIG_KEY_1=core.packedGitWindowSize GIT_CONFIG_VALUE_1=1m
@@ -92,7 +101,7 @@ resume_expendable_services() {
 
 seed_git_app() {
 	name="$1"
-	bundle="$SEEDS/$name.bundle"
+	archive="$SEEDS/$name.tar"
 	dest="$APPS/$name"
 	branch="$2"
 	origin="$3"
@@ -101,32 +110,43 @@ seed_git_app() {
 		log "$name already seeded ($dest/.git exists) - skipping"
 		return 0
 	fi
-	if [ ! -f "$bundle" ]; then
-		log "ERROR: seed bundle missing ($bundle) - cannot seed $name"
+	if [ ! -f "$archive" ]; then
+		log "ERROR: seed archive missing ($archive) - cannot seed $name"
 		return 1
 	fi
 
-	log "seeding $name from offline bundle $bundle"
+	log "seeding $name from offline archive $archive (real git history, no clone needed)"
 	rm -rf "$dest.partial"
-	if ! git clone --quiet "$bundle" "$dest.partial"; then
-		log "ERROR: git clone from bundle failed for $name - leaving no partial state"
+	mkdir -p "$dest.partial"
+	if ! tar -xf "$archive" -C "$dest.partial"; then
+		log "ERROR: tar extraction failed for $name - leaving no partial state"
 		rm -rf "$dest.partial"
 		return 1
 	fi
 	sync
 
-	# Point the seeded checkout's origin at the real remote so a later
-	# network-connected `git fetch` reaches GitHub, not the (now-stale)
-	# bundle file - but do NOT fetch here; this step must stay fully
-	# offline, network access is Phase 7/10's concern, not first-boot seeding.
-	git -C "$dest.partial" remote set-url origin "$origin" 2>/dev/null || true
-
-	# Verify the seeded checkout landed on the exact expected branch/commit
-	# before it is considered valid - an interrupted or corrupted bundle
-	# extraction must never silently become "seeded."
-	actual_branch=$(git -C "$dest.partial" branch --show-current)
+	# Verify the seeded checkout landed on the exact expected branch and
+	# real origin before it is considered valid - an interrupted or
+	# corrupted archive extraction must never silently become "seeded."
+	actual_branch=$(git -C "$dest.partial" symbolic-ref --short HEAD 2>/dev/null)
 	if [ "$actual_branch" != "$branch" ]; then
 		log "ERROR: $name seeded checkout is on branch '$actual_branch', expected '$branch' - rejecting"
+		rm -rf "$dest.partial"
+		return 1
+	fi
+	actual_origin=$(git -C "$dest.partial" remote get-url origin 2>/dev/null)
+	if [ "$actual_origin" != "$origin" ]; then
+		log "ERROR: $name seeded checkout has origin '$actual_origin', expected '$origin' - rejecting"
+		rm -rf "$dest.partial"
+		return 1
+	fi
+	if [ -n "$(git -C "$dest.partial" status --porcelain 2>/dev/null)" ]; then
+		log "ERROR: $name seeded checkout has a dirty working tree - rejecting"
+		rm -rf "$dest.partial"
+		return 1
+	fi
+	if git -C "$dest.partial" log --all --format=%s 2>/dev/null | grep -q "NebulaOS factory seed snapshot"; then
+		log "ERROR: $name seeded checkout contains a synthetic wrapper commit - rejecting"
 		rm -rf "$dest.partial"
 		return 1
 	fi
@@ -317,7 +337,7 @@ start() {
 	# memory is fully released (process exit) before the next begins;
 	# `sync` after each step flushes rather than leaving dirty pages to
 	# compete with the next step's own memory needs.
-	seed_git_app klipper nebulaos "https://github.com/coreflake1/NebulaOS-klipper.git"
+	seed_git_app klipper master "https://github.com/coreflake1/NebulaOS-klipper.git"
 	setup_klipper_env
 	seed_git_app moonraker master "https://github.com/Arksine/moonraker.git"
 	setup_moonraker_env
@@ -328,11 +348,17 @@ start() {
 	record_known_good
 }
 
-case "$1" in
-	start)
-		start
-		;;
-	*)
-		;;
-esac
-exit 0
+# S04NEBULAOS_FACTORY_SEED_NO_AUTORUN=1 lets tests/factory-seed-git-tests.sh
+# source this script (same convention as scripts/flash-spare-slot.sh's
+# FLASH_SPARE_SLOT_NO_AUTORUN) to call seed_git_app() directly against
+# fixture archives, without also running the init-script dispatch below.
+if [ -z "${S04NEBULAOS_FACTORY_SEED_NO_AUTORUN:-}" ]; then
+	case "$1" in
+		start)
+			start
+			;;
+		*)
+			;;
+	esac
+	exit 0
+fi

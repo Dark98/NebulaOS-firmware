@@ -26,7 +26,7 @@ Live-tested (user-approved, since the auto-mode classifier flagged the action): 
 
 Verified clean end to end:
 ```
-klipper HEAD after reseed: 2d75015d7c76dd31e4b0f49e1ae3fe6ad86cad24 (fresh clone, new commit vs. before - expected, the factory-seed bundle produces a new flattened commit each time)
+klipper HEAD after reseed: 2d75015d7c76dd31e4b0f49e1ae3fe6ad86cad24 (fresh clone, new commit vs. before - expected at the time, since the factory-seed bundle produced a new flattened synthetic commit each time; SUPERSEDED 2026-07-28, see §11 - the real-history seed archive now produces the SAME real commit on every reseed, which is what let Moonraker's Update Manager treat it as a real, non-diverged repository for the first time)
 moonraker venv: recreated, /usr/data/nebulaos/envs/moonraker/bin/python3 present
 klippy_state: ready
 known-good.json: real commits recorded (not "unseeded")
@@ -146,6 +146,14 @@ GUPPYSCREEN_WIFI_STATUS: PASS
 ```
 
 Not left as an open question - closed by direct user confirmation, not inferred from network-layer evidence alone.
+
+## 11. Auto-updates-camera-complete mission (2026-07-28): real-history factory seed and real update qualification
+
+Root cause and fix are recorded in full in `docs/NEBULAOS_MOONRAKER_UPDATE_AND_CAMERA_ANALYSIS.md` §28: the factory seed's synthetic wrapper commit made every freshly-seeded Klipper/Moonraker checkout permanently `diverged=true` / `is_valid=false` in Moonraker's own Update Manager, blocking real updates on every device regardless of network or clock state. Fixed by replacing the flatten+bundle seed with a real-history tar archive (`scripts/build/lib/make-seed-archive.sh`) and renaming Klipper's production branch from `nebulaos` to `master` to match Moonraker's hardcoded reserved-slot expectation. Offline regression coverage: `tests/factory-seed-git-tests.sh` (15 cases, including an end-to-end proof that a seeded repo's HEAD is a real ancestor of a bare-repo stand-in's branch tip after a real `git fetch`).
+
+Live qualification found three further real, previously-undiscovered bugs before `is_valid: true` was actually achieved - full evidence in `NEBULAOS_MOONRAKER_UPDATE_AND_CAMERA_ANALYSIS.md` §29: (1) BusyBox's real on-device `tar` has no `-z` support at all, silently failing `seed_git_app`'s extraction on every fresh-boot attempt (an offline-only manual reproduction had accidentally exercised stock's different tar, masking this); (2) `git branch --set-upstream-to` silently no-ops in an offline-built archive (its target ref never exists locally), leaving `is_valid()` false via an unset `branch.<name>.remote` even with fully correct, non-diverged, non-dirty history; (3) the `c_helper.so` committed inside `vendor/klipper`'s own history is incompatible with this image (an upstream binary, not this project's own cross-compiled one) and hung Klipper indefinitely with no compiler on-device to fall back on. All three confirmed fixed live: `is_valid: true` for both klipper and moonraker, and Klipper reaching `state: ready`, on the real device. A fourth, structural fix (`S39wifi` → `S01wifi`, so WiFi/SSH survives the first-boot seeding window) is what made diagnosing the other three possible at all rather than looking like repeated unexplained hangs.
+
+**Status**: real-history seed + all three bugs fixed and individually confirmed live (via targeted manual patches applied directly to an already-seeded checkout, one fix at a time). A final, single from-scratch fresh-namespace boot with the complete fixed image (all four fixes together, no manual patching) was in progress when the device's WiFi credentials were wiped by that same fresh-namespace test (expected - a genuine wipe also erases saved WiFi, same as the very first clean-install test earlier in this mission) and is paused pending WiFi reconfiguration via GuppyScreen. The remaining Phase O/P/Q/R items (a real Klipper update; a real Moonraker update; the Mainsail/Moonraker Recover action; camera update-survival and user-deletion; a controlled rollback) will be recorded here once that final boot completes - not claimed in advance of the actual test.
 
 ## Summary
 

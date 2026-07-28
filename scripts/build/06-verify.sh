@@ -305,6 +305,14 @@ echo "=== factory-seed git archives (auto-updates-camera-complete mission, 2026-
 # of the built image and inspected with real git commands, the same way
 # the moonraker.conf content checks above go beyond existence-only.
 apt-get install -y -qq git >/dev/null 2>&1
+# Real bug found live: the extracted archive keeps the UID it was tarred
+# with on the build host, which does not match this containers root user
+# - git refuses to operate on it at all ("detected dubious ownership"),
+# silently making every symbolic-ref/remote/status command below return
+# empty instead of erroring, which made every check misreport a MISS.
+# Harmless here (a throwaway verification container, not a real trust
+# boundary) - exempt the one fixed extraction path used below.
+git config --global --add safe.directory /tmp/seed-check
 check_seed_archive() {
 	archive_path="$1"; expected_branch="$2"; expected_origin="$3"; label="$4"
 	rm -rf /tmp/seed-check

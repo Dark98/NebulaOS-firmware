@@ -96,7 +96,27 @@ make_seed_archive() {
 	rm -rf "$tmp/.git/refs/remotes"
 	git -C "$tmp" remote add origin "$origin_url"
 	git -C "$tmp" config "remote.origin.fetch" "+refs/heads/*:refs/remotes/origin/*"
-	git -C "$tmp" branch --set-upstream-to="origin/$active_branch" "$active_branch" 2>/dev/null || true
+	# Real, critical bug found live during the first genuinely successful
+	# fresh-boot qualification: `branch --set-upstream-to` requires the
+	# target remote-tracking ref (origin/<branch>) to already exist
+	# locally, which it never does in an offline-built archive (no fetch
+	# has ever happened against this freshly-added "origin" remote) - so
+	# this silently failed every single time, swallowed by its own
+	# `|| true`. Without it, the branch has no `branch.<name>.remote`
+	# config at all, which is exactly what Moonraker's own GitDeploy reads
+	# to populate `git_remote` (git_deploy.py's `config_get(f"branch.
+	# {branch}.remote")`) - with that unset, git_remote is "?", and
+	# is_valid()'s own `"?" not in (git_branch, git_remote,
+	# upstream_commit)` check fails it directly, independent of and in
+	# addition to the diverged/dirty/detached checks this mission already
+	# fixed. Confirmed live: `is_valid` stayed false with a real, correctly
+	# ancestor-reachable, non-diverged, non-dirty repo until this exact
+	# config was set. Setting the two config keys directly (not via
+	# `--set-upstream-to`) needs no pre-existing remote-tracking ref at
+	# all - confirmed live this alone was sufficient to make Moonraker
+	# report is_valid=true for both klipper and moonraker.
+	git -C "$tmp" config "branch.$active_branch.remote" origin
+	git -C "$tmp" config "branch.$active_branch.merge" "refs/heads/$active_branch"
 
 	# Discard local build-artifact drift on the one known, understood
 	# tracked binary this repeatedly reproduces on (klippy/chelper/

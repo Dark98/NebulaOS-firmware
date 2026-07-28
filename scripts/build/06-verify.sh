@@ -357,6 +357,30 @@ check_seed_archive() {
 }
 check_seed_archive /opt/nebulaos-seeds/klipper.tar.gz master "https://github.com/coreflake1/NebulaOS-klipper.git" "klipper"
 check_seed_archive /opt/nebulaos-seeds/moonraker.tar.gz master "https://github.com/Arksine/moonraker.git" "moonraker"
+
+# Real bug this catches if regressed: the c_helper.so committed inside
+# vendor/klippers own git history (an upstream binary) is incompatible
+# with this image and hangs Klipper indefinitely with no on-device
+# compiler to fall back on - only this projects own cross-compiled copy,
+# already baked into the immutable /opt/klipper baseline, actually loads.
+# Confirms the seed archives copy (the one the persistent, git-updatable
+# checkout actually ships) is byte-identical to the proven-working
+# immutable one, not silently reverted to the incompatible upstream blob.
+rm -rf /tmp/chelper-check
+mkdir -p /tmp/chelper-check
+debugfs -R "dump /opt/nebulaos-seeds/klipper.tar.gz /tmp/chelper-check.tar.gz" /img/rootfs.ext2 >/dev/null 2>&1
+if tar -xzf /tmp/chelper-check.tar.gz -C /tmp/chelper-check ./klippy/chelper/c_helper.so 2>/dev/null; then
+	SEED_CHELPER_SHA=$(sha256sum /tmp/chelper-check/klippy/chelper/c_helper.so 2>/dev/null | cut -d" " -f1)
+	BASELINE_CHELPER_SHA=$(debugfs -R "cat /opt/klipper/klippy/chelper/c_helper.so" /img/rootfs.ext2 2>/dev/null | sha256sum | cut -d" " -f1)
+	if [ -n "$SEED_CHELPER_SHA" ] && [ "$SEED_CHELPER_SHA" = "$BASELINE_CHELPER_SHA" ]; then
+		echo "OK   klipper seed archives c_helper.so matches the proven-working immutable baseline"
+	else
+		echo "MISS klipper seed archives c_helper.so ($SEED_CHELPER_SHA) does not match the immutable baseline ($BASELINE_CHELPER_SHA) - it may be the incompatible upstream binary"
+	fi
+else
+	echo "MISS could not extract klippy/chelper/c_helper.so from the klipper seed archive for comparison"
+fi
+rm -rf /tmp/chelper-check /tmp/chelper-check.tar.gz
 SEED_MANIFEST_CONTENT=$(debugfs -R "cat /opt/nebulaos-seeds/seed-manifest.json" /img/rootfs.ext2 2>/dev/null)
 if echo "$SEED_MANIFEST_CONTENT" | grep -q "git_bundle_flattened"; then
 	echo "MISS seed-manifest.json still references the removed git_bundle_flattened format"

@@ -379,15 +379,23 @@ cp -r "$VENDOR"/mainsail-dist/dist/* "$OVERLAY/usr/share/mainsail/"
 . "$SCRIPT_DIR/lib/make-seed-archive.sh"
 
 echo "== creating offline factory-seed archives (Klipper, Moonraker) =="
+# Real bug found live: $OVERLAY/opt/nebulaos-seeds/ is created directly by
+# this script, not by 02-configure-buildroot.sh's tracked-template resync
+# (which only mirrors scripts/build/overlay/) - so it is never cleaned
+# between runs. A stale, now-uncompressed-format klipper.tar/moonraker.tar
+# left over from before the .tar.gz switch sat alongside the new files and
+# would have doubled the seed footprint in the packaged image. Always
+# start from a clean directory here.
+rm -rf "$OVERLAY/opt/nebulaos-seeds"
 mkdir -p "$OVERLAY/opt/nebulaos-seeds"
 klipper_origin="https://github.com/coreflake1/NebulaOS-klipper.git"
 klipper_seed_commit=$(make_seed_archive "$VENDOR/klipper" master \
-	"$klipper_origin" "$OVERLAY/opt/nebulaos-seeds/klipper.tar")
+	"$klipper_origin" "$OVERLAY/opt/nebulaos-seeds/klipper.tar.gz")
 klipper_is_shallow=$(git -C "$VENDOR/klipper" rev-parse --is-shallow-repository)
 
 moonraker_origin="https://github.com/Arksine/moonraker.git"
 moonraker_seed_commit=$(make_seed_archive "$VENDOR/moonraker" master \
-	"$moonraker_origin" "$OVERLAY/opt/nebulaos-seeds/moonraker.tar")
+	"$moonraker_origin" "$OVERLAY/opt/nebulaos-seeds/moonraker.tar.gz")
 moonraker_is_shallow=$(git -C "$VENDOR/moonraker" rev-parse --is-shallow-repository)
 mainsail_version=$(cat "$VENDOR/mainsail-dist/dist/.version" 2>/dev/null || echo "unknown")
 build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -399,24 +407,24 @@ cat > "$OVERLAY/opt/nebulaos-seeds/seed-manifest.json" <<EOF
   "seeds": {
     "klipper": {
       "format": "git_repo_archive_real_history",
-      "file": "klipper.tar",
+      "file": "klipper.tar.gz",
       "repository": "$klipper_origin",
       "branch": "master",
       "seed_commit": "$klipper_seed_commit",
       "is_shallow": $klipper_is_shallow,
-      "sha256": "$(sha256sum "$OVERLAY/opt/nebulaos-seeds/klipper.tar" | cut -d' ' -f1)",
+      "sha256": "$(sha256sum "$OVERLAY/opt/nebulaos-seeds/klipper.tar.gz" | cut -d' ' -f1)",
       "compatibility_level": 2,
       "upstream_base": "pellcorp/klipper @ 386fde4fd38e8eda6999e58bf260eceb00051188",
       "note": "real, genuinely-rooted shallow history - no synthetic wrapper commit; HEAD is confirmed present on the real coreflake1/NebulaOS-klipper remote as both 'master' and 'nebulaos'"
     },
     "moonraker": {
       "format": "git_repo_archive_real_history",
-      "file": "moonraker.tar",
+      "file": "moonraker.tar.gz",
       "repository": "$moonraker_origin",
       "branch": "master",
       "seed_commit": "$moonraker_seed_commit",
       "is_shallow": $moonraker_is_shallow,
-      "sha256": "$(sha256sum "$OVERLAY/opt/nebulaos-seeds/moonraker.tar" | cut -d' ' -f1)",
+      "sha256": "$(sha256sum "$OVERLAY/opt/nebulaos-seeds/moonraker.tar.gz" | cut -d' ' -f1)",
       "compatibility_level": 2,
       "note": "full, non-shallow real history; HEAD equals official Arksine/moonraker origin/master at build time"
     },

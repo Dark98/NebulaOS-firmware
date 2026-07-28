@@ -313,7 +313,7 @@ check_seed_archive() {
 		echo "MISS $label archive could not be dumped from the image ($archive_path)"
 		return
 	fi
-	if ! tar -xf /tmp/seed-check.tar -C /tmp/seed-check 2>/dev/null; then
+	if ! tar -xzf /tmp/seed-check.tar -C /tmp/seed-check 2>/dev/null; then
 		echo "MISS $label archive is not a valid tar file"
 		return
 	fi
@@ -347,8 +347,8 @@ check_seed_archive() {
 	fi
 	rm -rf /tmp/seed-check /tmp/seed-check.tar
 }
-check_seed_archive /opt/nebulaos-seeds/klipper.tar master "https://github.com/coreflake1/NebulaOS-klipper.git" "klipper"
-check_seed_archive /opt/nebulaos-seeds/moonraker.tar master "https://github.com/Arksine/moonraker.git" "moonraker"
+check_seed_archive /opt/nebulaos-seeds/klipper.tar.gz master "https://github.com/coreflake1/NebulaOS-klipper.git" "klipper"
+check_seed_archive /opt/nebulaos-seeds/moonraker.tar.gz master "https://github.com/Arksine/moonraker.git" "moonraker"
 SEED_MANIFEST_CONTENT=$(debugfs -R "cat /opt/nebulaos-seeds/seed-manifest.json" /img/rootfs.ext2 2>/dev/null)
 if echo "$SEED_MANIFEST_CONTENT" | grep -q "git_bundle_flattened"; then
 	echo "MISS seed-manifest.json still references the removed git_bundle_flattened format"
@@ -383,8 +383,8 @@ check /etc/init.d/S05nebulaos-activate
 check /etc/init.d/S45nebulaos-cleanup
 check /etc/nebulaos-retention.sh
 check /etc/nebulaos-healthcheck.sh
-check /opt/nebulaos-seeds/klipper.tar
-check /opt/nebulaos-seeds/moonraker.tar
+check /opt/nebulaos-seeds/klipper.tar.gz
+check /opt/nebulaos-seeds/moonraker.tar.gz
 check /opt/nebulaos-seeds/seed-manifest.json
 check /usr/sbin/ntpd
 check /etc/init.d/S40nebulaos-ntpsync

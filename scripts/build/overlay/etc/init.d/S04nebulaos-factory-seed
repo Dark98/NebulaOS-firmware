@@ -101,7 +101,7 @@ resume_expendable_services() {
 
 seed_git_app() {
 	name="$1"
-	archive="$SEEDS/$name.tar"
+	archive="$SEEDS/$name.tar.gz"
 	dest="$APPS/$name"
 	branch="$2"
 	origin="$3"
@@ -118,7 +118,7 @@ seed_git_app() {
 	log "seeding $name from offline archive $archive (real git history, no clone needed)"
 	rm -rf "$dest.partial"
 	mkdir -p "$dest.partial"
-	if ! tar -xf "$archive" -C "$dest.partial"; then
+	if ! tar -xzf "$archive" -C "$dest.partial"; then
 		log "ERROR: tar extraction failed for $name - leaving no partial state"
 		rm -rf "$dest.partial"
 		return 1

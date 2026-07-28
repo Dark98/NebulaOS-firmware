@@ -110,7 +110,17 @@ make_seed_archive() {
 		return 1
 	fi
 
-	tar -C "$tmp" -cf "$out" .
+	# gzip, not a plain tar: real bug found at the first full build after
+	# this archive format landed - a plain tar of vendor/klipper's real
+	# working tree (~226MB uncommitted source, mostly its own vendored
+	# MCU HAL/SDK libraries under lib/) on top of the ALREADY-shipped
+	# plain copy at /opt/klipper overflowed the fixed 400M rootfs.ext2
+	# ("Could not allocate block in ext2 filesystem"). The old flattened-
+	# commit bundle never hit this because git's own pack compression
+	# made it ~11.5MB; gzip here brings a real tar back down to a
+	# comparable order of magnitude (~40MB measured) while still
+	# preserving real, non-synthetic history.
+	tar -C "$tmp" -czf "$out" .
 	git -C "$tmp" rev-parse HEAD
 	rm -rf "$tmp"
 }

@@ -93,6 +93,9 @@ custom. If you're in a spot where you need this, you're recovering, not casually
   cd ingenic-usbboot
   make
   ```
+  **The compiled binary is named `usbboot`, not `ingenic-usbboot`** (that's just the repo/folder
+  name) - real mistake made live doing this recovery: `./ingenic-usbboot --force-swap-ota` fails
+  with "No such file or directory". Run `./usbboot ...` from inside that directory instead.
 
 ### Step by step
 1. Power off the printer.
@@ -106,12 +109,35 @@ custom. If you're in a spot where you need this, you're recovering, not casually
    ```
    lsusb
    ```
-   You're looking for a device that shows up as Ingenic's USB boot device.
-5. Force it back to stock:
+   You're looking for `ID a108:eaef Ingenic Semiconductor Co.,Ltd Ingenic USB BOOT DEVICE`.
+5. **Load u-boot first, then swap the marker** - a real sequencing mistake made live: running the
+   swap command before `--uboot` fails with `Could not open USB device` or `Request 0x14 failed,
+   only transfered: -9`. At the raw mask-ROM stage (before u-boot is loaded), the device does not
+   support the marker-swap vendor request at all - only after u-boot is running does it work.
+   Needs `sudo` (plain USB access without it fails with a permissions error):
    ```
-   ./ingenic-usbboot --force-swap-ota
+   sudo ./usbboot --uboot
+   sudo ./usbboot --swap-ota
    ```
-6. Power the printer off and on again normally (or press reset) to leave recovery mode and do a
+   There is no `--force-swap-ota` flag in the upstream tool (that name appeared in an earlier draft
+   of this doc, tested live, and does not exist) - `--swap-ota` **toggles** between `kernel` and
+   `kernel2`, it does not force a specific target. It also prints "Current OTA points at ..."
+   *before* switching and "Switched OTA to ..." after - read that output to know which state
+   you're leaving and which you're landing on.
+6. **Don't trust the printed status alone - verify the real bytes.** Real, confusing behavior
+   found live: two consecutive `--uboot` + `--swap-ota` invocations both printed "Current OTA
+   points at kernel. Switching OTA to kernel2" - i.e. neither call's printed message reflected the
+   other's actual effect, which strongly suggests the raw mask-ROM/USB-boot session doesn't
+   reliably preserve state between separate tool invocations the way the printed text implies.
+   Confirm the *actual* on-flash marker directly instead of trusting the printed message:
+   ```
+   sudo ./usbboot --uboot
+   sudo ./usbboot -o 0x100000 -s 0x1000 --dump-partition ./ota.out
+   xxd ./ota.out | head -3
+   ```
+   You want to see `ota:kernel` (stock) in the output. If you see `ota:kernel2` instead, run
+   `--swap-ota` again and re-dump until the real bytes confirm `ota:kernel`.
+7. Power the printer off and on again normally (or press reset) to leave recovery mode and do a
    real boot. It will come up on stock.
 
 ---

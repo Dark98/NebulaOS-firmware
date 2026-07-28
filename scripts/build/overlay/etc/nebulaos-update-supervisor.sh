@@ -581,7 +581,43 @@ validate_component() {
 	fi
 }
 
+# Real bug found live 2026-07-28: Moonraker's own machine.py
+# restart_moonraker_service() is how Moonraker "restarts itself" for its
+# own reserved update_manager slot (used by both a real self-update and
+# Recover) - it calls do_service_action("restart", "moonraker") and
+# swallows any exception (`except Exception: pass`, confirmed directly
+# against vendor/moonraker's own source). moonraker.conf's [machine]
+# section sets `provider: supervisord_cli`, but this Buildroot image has
+# no supervisord daemon at all (no binary running, no config, nothing in
+# any init.d script) - BusyBox init + this project's own S## scripts are
+# used instead. `supervisorctl restart moonraker` therefore always fails,
+# silently, and moonraker stays dead. The git-HEAD-delta detection below
+# is this supervisor's only other restart trigger, and a Recover that
+# fixes a dirty tree without moving HEAD (an entirely normal case) never
+# produces a delta - live-reproduced exactly this way: Moonraker stayed
+# dead for the rest of the boot with nothing left to notice. This is an
+# independent liveness check with no git dependency at all, specifically
+# to close that gap.
+ensure_moonraker_alive() {
+	if [ -e "$LOCKDIR/moonraker.lock" ]; then
+		# A validation/rollback for moonraker is already in flight and will
+		# handle its own restart - restarting it out from under that logic
+		# here would race with it.
+		return 0
+	fi
+	info=$(component_info moonraker)
+	pidfile=$(echo "$info" | cut -d'|' -f4)
+	if [ -f "$pidfile" ] && [ -d "/proc/$(cat "$pidfile" 2>/dev/null)" ] 2>/dev/null; then
+		return 0
+	fi
+	log "moonraker: process not running (pidfile stale or missing) - restarting independent of any git change"
+	wait_for_print_idle || return 0
+	init_script=$(echo "$info" | cut -d'|' -f2)
+	"$init_script" start
+}
+
 poll_once() {
+	ensure_moonraker_alive
 	for name in klipper moonraker; do
 		info=$(component_info "$name")
 		path=$(echo "$info" | cut -d'|' -f1)

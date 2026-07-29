@@ -489,6 +489,14 @@ if [ ! -f "$PRINTER_DATA_CONFIG_SRC/printer.cfg" ] || [ ! -f "$PRINTER_DATA_CONF
 	echo "FATAL: $PRINTER_DATA_CONFIG_SRC is missing printer.cfg or moonraker.conf - refusing to build a factory seed that would ship without them" >&2
 	exit 1
 fi
+if [ ! -f "$PRINTER_DATA_CONFIG_SRC/frontend-controls.cfg" ]; then
+	echo "FATAL: $PRINTER_DATA_CONFIG_SRC is missing frontend-controls.cfg - refusing to build a factory seed without the standard virtual_sdcard/pause_resume/display_status objects (see docs/NEBULAOS_FRONTEND_PRINT_CONTROLS.md)" >&2
+	exit 1
+fi
+if ! grep -q '^\[include frontend-controls\.cfg\]' "$PRINTER_DATA_CONFIG_SRC/printer.cfg"; then
+	echo "FATAL: $PRINTER_DATA_CONFIG_SRC/printer.cfg does not include frontend-controls.cfg - the standard print-control objects would not actually load" >&2
+	exit 1
+fi
 # Lightweight sanity checks on the tracked source, not a full Klipper
 # config parser - catches the two concrete regressions this mission has
 # actually hit: a real device's carried-over SAVE_CONFIG calibration block,
@@ -517,12 +525,29 @@ blank_required_option() {
 		END { if (pending != "") { print pending; exit 1 } }
 	' "$1"
 }
-for f in "$PRINTER_DATA_CONFIG_SRC/printer.cfg" "$PRINTER_DATA_CONFIG_SRC/moonraker.conf"; do
+for f in "$PRINTER_DATA_CONFIG_SRC/printer.cfg" "$PRINTER_DATA_CONFIG_SRC/moonraker.conf" "$PRINTER_DATA_CONFIG_SRC/frontend-controls.cfg"; do
 	if ! blank_required_option "$f" >/dev/null; then
 		echo "FATAL: $f has an option present but syntactically blank (not a multi-line list value) - refusing to ship a factory default that fails to parse" >&2
 		exit 1
 	fi
 done
+
+# Print-control config closure validation (mainline print-controls mission,
+# 2026-07-29 - see docs/NEBULAOS_FRONTEND_PRINT_CONTROLS.md). Shared with
+# tests/nebulaos-frontend-controls-validation-tests.sh via
+# scripts/build/lib/validate-frontend-controls.sh, so the tests exercise
+# this exact function rather than a parallel reimplementation.
+. "$SCRIPT_DIR/lib/validate-frontend-controls.sh"
+PRINTER_DATA_CONFIG_CLOSURE="$WORK/printer-data-config-closure.txt"
+if ! frontend_controls_resolve_closure "$PRINTER_DATA_CONFIG_SRC" printer.cfg "$PRINTER_DATA_CONFIG_CLOSURE"; then
+	echo "FATAL: could not resolve the printer_data config include closure" >&2
+	exit 1
+fi
+if ! frontend_controls_validate_closure "$PRINTER_DATA_CONFIG_CLOSURE" /opt/printer_data/gcodes; then
+	echo "FATAL: print-control config closure failed validation - see docs/NEBULAOS_FRONTEND_PRINT_CONTROLS.md" >&2
+	exit 1
+fi
+echo "== print-control config closure validated: virtual_sdcard/pause_resume/display_status each defined exactly once, path correct, no duplicate or circular macros =="
 for stale_dir in "$BUILDROOT_DIR/output/target/opt/nebulaos-seeds" \
                  "$BUILDROOT_DIR/output/build/buildroot-fs/ext2/target/opt/nebulaos-seeds"; do
 	rm -rf "$stale_dir/printer_data-config" 2>/dev/null || true

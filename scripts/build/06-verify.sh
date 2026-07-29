@@ -411,10 +411,17 @@ if debugfs -R "stat /opt/nebulaos-seeds/printer_data-config/moonraker.conf" /img
 else
 	echo "MISS /opt/nebulaos-seeds/printer_data-config/moonraker.conf is missing from the packaged seed"
 fi
+if debugfs -R "stat /opt/nebulaos-seeds/printer_data-config/frontend-controls.cfg" /img/rootfs.ext2 2>&1 | grep -q "Inode:"; then
+	echo "OK   /opt/nebulaos-seeds/printer_data-config/frontend-controls.cfg is present"
+else
+	echo "MISS /opt/nebulaos-seeds/printer_data-config/frontend-controls.cfg is missing from the packaged seed"
+fi
 rm -rf /tmp/printerdata-check
-mkdir -p /tmp/printerdata-check
+mkdir -p /tmp/printerdata-check/GuppyScreen
 debugfs -R "dump /opt/nebulaos-seeds/printer_data-config/printer.cfg /tmp/printerdata-check/printer.cfg" /img/rootfs.ext2 >/dev/null 2>&1
 debugfs -R "dump /opt/nebulaos-seeds/printer_data-config/moonraker.conf /tmp/printerdata-check/moonraker.conf" /img/rootfs.ext2 >/dev/null 2>&1
+debugfs -R "dump /opt/nebulaos-seeds/printer_data-config/frontend-controls.cfg /tmp/printerdata-check/frontend-controls.cfg" /img/rootfs.ext2 >/dev/null 2>&1
+debugfs -R "dump /opt/nebulaos-seeds/printer_data-config/GuppyScreen/guppy_cmd.cfg /tmp/printerdata-check/GuppyScreen/guppy_cmd.cfg" /img/rootfs.ext2 >/dev/null 2>&1
 if [ -s /tmp/printerdata-check/printer.cfg ] && grep -q "^#\*# <---------------------- SAVE_CONFIG" /tmp/printerdata-check/printer.cfg 2>/dev/null; then
 	echo "MISS packaged printer.cfg seed contains a real SAVE_CONFIG calibration block"
 else
@@ -442,16 +449,70 @@ blank_required_option() {
 	awk -f /tmp/blank-required-option.awk "$1"
 }
 blank_found=0
-for f in /tmp/printerdata-check/printer.cfg /tmp/printerdata-check/moonraker.conf; do
+for f in /tmp/printerdata-check/printer.cfg /tmp/printerdata-check/moonraker.conf /tmp/printerdata-check/frontend-controls.cfg; do
 	[ -s "$f" ] || continue
 	if ! blank_required_option "$f" >/dev/null; then
 		blank_found=1
 	fi
 done
 if [ "$blank_found" = "1" ]; then
-	echo "MISS packaged printer.cfg/moonraker.conf seed has an option present but syntactically blank"
+	echo "MISS packaged printer.cfg/moonraker.conf/frontend-controls.cfg seed has an option present but syntactically blank"
 else
-	echo "OK   packaged printer.cfg/moonraker.conf seed has no syntactically blank options"
+	echo "OK   packaged printer.cfg/moonraker.conf/frontend-controls.cfg seed has no syntactically blank options"
+fi
+
+# Print-control config closure validation against the actual packaged
+# seed (not just the tracked source) - mainline print-controls mission,
+# 2026-07-29, see docs/NEBULAOS_FRONTEND_PRINT_CONTROLS.md. The includes
+# in printer.cfg are just concatenated here (this codebase only ever uses
+# plain literal filenames in its config includes, one level of
+# GuppyScreen/ nesting, never glob patterns), so this is a deliberately
+# simple closure builder, not a general Klipper config parser. Grep
+# patterns below use double quotes only, and the awk program is written
+# to a temp file via a quoted heredoc rather than inline - see the
+# blank_required_option note above this same docker bash -c block about
+# why a literal single quote here would break the outer quoting.
+if [ -s /tmp/printerdata-check/printer.cfg ]; then
+	if grep -q "^\[include frontend-controls\.cfg\]" /tmp/printerdata-check/printer.cfg; then
+		echo "OK   packaged printer.cfg includes frontend-controls.cfg"
+	else
+		echo "MISS packaged printer.cfg does not include frontend-controls.cfg"
+	fi
+	cat /tmp/printerdata-check/printer.cfg /tmp/printerdata-check/frontend-controls.cfg /tmp/printerdata-check/GuppyScreen/guppy_cmd.cfg > /tmp/printerdata-check/closure.txt 2>/dev/null
+	vsd_count=$(grep -c -i -E "^\[[[:space:]]*virtual_sdcard[[:space:]]*\]" /tmp/printerdata-check/closure.txt)
+	pr_count=$(grep -c -i -E "^\[[[:space:]]*pause_resume[[:space:]]*\]" /tmp/printerdata-check/closure.txt)
+	ds_count=$(grep -c -i -E "^\[[[:space:]]*display_status[[:space:]]*\]" /tmp/printerdata-check/closure.txt)
+	pause_macro_count=$(grep -c -i -E "^\[[[:space:]]*gcode_macro[[:space:]]+pause[[:space:]]*\]" /tmp/printerdata-check/closure.txt)
+	resume_macro_count=$(grep -c -i -E "^\[[[:space:]]*gcode_macro[[:space:]]+resume[[:space:]]*\]" /tmp/printerdata-check/closure.txt)
+	cancel_macro_count=$(grep -c -i -E "^\[[[:space:]]*gcode_macro[[:space:]]+cancel_print[[:space:]]*\]" /tmp/printerdata-check/closure.txt)
+	closure_ok=1
+	if [ "$vsd_count" != "1" ]; then echo "MISS packaged config closure has $vsd_count [virtual_sdcard] sections, need exactly 1"; closure_ok=0; fi
+	if [ "$pr_count" != "1" ]; then echo "MISS packaged config closure has $pr_count [pause_resume] sections, need exactly 1"; closure_ok=0; fi
+	if [ "$ds_count" != "1" ]; then echo "MISS packaged config closure has $ds_count [display_status] sections, need exactly 1"; closure_ok=0; fi
+	if [ "$pause_macro_count" -gt 1 ]; then echo "MISS packaged config closure has $pause_macro_count [gcode_macro PAUSE] sections, max 1"; closure_ok=0; fi
+	if [ "$resume_macro_count" -gt 1 ]; then echo "MISS packaged config closure has $resume_macro_count [gcode_macro RESUME] sections, max 1"; closure_ok=0; fi
+	if [ "$cancel_macro_count" -gt 1 ]; then echo "MISS packaged config closure has $cancel_macro_count [gcode_macro CANCEL_PRINT] sections, max 1"; closure_ok=0; fi
+	if [ "$closure_ok" = "1" ]; then
+		echo "OK   packaged config closure has exactly one virtual_sdcard/pause_resume/display_status, no duplicate PAUSE/RESUME/CANCEL_PRINT macros"
+	fi
+	cat > /tmp/vsd-path-extract.awk <<'AWKPROG2'
+/^\[[[:space:]]*virtual_sdcard[[:space:]]*\]/ { in_vsd = 1; next }
+/^\[/ { in_vsd = 0 }
+in_vsd && /^[[:space:]]*path[[:space:]]*:/ {
+	sub(/^[[:space:]]*path[[:space:]]*:[[:space:]]*/, "")
+	gsub(/[[:space:]]+$/, "")
+	print
+	exit
+}
+AWKPROG2
+	vsd_path=$(awk -f /tmp/vsd-path-extract.awk /tmp/printerdata-check/closure.txt)
+	if [ "$vsd_path" = "/opt/printer_data/gcodes" ]; then
+		echo "OK   packaged [virtual_sdcard] path is the canonical /opt/printer_data/gcodes"
+	else
+		echo "MISS packaged [virtual_sdcard] path is $vsd_path, expected /opt/printer_data/gcodes"
+	fi
+else
+	echo "MISS packaged printer.cfg could not be dumped from rootfs.ext2 - cannot validate print-control closure"
 fi
 rm -rf /tmp/printerdata-check
 # Confirms the actual fix logic landed in the packaged init scripts, not

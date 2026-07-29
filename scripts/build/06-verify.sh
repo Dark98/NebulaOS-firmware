@@ -229,6 +229,51 @@ check /etc/init.d/S50nginx
 check /opt/printer_data/config/printer.cfg
 check /opt/printer_data/config/moonraker.conf
 
+echo "=== process launch arguments and config-path consistency (mainline print-controls mission addendum, 2026-07-29) ==="
+# A newly reported Mainsail "Config Files -> config folder appears empty"
+# report required proving Klipper, Moonraker, and Mainsail all resolve to
+# the exact same canonical config directory - not inferring it from any
+# one of them alone. Live investigation against the real device found the
+# architecture already correct end to end (same inode on both the
+# persistent and bind-mounted runtime path, Moonrakers own
+# /server/files/roots reporting the canonical path with rw, a full
+# create/read/edit/delete cycle through the real file-manager API); these
+# checks exist to keep it that way, catching a future regression at build
+# time rather than live on a real printer.
+S55_CONTENT=$(debugfs -R "cat /etc/init.d/S55klipper" /img/rootfs.ext2 2>/dev/null)
+S56_CONTENT=$(debugfs -R "cat /etc/init.d/S56moonraker" /img/rootfs.ext2 2>/dev/null)
+S01_CONTENT=$(debugfs -R "cat /etc/init.d/S01persistent-datastore" /img/rootfs.ext2 2>/dev/null)
+if echo "$S55_CONTENT" | grep -qE "^CONFIG=/opt/printer_data/config/printer.cfg$"; then
+	echo "OK   S55klipper launches Klipper against the canonical /opt/printer_data/config/printer.cfg"
+else
+	echo "MISS S55klipper does not launch Klipper against the canonical printer.cfg path"
+fi
+if echo "$S56_CONTENT" | grep -qE "^DATAPATH=/opt/printer_data$"; then
+	echo "OK   S56moonraker launches Moonraker with the canonical -d /opt/printer_data data path"
+else
+	echo "MISS S56moonraker does not launch Moonraker with the canonical data path"
+fi
+if echo "$S56_CONTENT" | grep -qE "^CONFIG=/opt/printer_data/config/moonraker.conf$"; then
+	echo "OK   S56moonraker launches Moonraker against the canonical moonraker.conf"
+else
+	echo "MISS S56moonraker does not launch Moonraker against the canonical moonraker.conf path"
+fi
+if echo "$S55_CONTENT" | grep -qi "/usr/data/openke\|/opt/openke" || echo "$S56_CONTENT" | grep -qi "/usr/data/openke\|/opt/openke"; then
+	echo "MISS S55klipper or S56moonraker still references an obsolete openke path"
+else
+	echo "OK   S55klipper and S56moonraker contain no obsolete openke path reference (comment mentions of the historical OpenKE project name are fine)"
+fi
+if echo "$S01_CONTENT" | grep -qE "mount --bind ..PDATA. /opt/printer_data"; then
+	echo "OK   S01persistent-datastore bind-mounts the persistent printer_data tree onto /opt/printer_data"
+else
+	echo "MISS S01persistent-datastore does not bind-mount printer_data onto /opt/printer_data as expected"
+fi
+if echo "$S01_CONTENT" | grep -qE "^DATA_ROOT=/usr/data/nebulaos$"; then
+	echo "OK   S01persistent-datastore uses the canonical persistent backing root /usr/data/nebulaos"
+else
+	echo "MISS S01persistent-datastore does not use /usr/data/nebulaos as the persistent backing root"
+fi
+
 echo "=== Moonraker update_manager / camera defaults (final implementation mission, 2026-07-27) ==="
 check /usr/libexec/nebulaos-seed-camera
 check /etc/init.d/S57nebulaos-camera-seed
@@ -270,6 +315,7 @@ check_conf_present() {
 		echo "MISS moonraker.conf missing: $desc"
 	fi
 }
+check_conf_absent "^\[file_manager\]" "an explicit [file_manager] section (the config root must keep deriving from -d /opt/printer_data by default, not an override that could diverge from the printer.cfg path Klipper actually reads)"
 # Extracts just the [update_manager klipper] and [update_manager moonraker]
 # sections own body (up to the next [section] header) - scoped
 # deliberately, since path/type ARE legitimate, needed options under the

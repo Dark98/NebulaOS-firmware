@@ -229,3 +229,139 @@ motion/heating/homing performed at any point.
   touches `printer_data/logs/*.log`, never `printer_data/config` -
   printer configuration was never part of, and remains outside of,
   application rollback.
+
+## 7. Addendum: Mainsail "Config Files" folder reported empty (2026-07-29)
+
+A follow-up report described `Mainsail -> Machine -> Config Files -> config`
+appearing empty despite Klipper running normally. Investigated as a
+possible split-brain configuration architecture (Klipper/Moonraker/
+Mainsail resolving to different directories) - the most serious of the
+listed possible causes, and release-blocking if true.
+
+### 7.1 Read-only evidence gathered against the live device
+
+- **Mounts**: `/dev/mmcblk0p10 on /opt/printer_data type ext4` and a
+  second, separate mount at `/opt/printer_data/gcodes` for the
+  stock-shared G-code partition. The `ext4`/device label shown for
+  `/opt/printer_data` is expected for a `mount --bind` (BusyBox's `mount`
+  reports the underlying source filesystem type for a bind mount, not
+  `none`), matching `S01persistent-datastore`'s own
+  `mount --bind "$PDATA" /opt/printer_data` exactly.
+- **Directory listings**: `/opt/printer_data/config` and
+  `/usr/data/nebulaos/printer_data/config` show byte-identical content
+  (`printer.cfg`, `moonraker.conf`, `frontend-controls.cfg`, `songs.conf`,
+  `GuppyScreen/`) - confirmed later at the inode level (§7.2).
+- **Process command lines**, read directly from `ps`/`/proc/<pid>/cmdline`,
+  not assumed: Klipper is `klippy.py /opt/printer_data/config/printer.cfg
+  -a ... -l ...`; Moonraker is `moonraker.py -d /opt/printer_data -c
+  /opt/printer_data/config/moonraker.conf -l ... -u ...`. Both already
+  targeted the canonical paths.
+- **Moonraker's own `/server/files/roots`** (queried both directly on
+  port 7125 and through nginx's proxy on port 80 - the exact path a real
+  browser uses) reported `{"name":"config","path":"/opt/printer_data/config","permissions":"rw"}`
+  correctly, alongside `gcodes`/`logs`/`config_examples`/`docs`.
+- **Moonraker's own `/server/files/list?root=config`** (both paths) listed
+  every expected file with `rw` permissions - `printer.cfg`,
+  `moonraker.conf`, `frontend-controls.cfg`, `songs.conf`, the full
+  `GuppyScreen/` tree, and `.moonraker.conf.bkp`.
+- **nginx's error log was empty and its access log showed no prior
+  `files/list`/`files/roots` request at all** before this investigation's
+  own `curl` calls - meaning no browser session had actually exercised
+  this endpoint against this device during the current session.
+
+### 7.2 Case-by-case elimination (per the mission's own classification)
+
+- **Case A** (files only in the persistent backing path, not the runtime
+  view) - ruled out: identical content confirmed at the **inode level**
+  (`ls -i` showed the same inode number, e.g. `306007`, for a test file
+  created under both `/opt/printer_data/config/` and
+  `/usr/data/nebulaos/printer_data/config/` - they are the same file via
+  the bind mount, not two copies that happened to match).
+- **Case B** (Moonraker's registered root points elsewhere) - ruled out:
+  `/server/files/roots` reports exactly `/opt/printer_data/config`.
+- **Case C** (Klipper reads a different location - split-brain) - ruled
+  out: the real process command line proves `printer.cfg`'s path matches
+  Moonraker's config root exactly.
+- **Case D** (correct root, but Moonraker cannot read it) - ruled out: a
+  full create/read/edit/delete cycle through the real file-manager API
+  (§7.3) succeeded end to end.
+- **Case E** (frontend cache/state, backend already correct) - the only
+  remaining explanation. Every code path a real browser would use
+  (through nginx's reverse proxy on port 80, matching `location ~
+  ^/(printer|api|access|machine|server)/` in the shipped `nginx.conf`)
+  returns the correct data with no errors logged anywhere. Per the
+  mission's own instruction not to alter filesystem architecture once the
+  API is already proven correct, no architectural change was made. If a
+  user still sees an empty Config Files panel after this, the standard
+  remedy for a stale PWA frontend (Mainsail ships a service worker,
+  `sw.js`/`workbox-*.js`) is a hard refresh or clearing that site's stored
+  data in the browser - this is a frontend-state question, not a
+  filesystem or Moonraker configuration one.
+
+### 7.3 Editability proof (harmless test file, through the real API)
+
+Performed through Moonraker's actual `/server/files/upload` and
+`/server/files/config/<path>` endpoints - the same ones Mainsail's editor
+uses - never a direct filesystem write:
+
+```text
+create  _mission_editability_test.cfg  -> 201, listed immediately after
+read    GET the file back              -> exact content returned
+edit    re-upload with new content     -> 201, re-read confirms the change
+delete  DELETE the file                -> 200, gone from both
+                                           /opt/printer_data/config and
+                                           /usr/data/nebulaos/printer_data/config
+inode   identical (306007) on both paths throughout - one canonical file,
+        never two divergent copies
+```
+
+A second check edited an **existing** file (`songs.conf`, chosen
+specifically because it is unrelated to the print-controls fix itself):
+appended a harmless comment, confirmed it landed on both paths, then
+reverted it and confirmed the SHA-256 hash matched the pre-edit original
+exactly (`235d2f25de78a26f7eed5c932f6fc095aee670f951ce05599ae5ecba3bc90af5`)
+- proving both that edits persist and that this test left no lasting
+change.
+
+### 7.4 `SAVE_CONFIG` destination proof (source inspection, no calibration)
+
+Read `configfile.py` directly rather than assuming behavior from another
+Klipper version: `cmd_SAVE_CONFIG` resolves its target with
+`cfgname = self.printer.get_start_args()['config_file']` - the exact same
+value Klipper was launched with (confirmed via the real process command
+line, §7.1) - then writes to a same-directory `_autosave.cfg` temp file
+and atomically `os.rename()`s it into place, after first backing up the
+original with a timestamp suffix. `SAVE_CONFIG` provably targets the same
+canonical, bind-mounted, persistent file every other check in this
+section already confirmed - no physical calibration was run to test this.
+
+### 7.5 Build-time regression guards added
+
+`06-verify.sh` gained new checks (no runtime code needed to change - the
+architecture was already correct in the tracked source, matching the live
+device exactly): `S55klipper`'s `CONFIG` and `S56moonraker`'s
+`DATAPATH`/`CONFIG` literal values, `S01persistent-datastore`'s bind-mount
+line and persistent backing root, no obsolete `/usr/data/openke` or
+`/opt/openke` path reference in either service's init script (a bare
+mention of the historical "OpenKE" project name in a comment is fine and
+does not fail this check), and no `[file_manager]` override in
+`moonraker.conf` that could let the config root diverge from `-d`'s
+default. Re-run against the already-built Phase 11 artifacts (no rebuild
+needed, since nothing shippable changed): all six new checks pass, and
+the full run remains at zero `MISS` lines overall.
+
+### 7.6 Why no second wipe-and-reboot qualification was performed
+
+Nothing in the actual shipped image changed as a result of this
+addendum - `S01persistent-datastore`, `S55klipper`, `S56moonraker`, and
+`moonraker.conf` were all found already correct and were not modified;
+only a new host-side build verification check was added, which does not
+affect runtime behavior. The live evidence in §7.1-7.4 was gathered
+against the device in the exact state Phase 13's genuine empty-namespace
+wipe test left it in (confirmed unmodified since, other than the harmless,
+fully-reverted editability test above, by Phase 15's own persistence
+check showing the seed marker timestamp unchanged). Repeating the wipe
+purely to re-observe a config-visibility outcome that provably has not
+changed would not add evidence, so it was not done. Any future change to
+`S01persistent-datastore`/`S55klipper`/`S56moonraker`/`moonraker.conf`
+should re-run this section's live checks before trusting them again.

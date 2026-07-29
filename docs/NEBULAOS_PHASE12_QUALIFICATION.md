@@ -269,3 +269,21 @@ persistence: ordinary reboot left the seed marker/timestamp unchanged (no unwant
 | Real Klipper/Moonraker update, Recover, camera edit/delete persistence | **PASS** (auto-updates-camera-complete mission) | Live, real device, two bugs found+fixed (§30) |
 | Genuine wiped-namespace clean install (printer.cfg/moonraker.conf factory seed) | **PASS** (auto-updates-camera-complete mission) | Live, one boot, zero manual intervention, real release-blocking bug found+fixed (§13) |
 | Standard Klipper print controls (virtual_sdcard/pause_resume/display_status/PAUSE/RESUME/CANCEL_PRINT) | **PASS** (mainline print-controls mission) | Live, rebuild+reflash+genuine empty-namespace requal, zero MISS lines, real missing-config bug found+fixed (§14) |
+| Klipper/Moonraker/Mainsail config-path/root consistency (no split-brain) | **PASS** (mainline print-controls mission addendum) | Live, inode-level proof, real file-manager API create/read/edit/delete cycle, architecture already correct (§15) |
+
+## 15. Mainline print-controls mission addendum: config-path/root visibility (2026-07-29)
+
+A follow-up report described Mainsail's Config Files page as showing an empty `config` folder despite Klipper running - the most serious possible cause being a split-brain architecture where Klipper, Moonraker, and Mainsail each resolve to a different config directory. Investigated exhaustively against the live device rather than assumed correct:
+
+```text
+mounts:       /opt/printer_data bind-mounted from /usr/data/nebulaos/printer_data (S01persistent-datastore) - confirmed
+klipper cmdline:   klippy.py /opt/printer_data/config/printer.cfg ... - confirmed via /proc/<pid>/cmdline
+moonraker cmdline: moonraker.py -d /opt/printer_data -c .../config/moonraker.conf ... - confirmed via /proc/<pid>/cmdline
+moonraker API:     /server/files/roots -> config: /opt/printer_data/config, rw - confirmed, both directly and through nginx's proxy
+moonraker API:     /server/files/list?root=config -> every expected file listed, rw - confirmed
+editability:       create/read/edit/delete a test file through the real file-manager API - all succeeded;
+                   same inode number on both the persistent and bind-mounted runtime path
+SAVE_CONFIG:       confirmed via configfile.py source to target the exact same start-arg config_file path
+```
+
+All four architectural failure modes the mission asked to rule out (wrong Moonraker root, split Klipper/Moonraker config paths, broken/missing bind mount, unreadable persistent config) were conclusively ruled out with direct evidence - the architecture already matched the intended design exactly. No filesystem or activation-sequence change was made. New `06-verify.sh` checks now guard `S55klipper`/`S56moonraker`'s launch arguments, `S01persistent-datastore`'s bind-mount/backing-root, and the absence of a `[file_manager]` override in `moonraker.conf`, re-run clean (zero new `MISS` lines) against the already-built Phase 11 image without needing a rebuild, since nothing shippable changed. Full investigation, the editability proof, and why no second empty-namespace wipe cycle was needed: `docs/NEBULAOS_FRONTEND_PRINT_CONTROLS.md` §7.

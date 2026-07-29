@@ -93,3 +93,20 @@ klippy.log / moonraker.log: zero FileNotFoundError
 Repeated again for the mainline print-controls mission (2026-07-29), same wipe scope, same one-boot/zero-manual-intervention discipline - this time also confirming `frontend-controls.cfg` reseeds correctly and `virtual_sdcard`/`print_stats`/`pause_resume`/`display_status` all report clean idle state on the freshly-seeded config, not carried over from any prior live edit. Full evidence: `docs/NEBULAOS_FRONTEND_PRINT_CONTROLS.md` §6.
 
 The marker's own `1970-01-01T00:00:10Z` timestamp - taken before NTP had ever run - is itself evidence the seeding happened genuinely early in boot, with no dependency on network time.
+
+## 8. Addendum: proving the seeded config is actually visible/editable through Mainsail (2026-07-29)
+
+A follow-up report described Mainsail's Config Files page as showing an
+empty `config` folder despite Klipper running - potentially a much more
+serious variant of this document's own topic (a split-brain architecture
+where Klipper, Moonraker, and Mainsail each resolve to a different
+config directory). Investigated directly against the live device:
+`S01persistent-datastore`'s bind mount, `S55klipper`/`S56moonraker`'s
+launch arguments, and Moonraker's own `/server/files/roots`/`files/list`
+all independently agree on the exact same canonical
+`/opt/printer_data/config` path this document already describes - proven
+at the inode level, not just by comparing directory listings. No
+filesystem or activation-sequence change was needed; the architecture
+this document already documents was already correct. Full investigation,
+editability proof, and the new build-time regression guards added to
+catch a future divergence: `docs/NEBULAOS_FRONTEND_PRINT_CONTROLS.md` §7.

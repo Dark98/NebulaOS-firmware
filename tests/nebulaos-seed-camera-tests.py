@@ -236,7 +236,7 @@ def test_creation_wrong_fields():
             entry = dict(payload)
             entry["uid"] = "bad-uid"
             entry["source"] = "database"
-            entry["service"] = "uv4l-mjpeg"  # wrong on purpose
+            entry["service"] = "not-a-real-service"  # wrong on purpose
             moon.webcams.append(entry)
             return json.dumps({"result": {"webcam": entry}})
 

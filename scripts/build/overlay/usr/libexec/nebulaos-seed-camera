@@ -48,16 +48,24 @@ MARKER_PATH = os.environ.get(
 )
 CAMERA_NAME = "Nebula"
 
-# Ender-3 V3 KE-specific defaults, confirmed live and independently
-# corroborated against SimpleAF's own current pellcorp/creality reference
-# (same ustreamer backend, same service/URL values) in the governing
-# analysis report §10/§16. This project supports exactly one printer -
-# there is no per-model branching here, deliberately.
+# Ender-3 V3 KE-specific defaults. This project supports exactly one
+# printer - there is no per-model branching here, deliberately.
+#
+# service corrected 2026-07-29: mjpegstreamer-adaptive (originally chosen
+# to match SimpleAF's own pellcorp/creality reference, governing analysis
+# report §10/§16) does not actually work on this real device's camera
+# stream - confirmed directly by the device owner after editing the live
+# database-seeded camera to uv4l-mjpeg to get a working stream, which the
+# editable-camera design correctly preserved. uv4l-mjpeg is also
+# independently confirmed working for this exact hardware in
+# docs/USB_WEBCAM_MISSION_STATUS.md. A fresh install must default to the
+# value that actually works, not just one that matches an external
+# reference project.
 DEFAULT_CAMERA_PAYLOAD = {
     "name": CAMERA_NAME,
     "location": "printer",
     "enabled": True,
-    "service": "mjpegstreamer-adaptive",
+    "service": "uv4l-mjpeg",
     "stream_url": "/webcam/?action=stream",
     "snapshot_url": "/webcam/?action=snapshot",
     "target_fps": 30,

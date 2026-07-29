@@ -414,15 +414,44 @@ fi
 rm -rf /tmp/printerdata-check
 mkdir -p /tmp/printerdata-check
 debugfs -R "dump /opt/nebulaos-seeds/printer_data-config/printer.cfg /tmp/printerdata-check/printer.cfg" /img/rootfs.ext2 >/dev/null 2>&1
+debugfs -R "dump /opt/nebulaos-seeds/printer_data-config/moonraker.conf /tmp/printerdata-check/moonraker.conf" /img/rootfs.ext2 >/dev/null 2>&1
 if [ -s /tmp/printerdata-check/printer.cfg ] && grep -q "^#\*# <---------------------- SAVE_CONFIG" /tmp/printerdata-check/printer.cfg 2>/dev/null; then
 	echo "MISS packaged printer.cfg seed contains a real SAVE_CONFIG calibration block"
 else
 	echo "OK   packaged printer.cfg seed contains no SAVE_CONFIG calibration block"
 fi
-if [ -s /tmp/printerdata-check/printer.cfg ] && grep -qE "^[a-zA-Z_][a-zA-Z0-9_]*:[[:space:]]*$" /tmp/printerdata-check/printer.cfg 2>/dev/null; then
-	echo "MISS packaged printer.cfg seed has a syntactically blank required option"
+# A bare "key:" is only actually blank if nothing indented follows on the
+# next line - moonraker.confs own trusted_clients/cors_domains use this
+# multi-line list form legitimately; a naive single-line check flagged
+# them as false positives the first time this ran for real. Written to a
+# temp file rather than an inline awk single-quote block - this whole
+# section already lives inside one big single-quoted docker bash -c
+# argument, and a nested single quote here would close that early exactly
+# like the apostrophe bugs found earlier in this same mission.
+cat > /tmp/blank-required-option.awk <<'AWKPROG'
+{
+	if (pending != "") {
+		if ($0 !~ /^[ \t]/) { print pending; exit 1 }
+		pending = ""
+	}
+	if ($0 ~ /^[a-zA-Z_][a-zA-Z0-9_]*:[[:space:]]*$/) { pending = $0 }
+}
+END { if (pending != "") { print pending; exit 1 } }
+AWKPROG
+blank_required_option() {
+	awk -f /tmp/blank-required-option.awk "$1"
+}
+blank_found=0
+for f in /tmp/printerdata-check/printer.cfg /tmp/printerdata-check/moonraker.conf; do
+	[ -s "$f" ] || continue
+	if ! blank_required_option "$f" >/dev/null; then
+		blank_found=1
+	fi
+done
+if [ "$blank_found" = "1" ]; then
+	echo "MISS packaged printer.cfg/moonraker.conf seed has an option present but syntactically blank"
 else
-	echo "OK   packaged printer.cfg seed has no syntactically blank options"
+	echo "OK   packaged printer.cfg/moonraker.conf seed has no syntactically blank options"
 fi
 rm -rf /tmp/printerdata-check
 # Confirms the actual fix logic landed in the packaged init scripts, not

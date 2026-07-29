@@ -499,10 +499,30 @@ if grep -q '^#\*# <---------------------- SAVE_CONFIG' "$PRINTER_DATA_CONFIG_SRC
 	echo "FATAL: $PRINTER_DATA_CONFIG_SRC/printer.cfg contains a real SAVE_CONFIG block - refusing to ship development-machine calibration data as the factory default" >&2
 	exit 1
 fi
-if grep -qE '^[a-zA-Z_][a-zA-Z0-9_]*:[[:space:]]*$' "$PRINTER_DATA_CONFIG_SRC/printer.cfg" "$PRINTER_DATA_CONFIG_SRC/moonraker.conf"; then
-	echo "FATAL: a config option in $PRINTER_DATA_CONFIG_SRC is present but syntactically blank - refusing to ship a factory default that fails to parse" >&2
-	exit 1
-fi
+# A bare "key:" is only actually blank if nothing indented follows it on
+# the next line - both printer.cfg/moonraker.conf's own INI-style parsers
+# support multi-line list values this way (moonraker.conf's own
+# trusted_clients/cors_domains use exactly this, confirmed live: a naive
+# single-line grep for "key:$" flagged them as false positives the first
+# time this check ran for real).
+blank_required_option() {
+	awk '
+		{
+			if (pending != "") {
+				if ($0 !~ /^[ \t]/) { print pending; exit 1 }
+				pending = ""
+			}
+			if ($0 ~ /^[a-zA-Z_][a-zA-Z0-9_]*:[[:space:]]*$/) { pending = $0 }
+		}
+		END { if (pending != "") { print pending; exit 1 } }
+	' "$1"
+}
+for f in "$PRINTER_DATA_CONFIG_SRC/printer.cfg" "$PRINTER_DATA_CONFIG_SRC/moonraker.conf"; do
+	if ! blank_required_option "$f" >/dev/null; then
+		echo "FATAL: $f has an option present but syntactically blank (not a multi-line list value) - refusing to ship a factory default that fails to parse" >&2
+		exit 1
+	fi
+done
 for stale_dir in "$BUILDROOT_DIR/output/target/opt/nebulaos-seeds" \
                  "$BUILDROOT_DIR/output/build/buildroot-fs/ext2/target/opt/nebulaos-seeds"; do
 	rm -rf "$stale_dir/printer_data-config" 2>/dev/null || true

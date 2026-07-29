@@ -393,6 +393,53 @@ else
 	echo "MISS seed-manifest.json missing the real-history archive format record"
 fi
 
+echo "=== printer_data config factory seed (Ender-3 V3 KE, auto-updates-camera-complete mission addendum, 2026-07-28) ==="
+# Real bug found live: a genuinely wiped printer_data/config left Klipper
+# and Moonraker crash-looping forever on FileNotFoundError - nothing had
+# ever shipped a seed for these files at a path immune to
+# S01persistent-datastores own early, unconditional bind mount of the
+# persistent copy over /opt/printer_data. Confirms the dedicated immutable
+# seed at /opt/nebulaos-seeds/printer_data-config/ actually landed in the
+# packaged image, not just the tracked overlay source.
+if debugfs -R "stat /opt/nebulaos-seeds/printer_data-config/printer.cfg" /img/rootfs.ext2 2>&1 | grep -q "Inode:"; then
+	echo "OK   /opt/nebulaos-seeds/printer_data-config/printer.cfg is present"
+else
+	echo "MISS /opt/nebulaos-seeds/printer_data-config/printer.cfg is missing from the packaged seed"
+fi
+if debugfs -R "stat /opt/nebulaos-seeds/printer_data-config/moonraker.conf" /img/rootfs.ext2 2>&1 | grep -q "Inode:"; then
+	echo "OK   /opt/nebulaos-seeds/printer_data-config/moonraker.conf is present"
+else
+	echo "MISS /opt/nebulaos-seeds/printer_data-config/moonraker.conf is missing from the packaged seed"
+fi
+rm -rf /tmp/printerdata-check
+mkdir -p /tmp/printerdata-check
+debugfs -R "dump /opt/nebulaos-seeds/printer_data-config/printer.cfg /tmp/printerdata-check/printer.cfg" /img/rootfs.ext2 >/dev/null 2>&1
+if [ -s /tmp/printerdata-check/printer.cfg ] && grep -q "^#\*# <---------------------- SAVE_CONFIG" /tmp/printerdata-check/printer.cfg 2>/dev/null; then
+	echo "MISS packaged printer.cfg seed contains a real SAVE_CONFIG calibration block"
+else
+	echo "OK   packaged printer.cfg seed contains no SAVE_CONFIG calibration block"
+fi
+if [ -s /tmp/printerdata-check/printer.cfg ] && grep -qE "^[a-zA-Z_][a-zA-Z0-9_]*:[[:space:]]*$" /tmp/printerdata-check/printer.cfg 2>/dev/null; then
+	echo "MISS packaged printer.cfg seed has a syntactically blank required option"
+else
+	echo "OK   packaged printer.cfg seed has no syntactically blank options"
+fi
+rm -rf /tmp/printerdata-check
+# Confirms the actual fix logic landed in the packaged init scripts, not
+# just the seed content sitting there unused.
+S02_CONTENT=$(debugfs -R "cat /etc/init.d/S02nebulaos-namespace" /img/rootfs.ext2 2>/dev/null)
+if echo "$S02_CONTENT" | grep -q "seed_printer_data_config"; then
+	echo "OK   S02nebulaos-namespace contains the printer_data config seeding logic"
+else
+	echo "MISS S02nebulaos-namespace is missing the printer_data config seeding logic"
+fi
+S05_CONTENT=$(debugfs -R "cat /etc/init.d/S05nebulaos-activate" /img/rootfs.ext2 2>/dev/null)
+if echo "$S05_CONTENT" | grep -q "config/printer.cfg"; then
+	echo "OK   S05nebulaos-activate validates printer_data against the real required files, not just the config directory"
+else
+	echo "MISS S05nebulaos-activate still validates printer_data against only the config directory - a wiped copy would pass validation empty"
+fi
+
 echo "=== obsolete overlay files (must be absent - Buildroots output/target copy is additive-only, see 02-configure-buildroot.sh) ==="
 # Real bug found live 2026-07-28: a renamed overlay file (e.g.
 # S03nebulaos-factory-seed/S04nebulaos-activate -> S04nebulaos-factory-seed/

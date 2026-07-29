@@ -77,11 +77,24 @@ validate_app() {
 		return 1
 	fi
 
-	if [ ! -e "$src/$marker" ]; then
-		log "$name: missing expected marker ($marker) - incomplete/invalid copy, staying on immutable"
-		record "$name" "immutable:incomplete_or_invalid"
-		return 1
-	fi
+	# $marker may be a space-separated list of required relative paths -
+	# real bug found live (auto-updates-camera-complete mission addendum,
+	# 2026-07-28): printer_data's own marker was just the literal string
+	# "config", which S02nebulaos-namespace's own create_layout() always
+	# recreates as an empty directory on every boot regardless of whether
+	# the real required files inside it (printer.cfg, moonraker.conf) are
+	# present - so this check always passed even when a wiped persistent
+	# copy had neither file, activating an empty config over the real
+	# immutable defaults and leaving Klipper/Moonraker in a permanent
+	# FileNotFoundError crash loop. Checking the actual required files
+	# individually is what catches this.
+	for m in $marker; do
+		if [ ! -e "$src/$m" ]; then
+			log "$name: missing expected marker ($m) - incomplete/invalid copy, staying on immutable"
+			record "$name" "immutable:incomplete_or_invalid"
+			return 1
+		fi
+	done
 
 	# BusyBox's build here has no `stat` applet at all (confirmed live,
 	# "stat: not found") - `ls -ldn` (numeric UID/GID, a BusyBox ls

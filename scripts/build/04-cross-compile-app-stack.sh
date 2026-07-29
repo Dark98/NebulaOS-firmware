@@ -459,4 +459,68 @@ cat > "$OVERLAY/opt/nebulaos-seeds/seed-manifest.json" <<EOF
 EOF
 echo "== factory seeds created: $(ls -la "$OVERLAY/opt/nebulaos-seeds/") =="
 
+# Real bug found live (auto-updates-camera-complete mission addendum,
+# 2026-07-28): S01persistent-datastore bind-mounts $NEBULAOS_ROOT/printer_data
+# over /opt/printer_data unconditionally, very early in boot - so by the time
+# any later boot stage could try to read /opt/printer_data/config as "the
+# immutable default", it is already looking at the (possibly empty)
+# persistent copy, not the real immutable content. The one thing that ever
+# populated printer.cfg/moonraker.conf into a fresh persistent copy was a
+# migration from a legacy /usr/data/openke path, deleted as part of an
+# earlier closure mission on the belief no fresh device would ever need it
+# again - leaving genuinely no code path that seeds these files at all.
+# Reproduced live: a truly wiped /usr/data/nebulaos/printer_data/config
+# left Klipper and Moonraker crash-looping forever on FileNotFoundError.
+#
+# Fixed the same way klipper.tar.gz/moonraker.tar.gz already solve the
+# identical shadowing problem: ship a second, dedicated immutable copy
+# under /opt/nebulaos-seeds/ (never subject to any bind mount) that
+# S02nebulaos-namespace can copy from into the real persistent location
+# whenever it is missing. The actual config content itself is not
+# authored here - it already exists, already deliberately stripped of
+# development-machine calibration data (see printer.cfg's own header),
+# at scripts/build/overlay/opt/printer_data/config/ - this just makes a
+# second immutable copy of that same tracked content available at a path
+# nothing ever mounts over.
+echo "== creating printer_data config seed (Ender-3 V3 KE factory defaults) =="
+PRINTER_DATA_CONFIG_SRC="$SCRIPT_DIR/overlay/opt/printer_data/config"
+PRINTER_DATA_SEED_DEST="$OVERLAY/opt/nebulaos-seeds/printer_data-config"
+if [ ! -f "$PRINTER_DATA_CONFIG_SRC/printer.cfg" ] || [ ! -f "$PRINTER_DATA_CONFIG_SRC/moonraker.conf" ]; then
+	echo "FATAL: $PRINTER_DATA_CONFIG_SRC is missing printer.cfg or moonraker.conf - refusing to build a factory seed that would ship without them" >&2
+	exit 1
+fi
+# Lightweight sanity checks on the tracked source, not a full Klipper
+# config parser - catches the two concrete regressions this mission has
+# actually hit: a real device's carried-over SAVE_CONFIG calibration block,
+# and a required option left syntactically blank (confirmed live to hard-
+# fail Klipper's config parser outright, see printer.cfg's own z_offset
+# history).
+if grep -q '^#\*# <---------------------- SAVE_CONFIG' "$PRINTER_DATA_CONFIG_SRC/printer.cfg"; then
+	echo "FATAL: $PRINTER_DATA_CONFIG_SRC/printer.cfg contains a real SAVE_CONFIG block - refusing to ship development-machine calibration data as the factory default" >&2
+	exit 1
+fi
+if grep -qE '^[a-zA-Z_][a-zA-Z0-9_]*:[[:space:]]*$' "$PRINTER_DATA_CONFIG_SRC/printer.cfg" "$PRINTER_DATA_CONFIG_SRC/moonraker.conf"; then
+	echo "FATAL: a config option in $PRINTER_DATA_CONFIG_SRC is present but syntactically blank - refusing to ship a factory default that fails to parse" >&2
+	exit 1
+fi
+for stale_dir in "$BUILDROOT_DIR/output/target/opt/nebulaos-seeds" \
+                 "$BUILDROOT_DIR/output/build/buildroot-fs/ext2/target/opt/nebulaos-seeds"; do
+	rm -rf "$stale_dir/printer_data-config" 2>/dev/null || true
+done
+rm -rf "$PRINTER_DATA_SEED_DEST"
+mkdir -p "$PRINTER_DATA_SEED_DEST"
+cp -a "$PRINTER_DATA_CONFIG_SRC/." "$PRINTER_DATA_SEED_DEST/"
+cat > "$PRINTER_DATA_SEED_DEST/../printer-data-config-manifest.json" <<EOF
+{
+  "schema_version": 1,
+  "printer": "Creality Ender-3 V3 KE",
+  "build_date": "$build_date",
+  "files": {
+    "printer.cfg": "$(sha256sum "$PRINTER_DATA_SEED_DEST/printer.cfg" | cut -d' ' -f1)",
+    "moonraker.conf": "$(sha256sum "$PRINTER_DATA_SEED_DEST/moonraker.conf" | cut -d' ' -f1)"
+  }
+}
+EOF
+echo "== printer_data config seed created: $(ls -la "$PRINTER_DATA_SEED_DEST/") =="
+
 echo "== app-stack overlay assembled at $OVERLAY =="

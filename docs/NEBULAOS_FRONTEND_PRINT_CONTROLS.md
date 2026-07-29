@@ -170,6 +170,81 @@ corroborated by the one real Level 2 reference available locally. No Level
 G-code directory (confirmed present, populated, and shared with stock via
 the same physical partition) — not a placeholder or `~`-relative path.
 
+### 5.1 Correction (2026-07-29, live user report): the "no macros needed" conclusion was incomplete
+
+After deploying the fix above, the device owner reported Mainsail still
+showing:
+
+```
+gcode_macro pause is not defined in config.
+gcode_macro resume is not defined in config.
+gcode_macro cancel_print is not defined in config.
+```
+
+Live investigation confirmed the root cause: Mainsail's frontend checks
+**`configfile.settings`** (the raw parsed config sections) directly for
+literal `gcode_macro pause`/`gcode_macro resume`/`gcode_macro cancel_print`
+keys - it does not infer their presence from whether the `PAUSE`/`RESUME`/
+`CANCEL_PRINT` *commands* already work at runtime via `pause_resume.py`.
+Querying `configfile.settings` on the live device confirmed no such keys
+existed, even though the commands themselves were already registered and
+fully functional. Moonraker's own `missing_klippy_requirements` stayed
+empty throughout - this is specifically a Mainsail frontend expectation,
+not a Klipper/Moonraker-level "missing requirement."
+
+The original Level 1/Level 2 analysis (native `pause_resume.py` already
+implements these commands safely, matching the one real local reference)
+remains correct about *functional* behavior, but incomplete about what
+Mainsail's own UI actually checks for. Fixed with three minimal,
+pure-pass-through macros added to `frontend-controls.cfg`:
+
+```ini
+[gcode_macro PAUSE]
+rename_existing: BASE_PAUSE
+gcode:
+  BASE_PAUSE
+
+[gcode_macro RESUME]
+rename_existing: BASE_RESUME
+gcode:
+  BASE_RESUME
+
+[gcode_macro CANCEL_PRINT]
+rename_existing: BASE_CANCEL_PRINT
+gcode:
+  BASE_CANCEL_PRINT
+```
+
+Each macro does nothing but call straight through to the renamed native
+command - zero added behavior, so every safety property already
+established (no unsafe Z lift, no heater changes, no homing) is preserved
+exactly; only the *presence* of the config section changes, not what
+actually happens when `PAUSE`/`RESUME`/`CANCEL_PRINT` run. Confirmed live
+after redeploying: `configfile.settings` now contains `gcode_macro pause`/
+`gcode_macro resume`/`gcode_macro cancel_print`; `gcode/help` shows
+`BASE_PAUSE: Renamed builtin of 'PAUSE'` (and the same for `RESUME`/
+`CANCEL_PRINT`), proving Klipper's `rename_existing` mechanism correctly
+wrapped the native implementation rather than replacing it; idle state
+(`virtual_sdcard.is_active=false`, `print_stats.state=standby`,
+`pause_resume.is_paused=false`) and `missing_klippy_requirements: []`
+stayed clean throughout.
+
+`scripts/build/lib/validate-frontend-controls.sh`'s closure validator was
+updated to make these three macro sections **required** (previously
+optional, 0-1 occurrences allowed) - a future rebuild that dropped them
+would now fail the build, not just reintroduce a live warning.
+
+The user also reported the `GuppyScreen` folder specifically still not
+showing content in Mainsail's file browser, even though every other file
+now displays correctly. Live investigation found the backend already
+fully correct here too: `GuppyScreen/guppy_cmd.cfg` and every file under
+`GuppyScreen/scripts/` are listed by `/server/files/list?root=config`
+with normal `rw` permissions, and the directory's own filesystem
+permissions (`drwxr-xr-x`) are unremarkable. No backend or architectural
+cause was found - this looks like a Mainsail frontend navigation/
+rendering matter specific to that one nested folder, not a data problem,
+consistent with this document's own §7 Case E conclusion.
+
 ## 6. Live qualification evidence (2026-07-29)
 
 Every step below ran against the real Ender-3 V3 KE / Nebula Pad device, no

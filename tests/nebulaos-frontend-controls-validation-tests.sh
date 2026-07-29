@@ -91,6 +91,21 @@ on_error_gcode: CANCEL_PRINT
 [pause_resume]
 
 [display_status]
+
+[gcode_macro PAUSE]
+rename_existing: BASE_PAUSE
+gcode:
+  BASE_PAUSE
+
+[gcode_macro RESUME]
+rename_existing: BASE_RESUME
+gcode:
+  BASE_RESUME
+
+[gcode_macro CANCEL_PRINT]
+rename_existing: BASE_CANCEL_PRINT
+gcode:
+  BASE_CANCEL_PRINT
 EOF
 	echo "[respond]" > "$dir/GuppyScreen/guppy_cmd.cfg"
 }
@@ -141,11 +156,7 @@ on_error_gcode: CANCEL_PRINT
 EOF
 check_scenario "wrong gcode path is rejected" "$d" printer.cfg 0 1
 
-# --- Scenario 6: missing pause_resume (also stands in for the mission's --
-# --- "missing PAUSE/RESUME/CANCEL_PRINT macros" case - in this project's --
-# --- decision record, those three commands come only from pause_resume.py, --
-# --- so a missing [pause_resume] section is exactly a missing PAUSE/RESUME/ --
-# --- CANCEL_PRINT) -------------------------------------------------------
+# --- Scenario 6: missing pause_resume --------------------------------
 
 d="$WORK/s6"; write_clean_fixture "$d"
 cat > "$d/frontend-controls.cfg" <<EOF
@@ -155,7 +166,7 @@ on_error_gcode: CANCEL_PRINT
 
 [display_status]
 EOF
-check_scenario "missing pause_resume (also: missing PAUSE/RESUME/CANCEL_PRINT) is rejected" "$d" printer.cfg 0 1
+check_scenario "missing pause_resume is rejected" "$d" printer.cfg 0 1
 
 # --- Scenario 7: missing display_status ---------------------------------
 
@@ -168,6 +179,24 @@ on_error_gcode: CANCEL_PRINT
 [pause_resume]
 EOF
 check_scenario "missing display_status is rejected" "$d" printer.cfg 0 1
+
+# --- Scenario 7b: pause_resume present but the gcode_macro PAUSE/RESUME/ --
+# --- CANCEL_PRINT wrapper macros are missing - the real bug reported live --
+# --- (2026-07-29): Mainsail's frontend checks configfile.settings for ------
+# --- these literal macro sections directly, regardless of whether the ------
+# --- commands already work at runtime via pause_resume.py ------------------
+
+d="$WORK/s7b"; write_clean_fixture "$d"
+cat > "$d/frontend-controls.cfg" <<EOF
+[virtual_sdcard]
+path: $EXPECTED_PATH
+on_error_gcode: CANCEL_PRINT
+
+[pause_resume]
+
+[display_status]
+EOF
+check_scenario "missing gcode_macro PAUSE/RESUME/CANCEL_PRINT wrappers is rejected even with pause_resume present" "$d" printer.cfg 0 1
 
 # --- Scenario 8: duplicate PAUSE macro -----------------------------------
 
@@ -192,7 +221,24 @@ check_scenario "duplicate PAUSE macro is rejected" "$d" printer.cfg 0 1
 # --- Scenario 9: recursive rename_existing chain ------------------------
 
 d="$WORK/s9"; write_clean_fixture "$d"
-cat >> "$d/printer.cfg" <<'EOF'
+cat > "$d/frontend-controls.cfg" <<EOF
+[virtual_sdcard]
+path: $EXPECTED_PATH
+on_error_gcode: CANCEL_PRINT
+
+[pause_resume]
+
+[display_status]
+
+[gcode_macro PAUSE]
+rename_existing: BASE_PAUSE
+gcode:
+  BASE_PAUSE
+
+[gcode_macro RESUME]
+rename_existing: BASE_RESUME
+gcode:
+  BASE_RESUME
 
 [gcode_macro CANCEL_PRINT]
 rename_existing: CANCEL_PRINT

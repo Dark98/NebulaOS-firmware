@@ -133,9 +133,13 @@ frontend_controls_validate_closure() {
 	frontend_controls_check_count "[virtual_sdcard]" "^\[[[:space:]]*virtual_sdcard[[:space:]]*\]" 1 1 "$vc_file" || vc_ok=1
 	frontend_controls_check_count "[pause_resume]" "^\[[[:space:]]*pause_resume[[:space:]]*\]" 1 1 "$vc_file" || vc_ok=1
 	frontend_controls_check_count "[display_status]" "^\[[[:space:]]*display_status[[:space:]]*\]" 1 1 "$vc_file" || vc_ok=1
-	frontend_controls_check_count "[gcode_macro PAUSE]" "^\[[[:space:]]*gcode_macro[[:space:]]+pause[[:space:]]*\]" 0 1 "$vc_file" || vc_ok=1
-	frontend_controls_check_count "[gcode_macro RESUME]" "^\[[[:space:]]*gcode_macro[[:space:]]+resume[[:space:]]*\]" 0 1 "$vc_file" || vc_ok=1
-	frontend_controls_check_count "[gcode_macro CANCEL_PRINT]" "^\[[[:space:]]*gcode_macro[[:space:]]+cancel_print[[:space:]]*\]" 0 1 "$vc_file" || vc_ok=1
+	# Required, not just optional, as of the 2026-07-29 live-evidence
+	# addendum: Mainsail's own frontend checks configfile.settings for
+	# these literal macro sections directly, regardless of whether
+	# PAUSE/RESUME/CANCEL_PRINT already work at runtime via pause_resume.py.
+	frontend_controls_check_count "[gcode_macro PAUSE]" "^\[[[:space:]]*gcode_macro[[:space:]]+pause[[:space:]]*\]" 1 1 "$vc_file" || vc_ok=1
+	frontend_controls_check_count "[gcode_macro RESUME]" "^\[[[:space:]]*gcode_macro[[:space:]]+resume[[:space:]]*\]" 1 1 "$vc_file" || vc_ok=1
+	frontend_controls_check_count "[gcode_macro CANCEL_PRINT]" "^\[[[:space:]]*gcode_macro[[:space:]]+cancel_print[[:space:]]*\]" 1 1 "$vc_file" || vc_ok=1
 	frontend_controls_check_circular_rename "$vc_file" || vc_ok=1
 
 	vc_path=$(frontend_controls_vsd_path "$vc_file")

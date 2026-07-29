@@ -535,11 +535,11 @@ if [ -s /tmp/printerdata-check/printer.cfg ]; then
 	if [ "$vsd_count" != "1" ]; then echo "MISS packaged config closure has $vsd_count [virtual_sdcard] sections, need exactly 1"; closure_ok=0; fi
 	if [ "$pr_count" != "1" ]; then echo "MISS packaged config closure has $pr_count [pause_resume] sections, need exactly 1"; closure_ok=0; fi
 	if [ "$ds_count" != "1" ]; then echo "MISS packaged config closure has $ds_count [display_status] sections, need exactly 1"; closure_ok=0; fi
-	if [ "$pause_macro_count" -gt 1 ]; then echo "MISS packaged config closure has $pause_macro_count [gcode_macro PAUSE] sections, max 1"; closure_ok=0; fi
-	if [ "$resume_macro_count" -gt 1 ]; then echo "MISS packaged config closure has $resume_macro_count [gcode_macro RESUME] sections, max 1"; closure_ok=0; fi
-	if [ "$cancel_macro_count" -gt 1 ]; then echo "MISS packaged config closure has $cancel_macro_count [gcode_macro CANCEL_PRINT] sections, max 1"; closure_ok=0; fi
+	if [ "$pause_macro_count" != "1" ]; then echo "MISS packaged config closure has $pause_macro_count [gcode_macro PAUSE] sections, need exactly 1 (Mainsail checks configfile.settings for this section directly)"; closure_ok=0; fi
+	if [ "$resume_macro_count" != "1" ]; then echo "MISS packaged config closure has $resume_macro_count [gcode_macro RESUME] sections, need exactly 1 (Mainsail checks configfile.settings for this section directly)"; closure_ok=0; fi
+	if [ "$cancel_macro_count" != "1" ]; then echo "MISS packaged config closure has $cancel_macro_count [gcode_macro CANCEL_PRINT] sections, need exactly 1 (Mainsail checks configfile.settings for this section directly)"; closure_ok=0; fi
 	if [ "$closure_ok" = "1" ]; then
-		echo "OK   packaged config closure has exactly one virtual_sdcard/pause_resume/display_status, no duplicate PAUSE/RESUME/CANCEL_PRINT macros"
+		echo "OK   packaged config closure has exactly one each of virtual_sdcard/pause_resume/display_status/gcode_macro PAUSE/gcode_macro RESUME/gcode_macro CANCEL_PRINT"
 	fi
 	cat > /tmp/vsd-path-extract.awk <<'AWKPROG2'
 /^\[[[:space:]]*virtual_sdcard[[:space:]]*\]/ { in_vsd = 1; next }

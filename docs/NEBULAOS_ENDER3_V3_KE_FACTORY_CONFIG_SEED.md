@@ -11,10 +11,12 @@ A genuinely wiped `/usr/data/nebulaos/printer_data/config` left Klipper and Moon
 The tracked source of truth remains `scripts/build/overlay/opt/printer_data/config/`:
 
 ```text
-printer.cfg      - real Ender-3 V3 KE hardware wiring (pins, kinematics, heaters, bltouch)
-moonraker.conf   - corrected NebulaOS Moonraker config (reserved update_manager sections, no config-owned webcam)
-songs.conf       - GuppyScreen startup jingle definitions
-GuppyScreen/     - GuppyScreen's own base config + Python helper scripts
+printer.cfg             - real Ender-3 V3 KE hardware wiring (pins, kinematics, heaters, bltouch)
+frontend-controls.cfg   - standard virtual_sdcard/pause_resume/display_status (mainline print-controls
+                          mission, 2026-07-29 - see docs/NEBULAOS_FRONTEND_PRINT_CONTROLS.md)
+moonraker.conf          - corrected NebulaOS Moonraker config (reserved update_manager sections, no config-owned webcam)
+songs.conf              - GuppyScreen startup jingle definitions
+GuppyScreen/            - GuppyScreen's own base config + Python helper scripts
 ```
 
 This is unchanged by the 2026-07-29 fix - it already existed, already ships at the immutable `/opt/printer_data/config/` path, and already had its calibration-data policy decided (§3 below) well before this finding. What changed is that `04-cross-compile-app-stack.sh` now *also* copies this exact same tracked content into a second, dedicated immutable location:
@@ -42,6 +44,8 @@ Three checks in `04-cross-compile-app-stack.sh` refuse to package a bad seed, fa
 3. No option may be present but syntactically blank - checked with a continuation-aware pass (a bare `key:` followed by an indented line is a legitimate multi-line list value, e.g. `moonraker.conf`'s own `trusted_clients`/`cors_domains`; a bare `key:` followed by anything else, or end of file, is genuinely blank and would fail Klipper's or Moonraker's own config parser).
 
 `06-verify.sh` independently re-checks all of the above against the actual built `rootfs.ext2` (not just the tracked source), plus that `S02nebulaos-namespace` contains the seeding logic and `S05nebulaos-activate` validates against the real required files rather than just the `config` directory.
+
+Mainline print-controls mission (2026-07-29) added a fourth check, shared via `scripts/build/lib/validate-frontend-controls.sh` with `tests/nebulaos-frontend-controls-validation-tests.sh`: `frontend-controls.cfg` must exist and be included from `printer.cfg`, and the resolved include closure must define `virtual_sdcard`/`pause_resume`/`display_status` exactly once each (no missing, no duplicate, no recursive `rename_existing` chains), with `virtual_sdcard`'s `path` matching the canonical `/opt/printer_data/gcodes`. Full detail: `docs/NEBULAOS_FRONTEND_PRINT_CONTROLS.md`.
 
 ## 5. Runtime seeding logic
 
@@ -85,5 +89,7 @@ camera:    database-seeded fresh (new uid, correct defaults)
 ota marker: kernel -> kernel2 (S99confirm-good passed)
 klippy.log / moonraker.log: zero FileNotFoundError
 ```
+
+Repeated again for the mainline print-controls mission (2026-07-29), same wipe scope, same one-boot/zero-manual-intervention discipline - this time also confirming `frontend-controls.cfg` reseeds correctly and `virtual_sdcard`/`print_stats`/`pause_resume`/`display_status` all report clean idle state on the freshly-seeded config, not carried over from any prior live edit. Full evidence: `docs/NEBULAOS_FRONTEND_PRINT_CONTROLS.md` §6.
 
 The marker's own `1970-01-01T00:00:10Z` timestamp - taken before NTP had ever run - is itself evidence the seeding happened genuinely early in boot, with no dependency on network time.

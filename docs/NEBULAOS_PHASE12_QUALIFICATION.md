@@ -212,6 +212,40 @@ RESULT:
 
 A follow-up Recover test against this same final image confirmed the Bug 7 fix (§30) still self-heals with zero manual intervention - the two fixes compose correctly on the actual shipped artifact.
 
+## 14. Mainline print-controls mission: standard Klipper print controls restored (2026-07-29)
+
+Mainsail reported `virtual_sdcard`/`pause_resume`/`gcode_macro PAUSE`/`gcode_macro RESUME`/
+`gcode_macro cancel_print`/`display_status` all "not defined in config," plus a phantom
+`0 / 0`, `0 seconds left` print state with no print active. Live API queries confirmed this
+was real (Klipper's own object list and Moonraker's own `missing_klippy_requirements` both
+independently agreed these objects were genuinely absent), not a Mainsail-only rendering
+issue, and that no stale job existed in Moonraker's queue/history. Root cause: this
+project's factory `printer.cfg` had simply never defined these standard sections at all.
+
+Fixed with a single new file, `frontend-controls.cfg` (`[virtual_sdcard]`, `[pause_resume]`,
+`[display_status]`), added to the `printer_data/config` factory seed. No custom
+`PAUSE`/`RESUME`/`CANCEL_PRINT` macros were needed - this fork's own `pause_resume.py`
+registers all three itself with safe, minimal default behavior. Full source-precedence
+decision record, build-time closure validator (shared between the real build and
+`tests/nebulaos-frontend-controls-validation-tests.sh`), and live evidence:
+`docs/NEBULAOS_FRONTEND_PRINT_CONTROLS.md`.
+
+```text
+one-time live fix (pre-rebuild): missing_klippy_requirements [] -> registered PAUSE/RESUME/
+  CANCEL_PRINT/CLEAR_PAUSE, virtual_sdcard.is_active=false, print_stats.state=standby
+rebuild: 04-cross-compile-app-stack.sh's new closure validator passed for real; 06-verify.sh:
+  zero MISS lines, including the print-control closure and the already-shipped uv4l-mjpeg
+  camera default
+reflash: SAFE TO FLASH preflight, both images independently md5-verified, booted successfully
+genuine empty-namespace requal: printer_data/config (incl. frontend-controls.cfg) reseeded
+  entirely from scratch, zero FileNotFoundError, missing_klippy_requirements: [],
+  shared G-code (48 files) preserved, camera fresh-seeded with correct uv4l-mjpeg service
+non-motion integration: Mainsail 200, GuppyScreen connected, 72 g-code commands registered,
+  no new log errors introduced
+persistence: ordinary reboot left the seed marker/timestamp unchanged (no unwanted reseed);
+  nebulaos-update-supervisor.sh's rollback logic confirmed to never touch printer_data/config
+```
+
 ## Summary
 
 | Scenario | Result | Evidence type |
@@ -234,3 +268,4 @@ A follow-up Recover test against this same final image confirmed the Bug 7 fix (
 | GuppyScreen Wi-Fi status | **PASS** (final-seal mission) | User-confirmed on physical device screen |
 | Real Klipper/Moonraker update, Recover, camera edit/delete persistence | **PASS** (auto-updates-camera-complete mission) | Live, real device, two bugs found+fixed (§30) |
 | Genuine wiped-namespace clean install (printer.cfg/moonraker.conf factory seed) | **PASS** (auto-updates-camera-complete mission) | Live, one boot, zero manual intervention, real release-blocking bug found+fixed (§13) |
+| Standard Klipper print controls (virtual_sdcard/pause_resume/display_status/PAUSE/RESUME/CANCEL_PRINT) | **PASS** (mainline print-controls mission) | Live, rebuild+reflash+genuine empty-namespace requal, zero MISS lines, real missing-config bug found+fixed (§14) |

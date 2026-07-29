@@ -185,6 +185,33 @@ Phase T (remote-checkable regression): PASS - clean dmesg, correct mounts, Mains
 
 **Rebuild + reflash + re-qualification complete.** Rebuilt from commit `ece4c26` (clean tree), both fixes confirmed present in the actual packaged `rootfs.squashfs` (independently `unsquashfs`'d, not inferred), zero `06-verify.sh` MISS lines. Flashed to the real device via the full documented safety sequence (boot to stock, `--check-only`, real write with hash verification, marker flip, reboot) - one real interrupted-write incident occurred and was recovered from safely per the script's own sequential-write design (full details: `NEBULAOS_MOONRAKER_UPDATE_AND_CAMERA_ANALYSIS.md` §30). Live re-verification against the freshly-flashed, freshly-booted device: obsolete init.d files confirmed absent, `is_valid: true` for all three apps, camera persisted correctly through the reflash, and - the definitive proof - a real Recover-induced Moonraker death was self-healed by the live supervisor within one 20-second poll cycle with **zero manual intervention**, unlike every prior test this session which required a manual restart.
 
+## 13. Critical finding and fix: genuinely fresh install had no printer.cfg or moonraker.conf (2026-07-29)
+
+A deliberate, genuinely-wiped-namespace test (immediately following §12's work, going further than any prior "fresh boot" test in this project's history) found that **every previous clean-install qualification, including this document's own §11/§12 entries, was a false positive**: Klipper and Moonraker crash-looped forever on `FileNotFoundError` for `printer.cfg`/`moonraker.conf`, because the only code that had ever created these files - a migration from a legacy `/usr/data/openke` path - was removed in an earlier mission, and the development device had simply never had these specific files deleted before. Full root cause, fix, and build-time hardening: `NEBULAOS_MOONRAKER_UPDATE_AND_CAMERA_ANALYSIS.md` §31 and the dedicated `docs/NEBULAOS_ENDER3_V3_KE_FACTORY_CONFIG_SEED.md`.
+
+**This is now the actual, genuine clean-install qualification gate**, superseding every earlier fresh-boot claim in this document:
+
+```text
+wipe: /usr/data/nebulaos/{apps,backups,envs,guppyscreen,maintenance,printer_data,system,updates}
+kept: wpa_supplicant.conf only (to preserve remote SSH access through the reboot -
+      the strictest possible variant, wiping saved WiFi too, was not attempted this
+      session since it would have required physical/GuppyScreen reconfiguration)
+rebuild: commit 8e49351, zero 06-verify.sh MISS lines, independently unsquashfs-confirmed
+reflash: full documented safety sequence from stock, one boot, zero manual intervention
+
+RESULT:
+  printer_data/config/: printer.cfg, moonraker.conf, songs.conf, GuppyScreen - all present
+  printer-data-config-seeded.json: seeded_at 1970-01-01T00:00:10Z (before NTP - genuinely offline)
+  klipper:   is_valid=true, current_hash==remote_hash, state=ready
+  moonraker: is_valid=true, current_hash==remote_hash
+  mainsail:  is_valid=true, static UI serving (200)
+  camera:    database-seeded fresh, correct defaults
+  ota marker: kernel -> kernel2 (S99confirm-good passed)
+  klippy.log / moonraker.log: zero FileNotFoundError anywhere
+```
+
+A follow-up Recover test against this same final image confirmed the Bug 7 fix (§30) still self-heals with zero manual intervention - the two fixes compose correctly on the actual shipped artifact.
+
 ## Summary
 
 | Scenario | Result | Evidence type |
@@ -205,3 +232,5 @@ Phase T (remote-checkable regression): PASS - clean dmesg, correct mounts, Mains
 | Flash-spare-slot live-target positive path | **QUALIFIED** (final-seal mission) | Live, `--check-only` from stock, SAFE TO FLASH |
 | Flash-spare-slot live-target refusal path | **QUALIFIED** (final-seal mission) | Live negative control, zero-write hash proof |
 | GuppyScreen Wi-Fi status | **PASS** (final-seal mission) | User-confirmed on physical device screen |
+| Real Klipper/Moonraker update, Recover, camera edit/delete persistence | **PASS** (auto-updates-camera-complete mission) | Live, real device, two bugs found+fixed (§30) |
+| Genuine wiped-namespace clean install (printer.cfg/moonraker.conf factory seed) | **PASS** (auto-updates-camera-complete mission) | Live, one boot, zero manual intervention, real release-blocking bug found+fixed (§13) |

@@ -46,6 +46,15 @@ EOF
 host: 0.0.0.0
 port: 7125
 EOF
+	cat > "$dir/frontend-controls.cfg" <<'EOF'
+[virtual_sdcard]
+path: /opt/printer_data/gcodes
+on_error_gcode: CANCEL_PRINT
+
+[pause_resume]
+
+[display_status]
+EOF
 	echo "# songs" > "$dir/songs.conf"
 	echo "# guppy" > "$dir/GuppyScreen/guppy_cmd.cfg"
 }
@@ -80,6 +89,11 @@ if [ -f "$ns/printer_data/config/songs.conf" ] && [ -f "$ns/printer_data/config/
 	pass "fresh namespace: songs.conf and GuppyScreen defaults also seeded"
 else
 	fail "fresh namespace: songs.conf/GuppyScreen defaults not seeded"
+fi
+if [ -f "$ns/printer_data/config/frontend-controls.cfg" ]; then
+	pass "fresh namespace: frontend-controls.cfg also seeded"
+else
+	fail "fresh namespace: frontend-controls.cfg not seeded"
 fi
 if [ -f "$ns/system/printer-data-config-seeded.json" ]; then
 	pass "fresh namespace: seed marker written"

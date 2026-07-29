@@ -188,7 +188,7 @@ start() {
 	# printer_data: private NebulaOS state first, then the shared stock
 	# gcode tree bind-mounted INSIDE it - order matters (mission
 	# requirement), each step independently guarded.
-	if validate_app printer_data "$NEBULAOS_ROOT/printer_data" "config"; then
+	if validate_app printer_data "$NEBULAOS_ROOT/printer_data" "config/printer.cfg config/moonraker.conf"; then
 		bind_if_not_already "$NEBULAOS_ROOT/printer_data" /opt/printer_data
 
 		# The shared stock gcode tree is outside the NebulaOS namespace by

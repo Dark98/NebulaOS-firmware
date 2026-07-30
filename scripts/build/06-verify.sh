@@ -221,9 +221,24 @@ check() {
 	fi
 }
 
+check_absent() {
+	path="$1"
+	if debugfs -R "stat $path" /img/rootfs.ext2 2>&1 | grep -q "Inode:"; then
+		echo "MISS $path is present but should have been removed as obsolete"
+	else
+		echo "OK   $path is absent"
+	fi
+}
+
 echo "=== kernel modules (still loadable, not built-in) ==="
-check /lib/modules/6.6.18-rt23/kernel/drivers/bluetooth/hci_uart.ko
-check /lib/modules/6.6.18-rt23/kernel/drivers/bluetooth/btbcm.ko
+# Production optimization mission, Phase 9 (2026-07-30): Bluetooth HCI UART
+# transport is now removed entirely (CONFIG_BT is not set - uart3, its only
+# wired transport, is permanently disabled in this board own DTS due to a
+# real pin conflict with the NS2009 touch controller i2c4 bus, so it could
+# never actually attach regardless). These modules are now expected
+# ABSENT, not present - inverted from the check this section used before.
+check_absent /lib/modules/6.6.18-rt23/kernel/drivers/bluetooth/hci_uart.ko
+check_absent /lib/modules/6.6.18-rt23/kernel/drivers/bluetooth/btbcm.ko
 
 echo "=== WiFi firmware (FIRMWARE.md sec 53 - proprietary, not committed, staged by fetch-wifi-firmware.sh) ==="
 check /lib/firmware/brcm/brcmfmac43430-sdio.bin
@@ -357,7 +372,28 @@ check_conf_present() {
 		echo "MISS moonraker.conf missing: $desc"
 	fi
 }
-check_conf_absent "^\[file_manager\]" "an explicit [file_manager] section (the config root must keep deriving from -d /opt/printer_data by default, not an override that could diverge from the printer.cfg path Klipper actually reads)"
+# SimpleAF backend integration (2026-07-29) needs a real, non-empty
+# [file_manager] section (enable_object_processing: True, required for
+# exclude_object polygon data) - this check used to forbid the whole
+# section outright, which conflicts with that legitimate need. The real
+# original worry was narrower: vendor/moonraker/moonraker/components/
+# file_manager/file_manager.py only reads two deprecated path-override
+# options from this section, config_path and log_path (config.get(...,
+# deprecate=True) for both) - anything else here, including
+# enable_object_processing, cannot divert the config root away from
+# -d /opt/printer_data. Scope the check to just those two options,
+# the same way the update_manager section check below scopes to its own
+# reserved-option list rather than forbidding the section itself.
+FILE_MANAGER_SECTION_BODY=$(echo "$MOONRAKER_CONF_CONTENT" | awk "
+	/^\[file_manager\]\$/ { grab=1; next }
+	/^\[/ { grab=0 }
+	grab { print }
+")
+if echo "$FILE_MANAGER_SECTION_BODY" | grep -qE "^(config_path|log_path): "; then
+	echo "MISS [file_manager] contains a deprecated config_path/log_path override (the config root must keep deriving from -d /opt/printer_data by default, not an override that could diverge from the printer.cfg path Klipper actually reads)"
+else
+	echo "OK   [file_manager] contains no config_path/log_path override"
+fi
 # Extracts just the [update_manager klipper] and [update_manager moonraker]
 # sections own body (up to the next [section] header) - scoped
 # deliberately, since path/type ARE legitimate, needed options under the
@@ -436,7 +472,16 @@ check_seed_archive() {
 	else
 		echo "MISS $label archive origin fetch refspec is \"$actual_refspec\", expected the full wildcard form (a narrow refspec silently breaks a later git fetch origin from populating origin/$expected_branch, reproducing diverged=true)"
 	fi
-	if [ -z "$(git -C /tmp/seed-check status --porcelain 2>/dev/null)" ]; then
+	# Production optimization mission, Phase 9 (2026-07-30): same pathspec
+	# exclusion as the internal clean-tree guard in make-seed-archive.sh -
+	# the klipper build own properly cross-compiled+stripped c_helper.so is
+	# legitimately, always different from whatever is tracked in git for
+	# that path (an untrusted upstream binary). Moonraker has no such
+	# path, so this exclusion is a no-op there. Double quotes, not single
+	# quotes, around the pathspec magic below - a literal single quote
+	# here would close the outer docker bash -c string early exactly like
+	# the apostrophe bugs elsewhere in this same file.
+	if [ -z "$(git -C /tmp/seed-check status --porcelain -- . ":!klippy/chelper/c_helper.so" 2>/dev/null)" ]; then
 		echo "OK   $label archive has a clean working tree"
 	else
 		echo "MISS $label archive has a dirty working tree"
@@ -513,7 +558,7 @@ debugfs -R "dump /opt/nebulaos-seeds/printer_data-config/GuppyScreen/guppy_cmd.c
 # SimpleAF backend integration (2026-07-29, see docs/
 # NEBULAOS_SIMPLEAF_BACKEND_INTEGRATION.md) - these 8 files are now what
 # printer.cfg actually includes for the print-control/workflow closure;
-# frontend-controls.cfg is dumped above only because it's still shipped on
+# frontend-controls.cfg is dumped above only because it is still shipped on
 # disk as an unused reference, not because printer.cfg includes it any more.
 for simpleaf_f in homing.cfg useful_macros.cfg fan_control.cfg client.cfg start_end.cfg Line_Purge.cfg Smart_Park.cfg bltouch_macro.cfg; do
 	debugfs -R "dump /opt/nebulaos-seeds/printer_data-config/simpleaf/$simpleaf_f /tmp/printerdata-check/simpleaf/$simpleaf_f" /img/rootfs.ext2 >/dev/null 2>&1
@@ -532,12 +577,13 @@ fi
 # argument, and a nested single quote here would close that early exactly
 # like the apostrophe bugs found earlier in this same mission.
 # SimpleAF backend integration (2026-07-29): "gcode:" is explicitly excluded
-# below - gcode_macro's own gcode option is genuinely allowed to be blank (a
-# variable-only macro with no action, e.g. simpleaf/homing.cfg's
-# [gcode_macro _HOMING_PARAMS]), confirmed directly against
-# vendor/klipper/klippy/extras/gcode_macro.py's load_template(), which
-# happily wraps an empty string. Every other option name is still caught -
-# keep this in sync with 04-cross-compile-app-stack.sh's own copy.
+# below - the gcode_macro directive gcode option is genuinely allowed to be
+# blank (a variable-only macro with no action, e.g. the
+# [gcode_macro _HOMING_PARAMS] section in simpleaf/homing.cfg), confirmed
+# directly against vendor/klipper/klippy/extras/gcode_macro.py, in the
+# load_template() function there, which happily wraps an empty string.
+# Every other option name is still caught - keep this in sync with the
+# identical copy in 04-cross-compile-app-stack.sh.
 cat > /tmp/blank-required-option.awk <<'AWKPROG'
 {
 	if (pending != "") {
@@ -647,14 +693,8 @@ echo "=== obsolete overlay files (must be absent - Buildroots output/target copy
 # one whenever both are present. rootfs.ext2 and rootfs.squashfs are built
 # from the same stale output/target/, so debugfs against rootfs.ext2 here
 # does catch a real leftover, not just the tracked overlay source.
-check_absent() {
-	path="$1"
-	if debugfs -R "stat $path" /img/rootfs.ext2 2>&1 | grep -q "Inode:"; then
-		echo "MISS $path is present but should have been removed as obsolete"
-	else
-		echo "OK   $path is absent"
-	fi
-}
+# check_absent() is defined once, earlier, right after check() (both used
+# from the very first section in this docker block).
 check_absent /etc/init.d/S01tmpfs-datastore
 check_absent /etc/init.d/S39wifi
 check_absent /etc/init.d/S03nebulaos-factory-seed
@@ -710,12 +750,14 @@ esac
 '
 
 echo "=== architecture spot-checks (host objdump has no MIPS backend - using the k1-bash-build toolchain) ==="
-docker run --rm --user root -v "$IMAGES:/img" pellcorp/k1-bash-build bash -c '
-apt-get -qq update >/dev/null 2>&1; apt-get install -y -qq e2fsprogs file >/dev/null 2>&1
-for f in "kernel/drivers/bluetooth/hci_uart.ko"; do
-	debugfs -R "dump /lib/modules/6.6.18-rt23/$f /tmp/x.ko" /img/rootfs.ext2 >/dev/null 2>&1
-	echo "$f: $(file -b /tmp/x.ko)"
-done
-'
+# Production optimization mission, Phase 9 (2026-07-30): this used to spot-
+# check hci_uart.ko's architecture - the only loadable kernel module this
+# image ever shipped. Bluetooth is now removed entirely (CONFIG_BT is not
+# set - see the kernel-modules section above), and nothing else in this
+# kernel is built as a loadable module (confirmed live: `lsmod` on the real
+# device shows nothing loaded), so there is currently nothing left here to
+# spot-check. Left as an empty, documented section rather than deleted
+# outright, so a future loadable module addition has an obvious place to
+# add its own check back.
 
 echo "== verification complete - review any MISS lines above =="

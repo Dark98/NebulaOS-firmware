@@ -137,17 +137,33 @@ make_seed_archive() {
 
 	# Discard local build-artifact drift on the one known, understood
 	# tracked binary this repeatedly reproduces on (klippy/chelper/
-	# c_helper.so - a host-recompiled x86 .so that must never ship to
-	# the MIPS target anyway). Real bug found while writing this
-	# function's own tests: an earlier version did a blanket
-	# `git checkout -- .`, which discards ANY tracked-file modification -
-	# that silently defeated the dirty-tree rejection below for every
-	# tracked file, not just this one binary (confirmed live: a
-	# deliberately dirtied source file was wiped clean before the check
-	# ever ran, so "reject a dirty tree" never actually fired). Only
-	# ever discard this specific, known-safe path; anything else dirty
-	# must still fail the check below.
-	if [ -e "$tmp/klippy/chelper/c_helper.so" ]; then
+	# c_helper.so - a host-recompiled x86 .so left over from a developer
+	# running `make` locally, outside this project's own cross-compile
+	# pipeline, that must never ship to the MIPS target). Real bug found
+	# while writing this function's own tests: an earlier version did a
+	# blanket `git checkout -- .`, which discards ANY tracked-file
+	# modification - that silently defeated the dirty-tree rejection
+	# below for every tracked file, not just this one binary (confirmed
+	# live: a deliberately dirtied source file was wiped clean before the
+	# check ever ran, so "reject a dirty tree" never actually fired).
+	# Only ever discard this specific, known-safe path; anything else
+	# dirty must still fail the check below.
+	#
+	# Production optimization mission, Phase 9 (2026-07-30): real bug
+	# found live once 06-verify.sh's own SimpleAF-era shell-quoting bug
+	# (an unescaped apostrophe closing this script's docker heredoc early
+	# - see 06-verify.sh) was fixed and its seed-archive/immutable-
+	# baseline comparison check finally ran for the first time - this
+	# checkout was unconditional, discarding the real cross-compiled MIPS
+	# c_helper.so the actual build pipeline (04-cross-compile-app-
+	# stack.sh) always produces right before calling this function, not
+	# just a genuine stray host artifact, silently reverting every seed
+	# archive back to whatever untrusted binary happens to be committed
+	# in the vendor tree. Only discard it now if it is provably NOT the
+	# correct target architecture (a real host-arch accident), never a
+	# properly cross-compiled one.
+	if [ -e "$tmp/klippy/chelper/c_helper.so" ] \
+		&& ! file -b "$tmp/klippy/chelper/c_helper.so" | grep -qi "MIPS"; then
 		git -C "$tmp" checkout -q -- klippy/chelper/c_helper.so 2>/dev/null || true
 	fi
 
@@ -158,7 +174,16 @@ make_seed_archive() {
 		rm -rf "$tmp"
 		return 1
 	fi
-	if [ -n "$(git -C "$tmp" status --porcelain)" ]; then
+	# Production optimization mission, Phase 9 (2026-07-30): real bug found
+	# live - the properly cross-compiled, correctly stripped MIPS
+	# klippy/chelper/c_helper.so built by the real pipeline is legitimately
+	# ALWAYS different from whatever is tracked in git for this path (an
+	# untrusted upstream binary, never intended to ship as-is - see the
+	# comment on the check above this one), so this dirty-tree guard would
+	# otherwise reject every real build. Exclude just this one, already-
+	# understood, expected-to-differ path from the clean-tree check -
+	# anything else dirty must still fail it.
+	if [ -n "$(git -C "$tmp" status --porcelain -- . ':!klippy/chelper/c_helper.so')" ]; then
 		echo "ERROR: refusing to package $src - working tree is not clean" >&2
 		rm -rf "$tmp"
 		return 1

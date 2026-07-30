@@ -16,6 +16,48 @@ if [ ! -f "$IMAGES/rootfs.ext2" ]; then
 	exit 1
 fi
 
+# Vendor pin drift check (SimpleAF backend integration, 2026-07-29, see docs/
+# NEBULAOS_SIMPLEAF_BACKEND_INTEGRATION.md) - 00-fetch-vendor-sources.sh only
+# clones+checks-out a pin the FIRST time a vendor/ dir is absent; nothing
+# previously re-verified that an already-present checkout's HEAD still
+# matches its recorded pin (e.g. after a stray `git pull` run by hand inside
+# vendor/, or a stale checkout left over from before a pin was bumped). Keep
+# these SHAs in sync with 00-fetch-vendor-sources.sh's own clone_pinned calls
+# - duplicated here deliberately (same convention as blank_required_option's
+# two copies below) rather than sourcing the fetch script, which also
+# performs real network clones and shouldn't be pulled into a read-only
+# verify pass.
+echo "=== vendor source pin drift ==="
+check_vendor_pin() {
+	vp_name="$1"
+	vp_expected="$2"
+	vp_dir="$REPO_ROOT/vendor/$vp_name"
+	if [ ! -d "$vp_dir/.git" ]; then
+		echo "MISS vendor/$vp_name is not a git checkout - cannot verify its pin"
+		return
+	fi
+	vp_actual=$(git -C "$vp_dir" rev-parse HEAD 2>/dev/null || echo "unknown")
+	if [ "$vp_actual" = "$vp_expected" ]; then
+		echo "OK   vendor/$vp_name HEAD matches its pinned commit ($vp_expected)"
+	else
+		echo "MISS vendor/$vp_name HEAD is $vp_actual, expected pinned commit $vp_expected"
+	fi
+}
+# Pre-existing, real drift found live while adding this check (2026-07-29,
+# unrelated to the SimpleAF backend work itself): vendor/klipper's actual
+# checked-out HEAD is d839d0375a31327e57e0a35e99e70ba60814ec05 (a genuine,
+# already-shipped "chelper: replace incompatible upstream c_helper.so"
+# fix, see docs/NEBULAOS_MOONRAKER_UPDATE_AND_CAMERA_ANALYSIS.md), one
+# real commit ahead of the pin 00-fetch-vendor-sources.sh's own
+# clone_pinned call still records (b3d5ab2b9484f1558586c3a2ea43d46ff9a473a7).
+# This MISS is expected until that script's own pin comment is bumped to
+# match - not something to "fix" by changing the expected value here to
+# whatever the checkout currently happens to be (that would defeat the
+# entire point of this check).
+check_vendor_pin klipper b3d5ab2b9484f1558586c3a2ea43d46ff9a473a7
+check_vendor_pin moonraker d5ee17128bb88434aacdab90c2e9e990e2b64e4a
+check_vendor_pin pellcorp-creality d18d354456a89c20507e574feaa34d6389e679ca
+
 # ns2009, the display panel, brcmfmac and the RNG are all built statically
 # into vmlinux (=y, not =m) - see halley5-nebulaos-fragment.config's own
 # comments for why each one was switched. A built-in driver produces no
@@ -463,11 +505,19 @@ else
 	echo "MISS /opt/nebulaos-seeds/printer_data-config/frontend-controls.cfg is missing from the packaged seed"
 fi
 rm -rf /tmp/printerdata-check
-mkdir -p /tmp/printerdata-check/GuppyScreen
+mkdir -p /tmp/printerdata-check/GuppyScreen /tmp/printerdata-check/simpleaf
 debugfs -R "dump /opt/nebulaos-seeds/printer_data-config/printer.cfg /tmp/printerdata-check/printer.cfg" /img/rootfs.ext2 >/dev/null 2>&1
 debugfs -R "dump /opt/nebulaos-seeds/printer_data-config/moonraker.conf /tmp/printerdata-check/moonraker.conf" /img/rootfs.ext2 >/dev/null 2>&1
 debugfs -R "dump /opt/nebulaos-seeds/printer_data-config/frontend-controls.cfg /tmp/printerdata-check/frontend-controls.cfg" /img/rootfs.ext2 >/dev/null 2>&1
 debugfs -R "dump /opt/nebulaos-seeds/printer_data-config/GuppyScreen/guppy_cmd.cfg /tmp/printerdata-check/GuppyScreen/guppy_cmd.cfg" /img/rootfs.ext2 >/dev/null 2>&1
+# SimpleAF backend integration (2026-07-29, see docs/
+# NEBULAOS_SIMPLEAF_BACKEND_INTEGRATION.md) - these 8 files are now what
+# printer.cfg actually includes for the print-control/workflow closure;
+# frontend-controls.cfg is dumped above only because it's still shipped on
+# disk as an unused reference, not because printer.cfg includes it any more.
+for simpleaf_f in homing.cfg useful_macros.cfg fan_control.cfg client.cfg start_end.cfg Line_Purge.cfg Smart_Park.cfg bltouch_macro.cfg; do
+	debugfs -R "dump /opt/nebulaos-seeds/printer_data-config/simpleaf/$simpleaf_f /tmp/printerdata-check/simpleaf/$simpleaf_f" /img/rootfs.ext2 >/dev/null 2>&1
+done
 if [ -s /tmp/printerdata-check/printer.cfg ] && grep -q "^#\*# <---------------------- SAVE_CONFIG" /tmp/printerdata-check/printer.cfg 2>/dev/null; then
 	echo "MISS packaged printer.cfg seed contains a real SAVE_CONFIG calibration block"
 else
@@ -481,13 +531,20 @@ fi
 # section already lives inside one big single-quoted docker bash -c
 # argument, and a nested single quote here would close that early exactly
 # like the apostrophe bugs found earlier in this same mission.
+# SimpleAF backend integration (2026-07-29): "gcode:" is explicitly excluded
+# below - gcode_macro's own gcode option is genuinely allowed to be blank (a
+# variable-only macro with no action, e.g. simpleaf/homing.cfg's
+# [gcode_macro _HOMING_PARAMS]), confirmed directly against
+# vendor/klipper/klippy/extras/gcode_macro.py's load_template(), which
+# happily wraps an empty string. Every other option name is still caught -
+# keep this in sync with 04-cross-compile-app-stack.sh's own copy.
 cat > /tmp/blank-required-option.awk <<'AWKPROG'
 {
 	if (pending != "") {
 		if ($0 !~ /^[ \t]/) { print pending; exit 1 }
 		pending = ""
 	}
-	if ($0 ~ /^[a-zA-Z_][a-zA-Z0-9_]*:[[:space:]]*$/) { pending = $0 }
+	if ($0 ~ /^[a-zA-Z_][a-zA-Z0-9_]*:[[:space:]]*$/ && $0 !~ /^gcode:[[:space:]]*$/) { pending = $0 }
 }
 END { if (pending != "") { print pending; exit 1 } }
 AWKPROG
@@ -495,16 +552,16 @@ blank_required_option() {
 	awk -f /tmp/blank-required-option.awk "$1"
 }
 blank_found=0
-for f in /tmp/printerdata-check/printer.cfg /tmp/printerdata-check/moonraker.conf /tmp/printerdata-check/frontend-controls.cfg; do
+for f in /tmp/printerdata-check/printer.cfg /tmp/printerdata-check/moonraker.conf /tmp/printerdata-check/frontend-controls.cfg /tmp/printerdata-check/simpleaf/*.cfg; do
 	[ -s "$f" ] || continue
 	if ! blank_required_option "$f" >/dev/null; then
 		blank_found=1
 	fi
 done
 if [ "$blank_found" = "1" ]; then
-	echo "MISS packaged printer.cfg/moonraker.conf/frontend-controls.cfg seed has an option present but syntactically blank"
+	echo "MISS packaged printer.cfg/moonraker.conf/frontend-controls.cfg/simpleaf/*.cfg seed has an option present but syntactically blank"
 else
-	echo "OK   packaged printer.cfg/moonraker.conf/frontend-controls.cfg seed has no syntactically blank options"
+	echo "OK   packaged printer.cfg/moonraker.conf/frontend-controls.cfg/simpleaf/*.cfg seed has no syntactically blank options"
 fi
 
 # Print-control config closure validation against the actual packaged
@@ -519,12 +576,16 @@ fi
 # blank_required_option note above this same docker bash -c block about
 # why a literal single quote here would break the outer quoting.
 if [ -s /tmp/printerdata-check/printer.cfg ]; then
-	if grep -q "^\[include frontend-controls\.cfg\]" /tmp/printerdata-check/printer.cfg; then
-		echo "OK   packaged printer.cfg includes frontend-controls.cfg"
+	# SimpleAF backend integration (2026-07-29, see docs/
+	# NEBULAOS_SIMPLEAF_BACKEND_INTEGRATION.md): printer.cfg no longer
+	# includes frontend-controls.cfg - simpleaf/client.cfg + simpleaf/
+	# start_end.cfg now provide the same required sections instead.
+	if grep -q "^\[include simpleaf/client\.cfg\]" /tmp/printerdata-check/printer.cfg && grep -q "^\[include simpleaf/start_end\.cfg\]" /tmp/printerdata-check/printer.cfg; then
+		echo "OK   packaged printer.cfg includes simpleaf/client.cfg and simpleaf/start_end.cfg"
 	else
-		echo "MISS packaged printer.cfg does not include frontend-controls.cfg"
+		echo "MISS packaged printer.cfg does not include simpleaf/client.cfg and simpleaf/start_end.cfg"
 	fi
-	cat /tmp/printerdata-check/printer.cfg /tmp/printerdata-check/frontend-controls.cfg /tmp/printerdata-check/GuppyScreen/guppy_cmd.cfg > /tmp/printerdata-check/closure.txt 2>/dev/null
+	cat /tmp/printerdata-check/printer.cfg /tmp/printerdata-check/GuppyScreen/guppy_cmd.cfg /tmp/printerdata-check/simpleaf/*.cfg > /tmp/printerdata-check/closure.txt 2>/dev/null
 	vsd_count=$(grep -c -i -E "^\[[[:space:]]*virtual_sdcard[[:space:]]*\]" /tmp/printerdata-check/closure.txt)
 	pr_count=$(grep -c -i -E "^\[[[:space:]]*pause_resume[[:space:]]*\]" /tmp/printerdata-check/closure.txt)
 	ds_count=$(grep -c -i -E "^\[[[:space:]]*display_status[[:space:]]*\]" /tmp/printerdata-check/closure.txt)

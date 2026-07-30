@@ -44,6 +44,30 @@ fi
 clone_pinned buildroot-x2000 https://github.com/lone0/buildroot-x2000.git \
 	74d020081096972857acdb9e76c6c5335455d430
 
+# SimpleAF's real workflow/config/installer repo (pellcorp/creality) - this
+# project's own vocabulary has always used "SimpleAF" to mean this repo, not
+# just the pellcorp/klipper engine fork above, but until the 2026-07-29
+# SimpleAF backend integration mission it had only ever been fetched live via
+# WebFetch/GitHub-API for comparison, never actually vendored - the resulting
+# gap is documented in docs/NEBULAOS_SIMPLEAF_BACKEND_INTEGRATION.md. Resolved
+# and pinned to its real HEAD at fetch time (2026-07-29) rather than tracking
+# `main`, per this project's own "never analyze/build against a moving
+# branch" rule. No LICENSE/COPYING file exists anywhere in this repo, and
+# GitHub's API reports "license": null - vendored anyway per an explicit,
+# recorded user decision (see this project's own memory record
+# feedback_simpleaf_license_risk_accepted.md), not a default assumption of
+# rights. Only a handful of its config/*.cfg files are actually vendored into
+# this project's own overlay (scripts/build/overlay/opt/printer_data/config/
+# simpleaf/) - see that directory's own per-file header comments for exactly
+# which ones and why (e.g. config/bltouch.cfg's placeholder hardware values
+# are deliberately NOT used, this project's own physically-qualified
+# printer.cfg hardware section is authoritative instead). k1/internal_macros.cfg
+# is deliberately not vendored at all - every command in it targets Creality-
+# installer-only paths (/usr/data/pellcorp/...), systemctl (no systemd here),
+# or a different camera architecture than NebulaOS's own database-seeded one.
+clone_pinned pellcorp-creality https://github.com/pellcorp/creality.git \
+	d18d354456a89c20507e574feaa34d6389e679ca
+
 # NebulaOS's own fork of SimpleAF's Klipper (coreflake1/NebulaOS-klipper,
 # `nebulaos` branch) - Track 1's "SimpleAF + the probe" decision applies here
 # too: pellcorp/klipper @ 386fde4 is still the base this whole app stack

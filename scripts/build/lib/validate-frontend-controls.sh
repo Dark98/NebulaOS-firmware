@@ -29,18 +29,32 @@ frontend_controls_resolve_closure() {
 }
 
 _frontend_controls_resolve_one() {
-	rc_src="$1"
-	rc_rel="$2"
-	rc_out="$3"
-	rc_f="$rc_src/$rc_rel"
+	# Every one of these must be `local` - this function recurses for nested
+	# includes (e.g. GuppyScreen/guppy_cmd.cfg, simpleaf/*.cfg), and plain
+	# (non-local) shell variables are shared across recursive calls, not
+	# call-scoped. A prior version of this function used plain assignment
+	# here, which meant a recursive call's rc_dirname (e.g. "GuppyScreen",
+	# set while resolving a nested include) silently overwrote the caller's
+	# own rc_dirname (e.g. "." while resolving printer.cfg's own top-level
+	# includes) once the recursive call returned - invisible for years
+	# because printer.cfg only ever had ONE nested-dir include, always last,
+	# so there was never a "next top-level include" for the clobbered value
+	# to corrupt. Adding a second nested-dir include (simpleaf/) after
+	# GuppyScreen/guppy_cmd.cfg exposed it immediately: every subsequent
+	# top-level include got silently misresolved as GuppyScreen/<name>.
+	local rc_src="$1"
+	local rc_rel="$2"
+	local rc_out="$3"
+	local rc_f="$rc_src/$rc_rel"
 	if [ ! -f "$rc_f" ]; then
 		echo "FATAL: $rc_rel is referenced (directly or via include) but does not exist under $rc_src" >&2
 		return 1
 	fi
 	cat "$rc_f" >> "$rc_out"
-	rc_dirname=$(dirname "$rc_rel")
-	rc_status=0
+	local rc_dirname=$(dirname "$rc_rel")
+	local rc_status=0
 	grep -o "^\[include [^]]*\]" "$rc_f" 2>/dev/null | sed -e "s/^\[include[[:space:]]*//" -e "s/[[:space:]]*\]\$//" | while read -r rc_inc; do
+		local rc_inc_rel
 		if [ "$rc_dirname" = "." ]; then
 			rc_inc_rel="$rc_inc"
 		else

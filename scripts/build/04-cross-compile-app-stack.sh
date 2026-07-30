@@ -489,14 +489,18 @@ if [ ! -f "$PRINTER_DATA_CONFIG_SRC/printer.cfg" ] || [ ! -f "$PRINTER_DATA_CONF
 	echo "FATAL: $PRINTER_DATA_CONFIG_SRC is missing printer.cfg or moonraker.conf - refusing to build a factory seed that would ship without them" >&2
 	exit 1
 fi
-if [ ! -f "$PRINTER_DATA_CONFIG_SRC/frontend-controls.cfg" ]; then
-	echo "FATAL: $PRINTER_DATA_CONFIG_SRC is missing frontend-controls.cfg - refusing to build a factory seed without the standard virtual_sdcard/pause_resume/display_status objects (see docs/NEBULAOS_FRONTEND_PRINT_CONTROLS.md)" >&2
-	exit 1
-fi
-if ! grep -q '^\[include frontend-controls\.cfg\]' "$PRINTER_DATA_CONFIG_SRC/printer.cfg"; then
-	echo "FATAL: $PRINTER_DATA_CONFIG_SRC/printer.cfg does not include frontend-controls.cfg - the standard print-control objects would not actually load" >&2
-	exit 1
-fi
+# SimpleAF backend integration (2026-07-29, see docs/
+# NEBULAOS_SIMPLEAF_BACKEND_INTEGRATION.md): frontend-controls.cfg is no
+# longer required to exist or be included - simpleaf/client.cfg + simpleaf/
+# start_end.cfg (vendored from pellcorp/creality) now provide the standard
+# virtual_sdcard/pause_resume/display_status/PAUSE/RESUME/CANCEL_PRINT
+# objects instead. There is deliberately no hardcoded "must include file X"
+# check here any more for exactly that reason - the generic closure
+# validator below (frontend_controls_resolve_closure/_validate_closure)
+# already checks that those SECTIONS exist exactly once in the real
+# resolved closure, regardless of which file(s) provide them, so a
+# hardcoded per-filename check here would just be a second, narrower, and
+# now-wrong copy of the same rule.
 # Lightweight sanity checks on the tracked source, not a full Klipper
 # config parser - catches the two concrete regressions this mission has
 # actually hit: a real device's carried-over SAVE_CONFIG calibration block,
@@ -514,18 +518,27 @@ fi
 # single-line grep for "key:$" flagged them as false positives the first
 # time this check ran for real).
 blank_required_option() {
+	# SimpleAF backend integration (2026-07-29): "gcode:" is explicitly
+	# excluded here - gcode_macro's own gcode option is genuinely allowed to
+	# be blank (a variable-only macro with no action, e.g. simpleaf/
+	# homing.cfg's [gcode_macro _HOMING_PARAMS]), confirmed directly against
+	# vendor/klipper/klippy/extras/gcode_macro.py's load_template(), which
+	# happily wraps an empty string. Every other option name is still
+	# caught - this exception is deliberately narrow to the one key that's
+	# legitimately allowed to be empty, not a general loosening.
 	awk '
 		{
 			if (pending != "") {
 				if ($0 !~ /^[ \t]/) { print pending; exit 1 }
 				pending = ""
 			}
-			if ($0 ~ /^[a-zA-Z_][a-zA-Z0-9_]*:[[:space:]]*$/) { pending = $0 }
+			if ($0 ~ /^[a-zA-Z_][a-zA-Z0-9_]*:[[:space:]]*$/ && $0 !~ /^gcode:[[:space:]]*$/) { pending = $0 }
 		}
 		END { if (pending != "") { print pending; exit 1 } }
 	' "$1"
 }
-for f in "$PRINTER_DATA_CONFIG_SRC/printer.cfg" "$PRINTER_DATA_CONFIG_SRC/moonraker.conf" "$PRINTER_DATA_CONFIG_SRC/frontend-controls.cfg"; do
+for f in "$PRINTER_DATA_CONFIG_SRC/printer.cfg" "$PRINTER_DATA_CONFIG_SRC/moonraker.conf" "$PRINTER_DATA_CONFIG_SRC/frontend-controls.cfg" "$PRINTER_DATA_CONFIG_SRC"/simpleaf/*.cfg; do
+	[ -f "$f" ] || continue
 	if ! blank_required_option "$f" >/dev/null; then
 		echo "FATAL: $f has an option present but syntactically blank (not a multi-line list value) - refusing to ship a factory default that fails to parse" >&2
 		exit 1

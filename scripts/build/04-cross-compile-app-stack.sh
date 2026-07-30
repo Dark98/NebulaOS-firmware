@@ -534,6 +534,80 @@ cat > "$OVERLAY/opt/nebulaos-seeds/seed-manifest.json" <<EOF
 EOF
 echo "== factory seeds created: $(ls -la "$OVERLAY/opt/nebulaos-seeds/") =="
 
+# Production optimization mission, Phase 11 (2026-07-30): pre-built venv
+# seeds, so S04nebulaos-factory-seed can extract a ready-made virtualenv
+# on first boot instead of running `python3 -m venv` live on this
+# underpowered target (confirmed live: ~59s per venv, ~118s combined,
+# the single largest first-boot cost this project has ever measured).
+#
+# Root cause found live: neither setup_klipper_env() nor
+# setup_moonraker_env() passes --without-pip, so every venv creation also
+# runs ensurepip - confirmed by inspecting a real, already-created venv on
+# the device: lib/python3.11/site-packages/ contains ONLY pip, setuptools,
+# and pkg_resources (nothing else - --system-site-packages correctly makes
+# every real dependency invisible from that directory, inherited instead
+# via the site-packages .pth mechanism), and that alone accounts for the
+# entire venv's 25.5MB footprint. ensurepip's own wheel-unpack-and-install
+# work is almost certainly the dominant cost of the ~59s, not the venv
+# module's own (otherwise tiny) scaffolding.
+#
+# A venv's own files are not architecture-specific - pyvenv.cfg is plain
+# text, activate* scripts are plain shell/text, and bin/python3 is just a
+# symlink to an external interpreter, never a copied binary - so the same
+# reasoning Phase 4 already used for bytecode precompilation applies here:
+# $HOST_PYTHON3 (Buildroot's own host-built python3.11.6 - see below) can
+# build the whole skeleton, which then only needs its symlinks/pyvenv.cfg/
+# activate scripts repointed from this build's own paths to the real,
+# fixed, always-identical target absolute paths (Buildroot always installs
+# to the same /usr/bin/python3.11 on this product), not literally
+# recreated per-architecture.
+if [ -n "$HOST_PYTHON3" ]; then
+	TARGET_PY_VERSION="3.11.6"
+	TARGET_PY_ABS="/usr/bin/python3.11"
+	build_venv_seed() {
+		envname="$1"; envdir="$2"; seed_out="$3"
+		rm -rf "$WORK/venv-seed-$envname"
+		if ! "$HOST_PYTHON3" -m venv --system-site-packages --without-pip \
+			"$WORK/venv-seed-$envname" >/tmp/venv-seed-$envname.log 2>&1; then
+			echo "WARNING: could not build $envname venv seed - S04nebulaos-factory-seed will fall back to on-device venv creation" >&2
+			return 1
+		fi
+		vdir="$WORK/venv-seed-$envname"
+		# Real target paths, not this build's own host-side paths.
+		cat > "$vdir/pyvenv.cfg" <<PYVENVCFG
+home = /usr/bin
+include-system-site-packages = true
+version = $TARGET_PY_VERSION
+executable = $TARGET_PY_ABS
+command = $TARGET_PY_ABS -m venv --system-site-packages --without-pip $envdir
+PYVENVCFG
+		rm -f "$vdir/bin/python" "$vdir/bin/python3" "$vdir/bin/python3.11"
+		ln -s "$TARGET_PY_ABS" "$vdir/bin/python3.11"
+		ln -s python3.11 "$vdir/bin/python3"
+		ln -s python3 "$vdir/bin/python"
+		# The activate* scripts embed the venv's own absolute path -
+		# rewrite from this build's throwaway $vdir to the real,
+		# fixed target envdir these seeds will actually be extracted
+		# into. Unused by this project's own S55klipper/S56moonraker
+		# (which invoke bin/python3 directly, never source activate),
+		# kept anyway for parity/manual debugging convenience since
+		# they cost nothing extra to include.
+		for af in activate activate.csh activate.fish; do
+			[ -f "$vdir/bin/$af" ] && sed -i "s#$vdir#$envdir#g" "$vdir/bin/$af"
+		done
+		[ -f "$vdir/pyvenv.cfg" ] || return 1
+		tar -C "$vdir" -czf "$seed_out" .
+	}
+	if build_venv_seed klipper /usr/data/nebulaos/envs/klipper "$OVERLAY/opt/nebulaos-seeds/klipper-venv-seed.tar.gz"; then
+		echo "== klipper venv seed created: $(ls -la "$OVERLAY/opt/nebulaos-seeds/klipper-venv-seed.tar.gz") =="
+	fi
+	if build_venv_seed moonraker /usr/data/nebulaos/envs/moonraker "$OVERLAY/opt/nebulaos-seeds/moonraker-venv-seed.tar.gz"; then
+		echo "== moonraker venv seed created: $(ls -la "$OVERLAY/opt/nebulaos-seeds/moonraker-venv-seed.tar.gz") =="
+	fi
+else
+	echo "WARNING: HOST_PYTHON3 not available - shipping without venv seeds, S04nebulaos-factory-seed will use its existing on-device venv creation path" >&2
+fi
+
 # Real bug found live (auto-updates-camera-complete mission addendum,
 # 2026-07-28): S01persistent-datastore bind-mounts $NEBULAOS_ROOT/printer_data
 # over /opt/printer_data unconditionally, very early in boot - so by the time

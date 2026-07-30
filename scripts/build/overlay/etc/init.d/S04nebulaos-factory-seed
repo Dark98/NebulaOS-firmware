@@ -236,10 +236,44 @@ seed_mainsail() {
 # observed) on this device - accounted for by running inside the same
 # maintenance-gate/expendable-oom-priority window as the rest of this
 # script's work, not because it is itself memory-heavy.
+# Production optimization mission, Phase 11 (2026-07-30): try extracting
+# the prebuilt venv seed (04-cross-compile-app-stack.sh) first - a plain
+# tar extraction of a handful of small text files/symlinks, seconds
+# instead of the ~59s `python3 -m venv` (mostly ensurepip) takes live on
+# this device. Falls back to the original on-device creation path on ANY
+# failure - missing seed archive, extraction failure, or a failed import
+# smoke test - so a bad or missing seed can never leave the printer
+# unusable. $1: seed archive filename under $SEEDS. $2: envdir. $3: python
+# import smoke-test expression (same ones already used below).
+try_venv_seed() {
+	seed_file="$1"; envdir="$2"; smoke_test="$3"
+	seed_path="$SEEDS/$seed_file"
+	[ -f "$seed_path" ] || return 1
+	rm -rf "$envdir.partial"
+	mkdir -p "$envdir.partial"
+	if ! tar -xzf "$seed_path" -C "$envdir.partial" 2>/tmp/venv-seed-extract-error.log; then
+		log "WARNING: venv seed extraction failed ($seed_path) - see /tmp/venv-seed-extract-error.log - falling back to on-device venv creation"
+		rm -rf "$envdir.partial"
+		return 1
+	fi
+	if ! "$envdir.partial/bin/python3" -c "$smoke_test" 2>/tmp/venv-seed-smoke-error.log; then
+		log "WARNING: venv seed failed its own import smoke test ($seed_path) - see /tmp/venv-seed-smoke-error.log - falling back to on-device venv creation"
+		rm -rf "$envdir.partial"
+		return 1
+	fi
+	rm -rf "$envdir"
+	mv "$envdir.partial" "$envdir"
+	return 0
+}
+
 setup_moonraker_env() {
 	envdir=/usr/data/nebulaos/envs/moonraker
 	if [ -x "$envdir/bin/python3" ]; then
 		log "moonraker venv already present ($envdir) - skipping"
+		return 0
+	fi
+	if try_venv_seed "moonraker-venv-seed.tar.gz" "$envdir" "import tornado, numpy, streaming_form_data"; then
+		log "moonraker venv seeded from prebuilt archive and verified successfully"
 		return 0
 	fi
 	log "creating writable Moonraker Python environment at $envdir"
@@ -280,6 +314,10 @@ setup_klipper_env() {
 	envdir=/usr/data/nebulaos/envs/klipper
 	if [ -x "$envdir/bin/python3" ]; then
 		log "klipper venv already present ($envdir) - skipping"
+		return 0
+	fi
+	if try_venv_seed "klipper-venv-seed.tar.gz" "$envdir" "import greenlet, cffi, jinja2, serial, can"; then
+		log "klipper venv seeded from prebuilt archive and verified successfully"
 		return 0
 	fi
 	log "creating writable Klippy Python environment at $envdir"

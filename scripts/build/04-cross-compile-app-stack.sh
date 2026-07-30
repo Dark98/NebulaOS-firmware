@@ -60,6 +60,26 @@ docker run --label "openke-build-pid=$$" --rm \
 	make clean
 	make CC=mipsel-buildroot-linux-gnu-gcc
 '
+
+# Production optimization mission, Phase 6 (2026-07-30): c_helper.so shipped
+# with full debug symbols in every rootfs.squashfs built so far - Buildroot's
+# own blanket TARGET_FINALIZE strip pass never reaches this file since it's
+# copied into the overlay directly by this script, after that pass runs, not
+# built as a real Buildroot package. Same class of gap as ustreamer/v4l2-ctl
+# below, which already strip explicitly for the same reason. Keep an
+# unstripped copy with symbols in the gitignored build-work tree (not the
+# production rootfs) before stripping, matching the ustreamer/v4l2-ctl
+# pattern's build-ID-preserving intent.
+mkdir -p "$WORK/debug-symbols"
+cp "$VENDOR/klipper/klippy/chelper/c_helper.so" "$WORK/debug-symbols/c_helper.so.debug"
+docker run --label "openke-build-pid=$$" --rm \
+	-v "$VENDOR/klipper:/klipper" \
+	-v "$BUILDROOT_DIR/output:/buildroot-output" \
+	-w /klipper/klippy/chelper pellcorp/k1-bash-build bash -c '
+	export PATH=/buildroot-output/host/bin:$PATH
+	mipsel-buildroot-linux-gnu-strip --strip-unneeded c_helper.so
+'
+
 mkdir -p "$OVERLAY/opt/klipper"
 rm -rf "$OVERLAY/opt/klipper/klippy"
 
@@ -177,6 +197,22 @@ docker run --label "openke-build-pid=$$" --rm \
 		-o streaming_form_data/_parser.cpython-311-mipsel-linux-gnu.so \
 		streaming_form_data/_parser.c
 '
+
+# Production optimization mission, Phase 6 (2026-07-30): same unstripped-
+# debug-symbols gap as c_helper.so above - this .so is never routed through
+# a real Buildroot package strip pass either. Preserve symbols in
+# build-work, strip the copy that actually ships.
+mkdir -p "$WORK/debug-symbols"
+cp "$WORK/streaming-form-data-1.11.0/streaming_form_data/_parser.cpython-311-mipsel-linux-gnu.so" \
+   "$WORK/debug-symbols/_parser.cpython-311-mipsel-linux-gnu.so.debug"
+docker run --label "openke-build-pid=$$" --rm \
+	-v "$TOOLCHAIN_HOST:/buildroot-host" \
+	-v "$WORK/streaming-form-data-1.11.0:/src" \
+	-w /src pellcorp/k1-bash-build bash -c '
+	export PATH=/buildroot-host/bin:$PATH
+	mipsel-buildroot-linux-gnu-strip --strip-unneeded streaming_form_data/_parser.cpython-311-mipsel-linux-gnu.so
+'
+
 mkdir -p "$SITEPKG/streaming_form_data"
 cp "$WORK"/streaming-form-data-1.11.0/streaming_form_data/*.py \
    "$WORK"/streaming-form-data-1.11.0/streaming_form_data/*.so \

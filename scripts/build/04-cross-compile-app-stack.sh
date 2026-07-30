@@ -46,6 +46,21 @@ if [ ! -x "$TOOLCHAIN_HOST/bin/mipsel-buildroot-linux-gnu-gcc" ]; then
 	exit 1
 fi
 
+# Production optimization mission, Phase 4 (2026-07-30): Buildroot's own
+# HOST-built python3 - identical CPython 3.11 version/build to the target,
+# so bytecode magic numbers match exactly, the same tool
+# BR2_PACKAGE_PYTHON3_PYC_ONLY already uses for system packages (see
+# vendor/buildroot-x2000/package/python3/python3.mk). Used below to
+# precompile Klipper/Moonraker's own Python source, which - unlike system
+# Buildroot packages - was never routed through that mechanism. Degrade to
+# source-only (no precompiled .pyc) rather than failing the build if
+# missing for any reason, exactly like every other optional step here.
+HOST_PYTHON3="$TOOLCHAIN_HOST/bin/python3"
+if [ ! -x "$HOST_PYTHON3" ]; then
+	echo "WARNING: $HOST_PYTHON3 not found - Klipper/Moonraker will ship without precompiled bytecode" >&2
+	HOST_PYTHON3=""
+fi
+
 mkdir -p "$WORK"
 
 ### 1. Klipper: klippy/ source + a freshly cross-compiled chelper.so
@@ -101,6 +116,17 @@ rm -rf "$OVERLAY/opt/klipper/klippy"
 mkdir -p "$OVERLAY/root/klippy-env"
 cp -r "$VENDOR/klipper/klippy" "$OVERLAY/opt/klipper/"
 find "$OVERLAY/opt/klipper" -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+# Production optimization mission, Phase 4 (2026-07-30): this squashfs
+# copy is the immutable fallback used if persistent storage/the real bind-
+# mounted seed is ever unavailable - precompile it too, not just the seed
+# archive below, so that fallback path benefits as well. See the seed
+# archive's own Phase 4 comment for why $HOST_PYTHON3 is the right tool.
+if [ -n "$HOST_PYTHON3" ]; then
+	PYTHONPATH="" "$HOST_PYTHON3" -m compileall -q \
+		-s "$OVERLAY/opt/klipper" -p "/opt/klipper" \
+		"$OVERLAY/opt/klipper/klippy" \
+		|| echo "WARNING: bytecode precompilation failed for the klipper squashfs copy - shipping source-only" >&2
+fi
 rm -f "$OVERLAY/opt/klipper/klippy/chelper"/*.o "$OVERLAY/opt/klipper/klippy/chelper"/*.a
 
 # Stock-parity fix (FIRMWARE.md sec 13): only klippy/ was ever staged here,
@@ -157,6 +183,17 @@ find "$OVERLAY/opt/moonraker" -name "__pycache__" -exec rm -rf {} + 2>/dev/null 
 # being in the correct end state. -N makes patch skip hunks it detects as
 # already-applied instead of erroring, so this stays idempotent either way.
 patch -N -p1 -d "$OVERLAY/opt/moonraker" < "$SCRIPT_DIR/patches/moonraker-sqlite-nolock.patch" || true
+
+# Production optimization mission, Phase 4 (2026-07-30): precompile after
+# the patch above, not before, so bytecode reflects the final patched
+# content rather than needing that one file recompiled on first import.
+# Same immutable-fallback reasoning as the klipper copy above.
+if [ -n "$HOST_PYTHON3" ]; then
+	PYTHONPATH="" "$HOST_PYTHON3" -m compileall -q \
+		-s "$OVERLAY/opt/moonraker" -p "/opt/moonraker" \
+		"$OVERLAY/opt/moonraker/moonraker" \
+		|| echo "WARNING: bytecode precompilation failed for the moonraker squashfs copy - shipping source-only" >&2
+fi
 
 # OpenKE (2026-07-23): zipp added after a real, previously-silent bug found
 # on real hardware - importlib_metadata (below) imports zipp at runtime, but
@@ -446,12 +483,14 @@ for stale_dir in "$BUILDROOT_DIR/output/target/opt/nebulaos-seeds" \
 done
 klipper_origin="https://github.com/coreflake1/NebulaOS-klipper.git"
 klipper_seed_commit=$(make_seed_archive "$VENDOR/klipper" master \
-	"$klipper_origin" "$OVERLAY/opt/nebulaos-seeds/klipper.tar.gz" "/lib/")
+	"$klipper_origin" "$OVERLAY/opt/nebulaos-seeds/klipper.tar.gz" "/lib/" \
+	"$HOST_PYTHON3" "/opt/klipper")
 klipper_is_shallow=$(git -C "$VENDOR/klipper" rev-parse --is-shallow-repository)
 
 moonraker_origin="https://github.com/Arksine/moonraker.git"
 moonraker_seed_commit=$(make_seed_archive "$VENDOR/moonraker" master \
-	"$moonraker_origin" "$OVERLAY/opt/nebulaos-seeds/moonraker.tar.gz")
+	"$moonraker_origin" "$OVERLAY/opt/nebulaos-seeds/moonraker.tar.gz" "" \
+	"$HOST_PYTHON3" "/opt/moonraker")
 moonraker_is_shallow=$(git -C "$VENDOR/moonraker" rev-parse --is-shallow-repository)
 mainsail_version=$(cat "$VENDOR/mainsail-dist/dist/.version" 2>/dev/null || echo "unknown")
 build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)

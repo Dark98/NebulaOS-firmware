@@ -38,6 +38,23 @@
 
 make_seed_archive() {
 	src="$1"; active_branch="$2"; origin_url="$3"; out="$4"; sparse_exclude="${5:-}"
+	# Production optimization mission, Phase 4 (2026-07-30): both optional,
+	# trailing so every existing 5-arg call site (including
+	# tests/factory-seed-git-tests.sh's offline fixtures, which have no
+	# real target Python toolchain to test against) is unaffected and
+	# simply skips precompilation. python3_bin must be a HOST-architecture
+	# build of the *same* CPython version/build that runs on the target
+	# (Buildroot's own output/host/bin/python3, exactly what
+	# BR2_PACKAGE_PYTHON3_PYC_ONLY already uses for system packages) -
+	# Python bytecode itself is not CPU-architecture-specific, only
+	# CPython-version-specific, so this produces byte-identical .pyc
+	# output to what the target interpreter would compile natively,
+	# without needing target emulation. mount_path is the real absolute
+	# path this tree runs from on the device (e.g. /opt/klipper) - used
+	# only to make embedded tracebacks show real device paths instead of
+	# this function's own mktemp staging path; purely cosmetic, no
+	# functional effect on bytecode validity.
+	python3_bin="${6:-}"; mount_path="${7:-}"
 	tmp=$(mktemp -d)
 	cp -r "$src/." "$tmp/"
 	# Ensure the archived copy is checked out on the branch Moonraker's
@@ -150,6 +167,34 @@ make_seed_archive() {
 		echo "ERROR: refusing to package $src - git fsck reported repository damage" >&2
 		rm -rf "$tmp"
 		return 1
+	fi
+
+	# Precompile to .pyc, deliberately AFTER the clean-tree check above,
+	# not before: __pycache__ directories are untracked, and the dirty-
+	# tree guard would otherwise refuse to package a tree that compiled
+	# cleanly. A failure here is non-fatal - it just means this seed
+	# ships without precompiled bytecode and pays the normal one-time
+	# compile-on-first-import cost instead, same as before this feature
+	# existed; it must never block the whole build.
+	#
+	# Excludes top-level scripts/ as well as .git/: real failure found
+	# live - Klipper's own scripts/stepstats.py is a Python-2-only dev
+	# tool (a bare `print "..." %` statement) that Klippy's own runtime
+	# never imports, but compileall's walk still reaches it and returns
+	# non-zero for the whole tree over that one irrelevant file (Moonraker
+	# has a handful of similarly never-imported scripts/*.py of its own -
+	# losing bytecode for these purely host-side dev/release tools, never
+	# run on the target, is a non-issue).
+	if [ -n "$python3_bin" ]; then
+		if [ -n "$mount_path" ]; then
+			PYTHONPATH="" "$python3_bin" -m compileall -q \
+				-x '(^|/)(\.git|scripts)($|/)' -s "$tmp" -p "$mount_path" "$tmp" \
+				|| echo "WARNING: bytecode precompilation failed for $src - shipping source-only, as before" >&2
+		else
+			PYTHONPATH="" "$python3_bin" -m compileall -q \
+				-x '(^|/)(\.git|scripts)($|/)' "$tmp" \
+				|| echo "WARNING: bytecode precompilation failed for $src - shipping source-only, as before" >&2
+		fi
 	fi
 
 	# gzip, not a plain tar: real bug found at the first full build after

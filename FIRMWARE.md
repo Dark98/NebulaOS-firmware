@@ -833,10 +833,15 @@ original gotchas):
    packages) - fixed by re-running the `apt-get install` step before the incremental build command.
 
 **Build succeeded cleanly after these fixes.** Verified output:
-- `uImage` (5.9 MB) and `rootfs.ext2` (60 MB), kernel release string `6.6.18-rt23` (a **PREEMPT_RT**
-  real-time kernel variant - a genuinely good property for a 3D-printer motion controller, not
-  something specifically sought out but a welcome side effect of using this SDK's own default
-  config).
+- `uImage` (5.9 MB) and `rootfs.ext2` (60 MB), kernel release string `6.6.18-rt23`. **Correction
+  (2026-07-30, production optimization mission)**: the `-rt23` release suffix reflects this SDK's
+  source lineage only - it is NOT proof that `CONFIG_PREEMPT_RT` is enabled. The claim below that
+  this build is "a PREEMPT_RT real-time kernel variant... a welcome side effect of using this SDK's
+  own default config" was never verified against the actual compiled config and is wrong: a direct
+  `zcat /proc/config.gz` read of the real running kernel shows `CONFIG_PREEMPT=y` and
+  `CONFIG_PREEMPT_RT` **not set** (plain PREEMPT, not PREEMPT_RT). See §NEBULAOS_PRODUCTION_KERNEL_PREEMPTION
+  near the end of this file for the full finding; PREEMPT_RT remains untested and is deferred to a
+  separate, explicit A/B experiment.
 - Kernel `.config` confirmed: `CONFIG_FB_INGENIC=y`, `CONFIG_FB_INGENIC_STAGE=y`,
   `CONFIG_USB_VIDEO_CLASS=y`, `CONFIG_MEDIA_SUPPORT=y`, `CONFIG_CPU_MIPS32_R5=y` (this SDK's own
   choice, real and internally consistent - unlike the earlier 6.1 rebase's stray `MIPS32_R1` note,
@@ -5197,3 +5202,41 @@ and has been corrected in place with a note, not silently rewritten.
   **`PRINTER_STACK_REMAINS_PASSIVELY_SAFE`** - real webcam streaming and real flash-drive enumeration
   both confirmed on real hardware; exFAT mount and full post-reflash/hotplug validation still pending
   the production rebuild this same session continues into.
+
+## NEBULAOS_PRODUCTION_KERNEL_PREEMPTION - PREEMPT_RT documentation correction (2026-07-30)
+
+Production boot/CPU/memory optimization mission, Phase 7. Corrects the claim made earlier in this
+file (§ near line 836) that this project's kernel is a PREEMPT_RT real-time variant.
+
+**What was claimed**: the `6.6.18-rt23` kernel release string was read as evidence this build uses
+`CONFIG_PREEMPT_RT`, described as "a welcome side effect of using this SDK's own default config."
+
+**What is actually true**, confirmed by reading the real running kernel's own compiled-in config
+(`zcat /proc/config.gz` against the live device, not assumed from the version string):
+
+```text
+CONFIG_PREEMPT=y
+CONFIG_PREEMPT_RT=n   (not present in /proc/config.gz at all - never selected)
+CONFIG_HZ=100
+CONFIG_NO_HZ_IDLE=y
+```
+
+This is plain `CONFIG_PREEMPT` (voluntary/low-latency preemption), not `CONFIG_PREEMPT_RT`. The
+`-rt23` suffix in the release string comes from this SDK vendor's own kernel source lineage (the
+tree it was forked from carries RT patches historically) - it says nothing about which Kconfig
+options this project's own build actually turned on. NebulaOS's own kernel fragment
+(`artifacts/buildroot-halley5-v30-image/halley5-nebulaos-fragment.config`) never touches
+`PREEMPT`/`HZ`/`CPU_FREQ` at all; these are untouched SDK defaults, not a deliberate choice either
+way.
+
+Practically, this likely doesn't matter for print quality: Klipper keeps hard real-time step timing
+on the MCU itself, not the host kernel, so host-side preemption latency was never on the critical
+path. But no future decision should be made assuming real PREEMPT_RT guarantees exist on the host,
+since none do today.
+
+**PREEMPT_RT itself is not enabled or evaluated by this mission** - it is explicitly out of scope
+here and deferred to a separate, later A/B engineering experiment that measures it head-to-head
+against the current plain-PREEMPT baseline before any decision to ship it.
+
+- Classification: **`PREEMPT_RT_DOCUMENTATION_CORRECTED`**, **`PRODUCTION_KERNEL_IS_PLAIN_PREEMPT`**,
+  **`PREEMPT_RT_DEFERRED_TO_SEPARATE_AB_EXPERIMENT`** - no kernel behavior changed in this phase.

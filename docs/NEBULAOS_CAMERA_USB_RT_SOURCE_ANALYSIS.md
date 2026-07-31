@@ -165,10 +165,19 @@ details):
    extended to verify the origin remote URL and working-tree cleanliness
    (against an explicit, named allowlist of deterministically-managed
    paths per repo), not just the HEAD SHA.
-5. `build-manifest.txt` does not record 5 of 7 vendored git commits, and does
-   not capture a dirty-main-repo diff when `git_dirty_main=yes` — **not yet
-   fixed**, still open (tracked as the next concrete step in the
-   pre-qualification mission's Phase A2).
+5. ~~`build-manifest.txt` does not record 5 of 7 vendored git commits, and
+   does not capture a dirty-main-repo diff when `git_dirty_main=yes`.~~
+   **FIXED**: `05-final-build.sh` now records every vendored git commit
+   (kernel, Buildroot, Klipper, Moonraker, pellcorp-creality, k1-ustreamer +
+   its submodules, v4l-utils) plus dirty-state per repo, and every
+   binary-artifact hash (Mainsail, GuppyScreen, Wi-Fi firmware/NVRAM,
+   regulatory.db, device-tree). A real dirty-main-repo *diff capture* was
+   not added (that's a much bigger change - archiving the actual diff
+   alongside the manifest); instead, a new opt-in
+   `NEBULAOS_REQUIRE_CLEAN_TREE=1` gate makes `05-final-build.sh` refuse to
+   build at all from a dirty main tree, reserved for the final Phase 13
+   production build (everyday iterative/experimental builds are unaffected,
+   left able to build from an in-progress tree as this project always has).
 6. ~~No hash verification exists for either downloaded binary artifact
    (Mainsail zip, GuppyScreen binaries).~~ **FIXED**: both (plus the Wi-Fi
    firmware/NVRAM and regulatory.db blobs) now have recorded SHA-256 hashes

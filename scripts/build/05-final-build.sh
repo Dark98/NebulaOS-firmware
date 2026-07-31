@@ -90,24 +90,80 @@ if [ "$FINGERPRINT_BEFORE" != "$FINGERPRINT_AFTER" ]; then
 	exit 1
 fi
 
+# Optional hard gate for a real release build (2026-07-31,
+# NEBULAOS_CAMERA_USB_RT_SOURCE_ANALYSIS.md's vendor-pin audit / pre-
+# qualification mission Phase A2): "reject release builds from a dirty main
+# repository" is the right rule for a FINAL production build, but this same
+# script also produces every intermediate experimental/A-B variant build,
+# which this project routinely does against a dirty, in-progress tree - a
+# blanket rejection here would break that normal workflow. Opt-in via
+# NEBULAOS_REQUIRE_CLEAN_TREE=1 (set only for the final Phase 13 production
+# build), default off so today's iterative builds are unaffected.
+if [ "${NEBULAOS_REQUIRE_CLEAN_TREE:-0}" = "1" ]; then
+	if [ -n "$(cd "$REPO_ROOT" && git status --porcelain)" ]; then
+		echo "FATAL: NEBULAOS_REQUIRE_CLEAN_TREE=1 but the main repository has uncommitted changes - a release build must come from a clean, committed tree" >&2
+		exit 1
+	fi
+fi
+
 # Build manifest - the source of truth flash-spare-slot.sh verifies against
 # before writing anything to real hardware (see its own --manifest handling).
 # Git commits/dirty-state let a later "which build is this" question be
 # answered without guessing from file timestamps.
+#
+# Expanded 2026-07-31 (same audit) to cover every vendored git tree, not just
+# main + kernel - a future investigator holding only this manifest can now
+# reconstruct exactly which commit of every dependency produced a given
+# shipped image, without needing the live vendor/ checkouts to still exist.
 ARTIFACT_DIR="$REPO_ROOT/artifacts/buildroot-halley5-v30-image"
 MANIFEST="$ARTIFACT_DIR/build-manifest.txt"
+git_field() {
+	# name, vendor-relative-path (empty = repo root)
+	fname="$1"; fdir="$REPO_ROOT${2:+/$2}"
+	if [ -d "$fdir/.git" ]; then
+		echo "${fname}=$(cd "$fdir" && git rev-parse HEAD)"
+		echo "${fname}_dirty=$(cd "$fdir" && [ -z "$(git status --porcelain)" ] && echo no || echo yes)"
+	else
+		echo "${fname}=absent"
+		echo "${fname}_dirty=unknown"
+	fi
+}
+artifact_sha256() {
+	# name, path
+	if [ -f "$2" ]; then
+		echo "$1=$(sha256sum "$2" | awk '{print $1}')"
+	else
+		echo "$1=absent"
+	fi
+}
 {
 	echo "built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-	echo "git_commit_main=$(cd "$REPO_ROOT" && git rev-parse HEAD)"
-	echo "git_dirty_main=$(cd "$REPO_ROOT" && [ -z "$(git status --porcelain)" ] && echo no || echo yes)"
-	echo "git_commit_kernel=$(cd "$REPO_ROOT/vendor/x2000_kernel_6.6" && git rev-parse HEAD)"
-	echo "git_dirty_kernel=$(cd "$REPO_ROOT/vendor/x2000_kernel_6.6" && [ -z "$(git status --porcelain)" ] && echo no || echo yes)"
-	echo "kernel_config_sha256=$(sha256sum "$ARTIFACT_DIR/kernel.config" | awk '{print $1}')"
-	echo "buildroot_config_sha256=$(sha256sum "$ARTIFACT_DIR/buildroot.config" | awk '{print $1}')"
+	git_field git_commit_main ""
+	git_field git_commit_kernel vendor/x2000_kernel_6.6
+	git_field git_commit_buildroot vendor/buildroot-x2000
+	git_field git_commit_klipper vendor/klipper
+	git_field git_commit_moonraker vendor/moonraker
+	git_field git_commit_pellcorp_creality vendor/pellcorp-creality
+	git_field git_commit_k1_ustreamer vendor/k1-ustreamer
+	git_field git_commit_v4l_utils vendor/v4l-utils
+	if [ -d "$REPO_ROOT/vendor/k1-ustreamer/.git" ]; then
+		echo "git_submodules_k1_ustreamer=$(cd "$REPO_ROOT/vendor/k1-ustreamer" && git submodule status | awk '{printf "%s@%s;", $2, $1}')"
+	else
+		echo "git_submodules_k1_ustreamer=absent"
+	fi
+	artifact_sha256 mainsail_zip_sha256 "$REPO_ROOT/vendor/mainsail-dist/mainsail.zip"
+	artifact_sha256 guppyscreen_sha256 "$REPO_ROOT/artifacts/guppyscreen-mips/guppyscreen"
+	artifact_sha256 guppybeep_sha256 "$REPO_ROOT/artifacts/guppyscreen-mips/guppybeep"
+	artifact_sha256 wifi_firmware_sha256 "$REPO_ROOT/scripts/build/overlay/lib/firmware/brcm/brcmfmac43430-sdio.bin"
+	artifact_sha256 wifi_nvram_sha256 "$REPO_ROOT/scripts/build/overlay/lib/firmware/brcm/brcmfmac43430-sdio.txt"
+	artifact_sha256 regulatory_db_sha256 "$REPO_ROOT/scripts/build/overlay/lib/firmware/regulatory.db"
+	artifact_sha256 kernel_config_sha256 "$ARTIFACT_DIR/kernel.config"
+	artifact_sha256 buildroot_config_sha256 "$ARTIFACT_DIR/buildroot.config"
+	artifact_sha256 device_tree_sha256 "$ARTIFACT_DIR/halley5_v30.dts"
+	artifact_sha256 xImage_sha256 "$ARTIFACT_DIR/xImage"
 	echo "xImage_size=$(wc -c < "$ARTIFACT_DIR/xImage")"
-	echo "xImage_sha256=$(sha256sum "$ARTIFACT_DIR/xImage" | awk '{print $1}')"
+	artifact_sha256 rootfs_squashfs_sha256 "$ARTIFACT_DIR/rootfs.squashfs"
 	echo "rootfs_squashfs_size=$(wc -c < "$ARTIFACT_DIR/rootfs.squashfs")"
-	echo "rootfs_squashfs_sha256=$(sha256sum "$ARTIFACT_DIR/rootfs.squashfs" | awk '{print $1}')"
 } > "$MANIFEST"
 
 echo "== final build complete, artifacts copied to artifacts/buildroot-halley5-v30-image/ (xImage, rootfs.ext2, rootfs.squashfs) =="

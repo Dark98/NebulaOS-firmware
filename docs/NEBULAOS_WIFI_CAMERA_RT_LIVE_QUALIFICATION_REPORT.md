@@ -471,7 +471,21 @@ confirmed. Camera snapshot HTTP 200. Klipper `state: ready`.
 Classification: `SDIO_HIGHSPEED: ACCEPT` (same reasoning as B1 — all immediate-rejection
 criteria pass; no quantitative throughput/latency benefit measured in the time available).
 
-## Remaining phases
+### B3 (W3, both cap-sdio-irq + cap-sd-highspeed) — PASS
 
-B3 (SDIO, both caps), B6 (event-driven association), C2 (camera idle-pause), and B8/B11-B12
-(PREEMPT_RT) remain, each requiring the same stock↔custom cycle described above.
+Deployed only after W1 and W2 independently passed, per the mission's own ordering rule. `wlan0`
+MAC identical (`16:3b:5d:14:20:90`). `dmesg`: `mmc1: new high speed SDIO card`, no MMC/SDIO
+errors, no firmware resets. Two unrelated `error -ENXIO` lines appear
+(`ingenic-dma ... IRQ pdmam not found`, `ingenic-tcu ... IRQ index 1 not found`) — both occur
+before `mmc1` even initializes and concern unrelated DMA/timer peripherals, not SDIO/Wi-Fi;
+not investigated further given time constraints, but flagged as present for completeness.
+Standby confirmed, camera snapshot HTTP 200, Klipper `state: ready`.
+
+Classification: `SDIO combined (W3): ACCEPT` (all immediate-rejection criteria pass). Per the
+mission's own guidance ("select the smallest change set that provides the best measured
+result"), and since no quantitative benefit was measured for any of W1/W2/W3 in the time
+available, **W0 (baseline) remains the recommended default** until a real throughput/latency
+benefit is measured to justify a change — W1/W2/W3 are all confirmed *safe*, not confirmed
+*better*.
+
+## Phase B8/B11-B12 — PREEMPT_RT non-motion A/B

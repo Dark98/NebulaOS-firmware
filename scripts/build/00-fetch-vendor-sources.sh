@@ -160,12 +160,32 @@ clone_pinned v4l-utils https://git.linuxtv.org/v4l-utils.git \
 
 # Mainsail - a built Vue app, fetched as a real release archive, not built
 # from source here (no Node.js toolchain needed for this build at all).
+#
+# Pin enforcement (2026-07-31, NEBULAOS_CAMERA_USB_RT_SOURCE_ANALYSIS.md's
+# vendor-pin audit): this used to download from .../releases/latest/..., a
+# URL that silently points at whatever GitHub considers "latest" at fetch
+# time - the single least-reproducible dependency in this whole build, worse
+# than the kernel's moving-branch issue, since there wasn't even a way to
+# detect drift after the fact. Pinned to an explicit release tag (the exact
+# .version this project's last real build actually shipped, confirmed by
+# extracting the downloaded zip's own .version file) plus a SHA-256 check on
+# the downloaded archive itself, failing loudly on either a wrong tag or a
+# byte-for-byte different artifact under that tag.
+MAINSAIL_PIN_TAG=v2.18.2
+MAINSAIL_PIN_SHA256=df2ba7c301f7bfc8ac9f122741a6ba08356d679ecfa1f62f898d0337802d5de5
 mkdir -p mainsail-dist
 if [ ! -f mainsail-dist/mainsail.zip ]; then
-	echo "== downloading Mainsail's latest release =="
-	curl -sL https://github.com/mainsail-crew/mainsail/releases/latest/download/mainsail.zip \
+	echo "== downloading Mainsail $MAINSAIL_PIN_TAG =="
+	curl -sL "https://github.com/mainsail-crew/mainsail/releases/download/$MAINSAIL_PIN_TAG/mainsail.zip" \
 		-o mainsail-dist/mainsail.zip
 fi
+mainsail_actual_sha256=$(sha256sum mainsail-dist/mainsail.zip | awk '{print $1}')
+if [ "$mainsail_actual_sha256" != "$MAINSAIL_PIN_SHA256" ]; then
+	echo "FATAL: mainsail-dist/mainsail.zip sha256 is $mainsail_actual_sha256, expected pinned $MAINSAIL_PIN_SHA256 for $MAINSAIL_PIN_TAG" >&2
+	echo "Either the download is corrupt/tampered, or this is a deliberate version bump - if deliberate, update MAINSAIL_PIN_TAG/MAINSAIL_PIN_SHA256 in this script after reviewing the new release." >&2
+	exit 1
+fi
+echo "== Mainsail $MAINSAIL_PIN_TAG sha256 verified =="
 rm -rf mainsail-dist/dist
 mkdir -p mainsail-dist/dist
 unzip -q mainsail-dist/mainsail.zip -d mainsail-dist/dist

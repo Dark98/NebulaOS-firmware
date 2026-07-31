@@ -103,62 +103,95 @@ checkouts in this repo on 2026-07-31; none were re-fetched or modified.
 |---|---|---|---|
 | `vendor/buildroot-x2000` | `74d020081096972857acdb9e76c6c5335455d430` (`scripts/build/00-fetch-vendor-sources.sh`, `clone_pinned buildroot-x2000 ...`) | `74d020081096972857acdb9e76c6c5335455d430` | **PIN_MATCH**. Working tree shows a modified `package/python-matplotlib/python-matplotlib.mk` and untracked `board/halley5-nebulaos-*` files — all fully accounted for and deterministic, not accidental drift: the `.mk` change is copied in verbatim from the tracked `scripts/build/vendor-patches/python-matplotlib/python-matplotlib.mk` by `02-configure-buildroot.sh:139` (documented rationale in-file: matplotlib's `setup_requires` numpy fetch is broken under cross-compilation, fixed by a vendored host-platform wheel), and the `board/halley5-nebulaos-*` files are this project's own tracked config-layer inputs, copied in by the same script. **No automatic HEAD-vs-pin check exists for this repo** (see below) — the pin only matches today by chance of nobody having run `git pull` inside it. |
 | `vendor/x2000_kernel_6.6` (kernel, fork `coreflake1/NebulaOS`) | **Branch name `openke`**, not a commit SHA (`00-fetch-vendor-sources.sh`: `git -C x2000_kernel_6.6 checkout openke`) | `f7ff80a8aa21886a32783dab167e451298c60a8d` | **PIN_DRIFT-BY-DESIGN**. Every other `clone_pinned` call in this script pins to an exact SHA; the kernel is the sole exception, pinned to a branch that can move on every fresh fetch. The current HEAD is recorded post-hoc in `artifacts/buildroot-halley5-v30-image/build-manifest.txt:4` (`git_commit_kernel=f7ff80a8a...`, `git_dirty_kernel=no`) — but that is a record made *after* a build, not a gate enforced *before* one. `01-apply-kernel-patches.sh:30` only checks the branch name (`openke`), never a specific commit. **If `openke` moves upstream before a fresh clone, a rebuild would silently use different kernel source with no error**, and there is no single place in the repo that states "the current authoritative pin is `f7ff80a8a...`" as a durable, checked value — only the manifest's after-the-fact record. |
-| `vendor/x2000_kernel` (Jubian540/x2000_kernel fork, non-6.6) | **Not declared anywhere** in `00-fetch-vendor-sources.sh` | `7f14bc69e3125a92abf88b6e9525df405e1cd0e0` | **UNKNOWN_PROVENANCE / orphaned**. Confirmed via `grep -rn "x2000_kernel\b" scripts/build/*.sh \| grep -v x2000_kernel_6.6` — zero matches. This tree is not fetched, not referenced by `01-apply-kernel-patches.sh`, `02-configure-buildroot.sh`, `03-build-kernel-and-rootfs.sh`, or `04-cross-compile-app-stack.sh`. It appears to be a stale leftover from before the project standardized on `x2000_kernel_6.6`. Recommend deleting it or documenting explicitly why it's kept. |
+| `vendor/x2000_kernel` (Jubian540/x2000_kernel fork, non-6.6) | **Not declared anywhere** in `00-fetch-vendor-sources.sh` | `7f14bc69e3125a92abf88b6e9525df405e1cd0e0` | **RETAINED, DOCUMENTED (corrected 2026-07-31)**. Not consumed by the numbered `00`-`06` build pipeline, but **not actually orphaned** either — this initial characterization was too hasty. `README.md:176`, multiple `FIRMWARE.md` sections, and `docs/PIN_OWNERSHIP_MAP.md:221` all confirm real, ongoing reference use: cross-compiling a stock-vermagic-matching kernel module, confirming the exact stock kernel version, and as a reference-tree search target during pin-conflict investigations. See `docs/NEBULAOS_RELEASE_ARTIFACT_PROVENANCE.md`'s "Orphaned vendor tree resolution" section for the full resolution — kept, not deleted. |
 | `vendor/klipper` (fork `coreflake1/NebulaOS-klipper`) | `b3d5ab2b9484f1558586c3a2ea43d46ff9a473a7` | `d839d0375a31327e57e0a35e99e70ba60814ec05` (one real commit ahead: `"chelper: replace incompatible upstream c_helper.so with NebulaOS's own build"`) | **PIN_DRIFT, already caught**. Confirmed `b3d5ab2...` is a genuine ancestor of the actual HEAD (`git merge-base --is-ancestor` succeeds) — not diverged, just stale. This is **not a hidden gap**: `scripts/build/06-verify.sh:39-55` already implements `check_vendor_pin()` and calls `check_vendor_pin klipper b3d5ab2b9484f1558586c3a2ea43d46ff9a473a7` (line 55), with an in-file comment (lines 30-38) explicitly documenting that this exact MISS is expected until the fetch script's own pin comment is bumped, and warning future readers not to silence it by changing the expected SHA to match. **A fresh `00-fetch-vendor-sources.sh` run today would check out `b3d5ab2` and miss the c_helper.so replacement commit the current build actually depends on** — this is a live, real reproducibility risk despite being correctly flagged. Working tree also shows the expected, previously-documented `M klippy/chelper/c_helper.so` build-artifact drift (unrelated to this pin gap). |
 | `vendor/moonraker` (upstream `Arksine/moonraker`) | `d5ee17128bb88434aacdab90c2e9e990e2b64e4a` | `d5ee17128bb88434aacdab90c2e9e990e2b64e4a` | **PIN_MATCH**, and covered by `check_vendor_pin moonraker ...` (`06-verify.sh:56`). Clean. |
 | `vendor/pellcorp-creality` (SimpleAF) | `d18d354456a89c20507e574feaa34d6389e679ca` | `d18d354456a89c20507e574feaa34d6389e679ca` | **PIN_MATCH**, and covered by `check_vendor_pin pellcorp-creality ...` (`06-verify.sh:57`). Clean. |
 | `vendor/k1-ustreamer` (fork `pellcorp/k1-ustreamer`) | `18e30bb313d54b1b01dd995bd31ce5a3d5adffd6` | `18e30bb313d54b1b01dd995bd31ce5a3d5adffd6` | **PIN_MATCH**. Real git submodules (`jpeg-9d` → `pellcorp/jpeg-9d`, `ustreamer` → `pellcorp/ustreamer`, per `.gitmodules`), pinned deterministically via the parent commit's recorded submodule SHAs — no drift risk there. **Not covered by `check_vendor_pin`** — no automatic gate. |
 | `vendor/v4l-utils` (linuxtv) | Tag `v4l-utils-1.20.0` | `3b22ab02b960e4d1e90618e9fce9b7c8a80d814a`, confirmed via `git describe --tags` = `v4l-utils-1.20.0` exactly | **PIN_MATCH**. Untracked `messages.mo` (a compiled gettext artifact left in the source tree) — harmless, minor `DIRTY_VENDOR_TREE`, not a reproducibility risk. **Not covered by `check_vendor_pin`**. |
-| `vendor/mainsail` (git clone of `mainsail-crew/mainsail`) | **Not declared anywhere** in `00-fetch-vendor-sources.sh` (which only downloads a release **zip** into `mainsail-dist/`, never git-clones `mainsail`) | `4b3358577beda37f04f2f43aad92aafbbd82babc` | **UNKNOWN_PROVENANCE / DUPLICATE_PIN_LOCATION**. Confirmed via `grep -rn "vendor/mainsail\b" scripts/build/*.sh` — zero matches; nothing in the build ever reads this tree. The actually-shipped Mainsail build comes exclusively from `mainsail-dist/mainsail.zip` (release archive, `00-fetch-vendor-sources.sh`'s Mainsail block). This git checkout is dead weight with no declared purpose and no build-time relationship to what's actually shipped. Recommend deleting it or documenting why it's kept (e.g. as a diffing reference). |
+| `vendor/mainsail` (git clone of `mainsail-crew/mainsail`) | **REMOVED (2026-07-31)** | was `4b3358577beda37f04f2f43aad92aafbbd82babc` | **RESOLVED**. Confirmed via `grep -rn "vendor/mainsail\b"` across scripts and docs — zero matches anywhere; nothing ever read this tree. A clean, unmodified, trivially re-clonable mirror with no unique content — deleted. See `docs/NEBULAOS_RELEASE_ARTIFACT_PROVENANCE.md`'s "Orphaned vendor tree resolution" section. |
 | GuppyScreen (`artifacts/guppyscreen-mips/{guppyscreen,guppybeep}`) | **Not declared anywhere** — no fetch-script entry at all | N/A — prebuilt MIPS binaries, no source tree vendored | **UNPINNED_ARTIFACT**. No declared source commit, no download URL, no hash verification recorded anywhere in this repo for these two binaries. This is the least-reproducible artifact in the whole build: if it were lost, there is no documented way to reconstruct or re-obtain it from source. |
 | `artifacts/buildroot-halley5-v30-image/build-manifest.txt` (release record) | — | `git_commit_main=d168f08...`, `git_dirty_main=yes`, `git_commit_kernel=f7ff80a8a...`, `git_dirty_kernel=no` | Records only the **main repo** and **kernel** commits — does **not** record `git_commit_klipper`/`moonraker`/`pellcorp-creality`/`k1-ustreamer`/`v4l-utils`/`buildroot-x2000` at build time. A future investigator holding only this manifest cannot reconstruct which exact vendor commit produced 5 of the 7 vendored git trees in a shipped image. Also notable: the last recorded production build was made with `git_dirty_main=yes` — the main repo's own working tree was dirty at build time, and that dirty diff itself is not captured anywhere, so the exact overlay/script source for that specific build is not fully reconstructable from git alone. |
 
-**Can the build currently fail automatically on drift?** Partially.
-`06-verify.sh`'s `check_vendor_pin()` (lines 30-58) is a real, working,
-already-integrated gate for exactly three of seven vendored git trees
-(klipper, moonraker, pellcorp-creality) — it correctly reports `MISS` today
-for klipper's known, documented, pending pin-bump. It does **not** cover
-`buildroot-x2000`, `k1-ustreamer`, `v4l-utils`, or the kernel (`x2000_kernel_6.6`,
-which instead gets a post-hoc, build-time-only record via the manifest, not a
-pre-build gate). A dirty vendor checkout is not separately detected for any
-of the seven (only the *pin* is checked, not working-tree cleanliness) except
-implicitly via the kernel's `git_dirty_kernel` manifest field. Downloaded
-binary artifacts (Mainsail's release zip, GuppyScreen's binaries) have no
-hash verification anywhere.
+**Can the build currently fail automatically on drift?** **Updated
+2026-07-31 — yes, substantially more than when this analysis was first
+written.** At the time of the original analysis this was only Partially
+true: `check_vendor_pin()` covered exactly three of seven vendored git trees
+and nothing checked working-tree cleanliness or binary-artifact hashes. The
+same day's pre-qualification engineering pass closed most of this: every
+`clone_pinned()` call in `00-fetch-vendor-sources.sh` now re-verifies its
+pin (SHA + remote URL) on *every* run, not just first clone, and fails
+loudly (`exit 1`) on mismatch — this is a real, hard pre-build gate, not
+just an advisory report. `06-verify.sh`'s `check_vendor_pin()` was extended
+to cover all seven git trees plus the kernel, plus remote-URL and
+working-tree-cleanliness checks (against an explicit, documented allowlist
+per repo) and a dedicated k1-ustreamer submodule check. A new
+`check_artifact_sha256()` gate covers every downloaded/prebuilt binary
+(Mainsail zip, GuppyScreen binaries, Wi-Fi firmware/NVRAM, regulatory.db).
+Note: `06-verify.sh` itself remains an advisory report by this project's own
+long-standing, deliberate "never trust exit 0 alone" convention (documented
+across many prior missions) — its `MISS` lines still require a human/agent
+to read them; it does not `exit 1` on its own. The real hard gates are
+`00-fetch-vendor-sources.sh` and `01-apply-kernel-patches.sh`, which do fail
+the pipeline outright. `build-manifest.txt`'s own commit/hash coverage gap
+(5 of 7 vendored git commits, no dirty-main-repo diff capture) remains open.
 
-**Exact list of remaining reproducibility gaps** (per the mission's
-requirement — not fixed during this mission):
+**Original list of reproducibility gaps identified by this analysis, and
+their resolution** (all closed 2026-07-31 in the follow-on pre-qualification
+engineering pass — commits `0e69da1` and the release-artifact-provenance
+work; see `docs/NEBULAOS_RELEASE_ARTIFACT_PROVENANCE.md` for artifact
+details):
 
-1. Kernel fetch pins to a moving branch name (`openke`), not a SHA; no
-   pre-build gate enforces a known-good commit.
-2. `vendor/x2000_kernel` (non-6.6) and `vendor/mainsail` are orphaned,
-   undeclared, unused vendor trees with no fetch-script provenance.
+1. ~~Kernel fetch pins to a moving branch name (`openke`), not a SHA; no
+   pre-build gate enforces a known-good commit.~~ **FIXED**:
+   `00-fetch-vendor-sources.sh` now pins an exact SHA and fails loudly if
+   `openke` has moved past it; `01-apply-kernel-patches.sh` independently
+   re-verifies the same pin.
+2. ~~`vendor/x2000_kernel` (non-6.6) and `vendor/mainsail` are orphaned,
+   undeclared, unused vendor trees with no fetch-script provenance.~~
+   **RESOLVED**: `vendor/x2000_kernel` is genuinely retained (real,
+   documented reference use — see §2's corrected row above); `vendor/mainsail`
+   had zero references anywhere and was removed.
 3. GuppyScreen's prebuilt binaries have zero declared provenance (no source
-   commit, URL, or hash).
-4. `check_vendor_pin` does not cover `buildroot-x2000`, `k1-ustreamer`, or
-   `v4l-utils`.
+   commit, URL, or hash) — **still true**, this is a real, unresolved
+   limitation of the upstream artifact itself (see
+   `docs/NEBULAOS_RELEASE_ARTIFACT_PROVENANCE.md`), not something a build
+   script fix can close. Its hash is now at least recorded and verified so
+   drift is detectable even though full reconstruction isn't possible.
+4. ~~`check_vendor_pin` does not cover `buildroot-x2000`, `k1-ustreamer`, or
+   `v4l-utils`.~~ **FIXED**: all three now have `check_vendor_pin` calls in
+   `06-verify.sh`, plus `k1-ustreamer`'s submodules (`jpeg-9d`, `ustreamer`)
+   get their own dedicated check. `check_vendor_pin` itself was also
+   extended to verify the origin remote URL and working-tree cleanliness
+   (against an explicit, named allowlist of deterministically-managed
+   paths per repo), not just the HEAD SHA.
 5. `build-manifest.txt` does not record 5 of 7 vendored git commits, and does
-   not capture a dirty-main-repo diff when `git_dirty_main=yes`.
-6. No hash verification exists for either downloaded binary artifact
-   (Mainsail zip, GuppyScreen binaries).
-
-**Cross-confirmed during the Wi-Fi follow-on mission**: the raw, on-disk
-`vendor/x2000_kernel_6.6/kernel/kernel-6.6/.config`/`.config.old` are stale,
-root-owned build byproducts dated 2026-07-20 — predating this project's own
-BCMDHD-disable fix — and show `CONFIG_BRCMFMAC=m`/`CONFIG_BCMDHD=y`/
-`CONFIG_EXTRA_FIRMWARE=""`, all three contradicting the authoritative,
-git-tracked `artifacts/buildroot-halley5-v30-image/kernel.config`
-(`CONFIG_BRCMFMAC=y`, `# CONFIG_BCMDHD is not set`, `CONFIG_EXTRA_FIRMWARE`
-correctly populated) and `06-verify.sh`'s own expectations for both. **This
-is a real, generalizable gotcha, not a live regression**: a stale raw
-`.config` left inside the vendor tree between builds is not reliable
-evidence of the current or shipped configuration — only the tracked
-`artifacts/buildroot-halley5-v30-image/{buildroot,halley5-nebulaos-fragment,
-kernel}.config` files (or a fresh build) should be trusted. Add this as a
-7th reproducibility gap: **stale generated `.config`/`.config.old` files are
-not cleaned from the vendor kernel checkout between builds**, and could
-mislead a future investigator (this one included, initially) into believing
-a live driver conflict exists when it does not.
+   not capture a dirty-main-repo diff when `git_dirty_main=yes` — **not yet
+   fixed**, still open (tracked as the next concrete step in the
+   pre-qualification mission's Phase A2).
+6. ~~No hash verification exists for either downloaded binary artifact
+   (Mainsail zip, GuppyScreen binaries).~~ **FIXED**: both (plus the Wi-Fi
+   firmware/NVRAM and regulatory.db blobs) now have recorded SHA-256 hashes
+   checked by `06-verify.sh`'s new `check_artifact_sha256()` gate — see
+   `docs/NEBULAOS_RELEASE_ARTIFACT_PROVENANCE.md`. Separately, Mainsail's
+   fetch was found to be **entirely unpinned** (downloaded from a `/latest/`
+   URL that silently tracks whatever GitHub's latest release is at fetch
+   time — arguably worse than the kernel's moving-branch issue, since there
+   was no way to even detect drift after the fact) and is now pinned to an
+   exact release tag (`v2.18.2`) with a verified hash.
+7. **Cross-confirmed during the Wi-Fi follow-on mission and now fixed**: the
+   raw, on-disk `vendor/x2000_kernel_6.6/kernel/kernel-6.6/.config`/
+   `.config.old` were found stale — root-owned build byproducts dated
+   2026-07-20, predating this project's own BCMDHD-disable fix, showing
+   `CONFIG_BRCMFMAC=m`/`CONFIG_BCMDHD=y`/`CONFIG_EXTRA_FIRMWARE=""`, all
+   three contradicting the authoritative, git-tracked
+   `artifacts/buildroot-halley5-v30-image/kernel.config`. This was a real,
+   generalizable gotcha, not a live regression — the stale files have been
+   removed, and `03-build-kernel-and-rootfs.sh` now unconditionally purges
+   `.config`/`.config.old`/`include/config`/`include/generated` from the
+   mounted kernel source tree (inside the docker container, since these
+   files are root-owned) before every build, so this can't silently
+   recur.
 
 ---
 

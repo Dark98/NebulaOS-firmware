@@ -128,6 +128,36 @@ check_vendor_pin v4l-utils 3b22ab02b960e4d1e90618e9fce9b7c8a80d814a \
 check_vendor_pin x2000_kernel_6.6 f7ff80a8aa21886a32783dab167e451298c60a8d \
 	https://github.com/coreflake1/NebulaOS.git
 
+echo "=== release artifact provenance (docs/NEBULAOS_RELEASE_ARTIFACT_PROVENANCE.md) ==="
+check_artifact_sha256() {
+	ca_path="$REPO_ROOT/$1"
+	ca_expected="$2"
+	if [ ! -f "$ca_path" ]; then
+		echo "MISS $1 does not exist - cannot verify its hash"
+		return
+	fi
+	ca_actual=$(sha256sum "$ca_path" | awk '{print $1}')
+	if [ "$ca_actual" = "$ca_expected" ]; then
+		echo "OK   $1 sha256 matches recorded provenance ($ca_expected)"
+	else
+		echo "MISS $1 sha256 is $ca_actual, expected recorded provenance $ca_expected"
+	fi
+}
+check_artifact_sha256 vendor/mainsail-dist/mainsail.zip \
+	df2ba7c301f7bfc8ac9f122741a6ba08356d679ecfa1f62f898d0337802d5de5
+check_artifact_sha256 artifacts/guppyscreen-mips/guppyscreen \
+	810d895675198b3f73cd8552656f5bfbe593b8faca5883c201807d006e2bdbe4
+check_artifact_sha256 artifacts/guppyscreen-mips/guppybeep \
+	4a2a719411944e5c2d0f7a9231440487073ce454e398d61f27181a821f2a9d76
+check_artifact_sha256 scripts/build/overlay/lib/firmware/brcm/brcmfmac43430-sdio.bin \
+	60dbb5b77b2c232e513322e0ff4350ab5dab5a9fcad0e26e80a2f089e652d720
+check_artifact_sha256 scripts/build/overlay/lib/firmware/brcm/brcmfmac43430-sdio.txt \
+	78fee458ab69c0a66ea462f6d6769e15b36f73582693f4dbb5a0e8e8be3cfb0a
+check_artifact_sha256 scripts/build/overlay/lib/firmware/regulatory.db \
+	0a4abd7ae20d07bb70642937ccb2293a72a6504730eea45a698882599f586368
+check_artifact_sha256 scripts/build/overlay/lib/firmware/regulatory.db.p7s \
+	bcd81aed039ea6b9b6f3726fbf26911a0caf4a5d894210e0fa2effb384d6b326
+
 # ns2009, the display panel, brcmfmac and the RNG are all built statically
 # into vmlinux (=y, not =m) - see halley5-nebulaos-fragment.config's own
 # comments for why each one was switched. A built-in driver produces no

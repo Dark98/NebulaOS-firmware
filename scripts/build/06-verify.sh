@@ -824,6 +824,7 @@ check /usr/bin/free
 check /etc/init.d/S00zram-swap
 check /etc/init.d/S03nebulaos-diskswap
 check /etc/init.d/S02nebulaos-namespace
+check /etc/init.d/S02nebulaos-boot-timing
 check /etc/init.d/S04nebulaos-factory-seed
 check /etc/init.d/S05nebulaos-activate
 check /etc/init.d/S45nebulaos-cleanup

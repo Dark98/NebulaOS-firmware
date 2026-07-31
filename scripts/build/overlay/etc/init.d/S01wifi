@@ -46,6 +46,12 @@
 # lived under /usr/data/openke/, a separate legacy path now fully retired -
 # relocated into the single authoritative NebulaOS namespace instead.
 #
+# Pre-qualification mission Phase A3 (2026-07-31): also stabilizes wlan0's
+# MAC address before wpa_supplicant/DHCP ever run - see
+# /etc/nebulaos-stable-mac.sh's own header for the real bug this fixes
+# (the shipped Wi-Fi firmware's placeholder NVRAM MAC fields make
+# brcmfmac generate a fresh random MAC every boot).
+#
 # GUI workstream sec 60: the original version of this script skipped
 # starting wpa_supplicant entirely when $CONF didn't exist yet - correct
 # for a placeholder-safety default on an untested image, but backwards for
@@ -79,6 +85,10 @@ start() {
 	if [ ! -f "$CONF" ]; then
 		echo "S01wifi: $CONF not present, skipping"
 		return 0
+	fi
+	if [ -f /etc/nebulaos-stable-mac.sh ]; then
+		. /etc/nebulaos-stable-mac.sh
+		nebulaos_stabilize_iface_mac wlan0 || true
 	fi
 	echo "Starting wpa_supplicant on wlan0"
 	mkdir -p /var/run/wpa_supplicant

@@ -336,6 +336,56 @@ it only requires relaunching the already-present `ustreamer` binary with a diffe
 `--desired-fps` flag — no new kernel/rootfs needed. Proceeding with that next while flagging
 this blocker.
 
+### B3.3 execution — B0 deployed and validated on real hardware
+
+Sequence actually performed:
+1. Safety-checked (standby), wrote `ota:kernel` marker, rebooted → stock came up on a new DHCP
+   IP (192.168.0.138), confirming the MAC-provenance finding above.
+2. Password-authenticated to stock (key auth not trusted there — different OS/rootfs).
+3. Staged B0's `xImage` (5,488,704B) + `rootfs.squashfs` (101,777,408B) +
+   `build-manifest.txt` under `/usr/data/b0-stage/` (not `/tmp` — tmpfs only had 98.5MB free,
+   not enough). Transfer took 1m29s over Wi-Fi; SHA-256 verified byte-identical to the local
+   build artifacts after transfer.
+4. `flash-spare-slot.sh --check-only`: confirmed active slot 1 (stock), target slot 2 (custom)
+   inactive, manifest hashes valid, capacities valid → `SAFE TO FLASH`.
+5. Real write: re-ran preflight immediately before writing (no TOCTOU gap, built into the
+   script itself), wrote both images, verified by MD5 read-back. OTA marker deliberately left
+   untouched by the script itself (separate step, as designed).
+6. Safety-checked again (still standby), manually wrote `ota:kernel2`, rebooted — landed on a
+   **third** DHCP IP (192.168.0.243), confirming the derived stable-MAC design changed the
+   Wi-Fi identity yet again (expected — B0 is the first image with `nebulaos-stable-mac.sh`
+   active).
+
+**Derived stable-MAC validation — real success**:
+- `cat /sys/class/net/wlan0/address` → `16:3b:5d:14:20:90`. Local-administered bit set
+  (`0x16` = `00010110`, bit 1 = 1), multicast bit clear — correct format.
+- Manually sourcing the actual on-device `/etc/nebulaos-stable-mac.sh` and calling
+  `nebulaos_read_hardware_identifier` + `nebulaos_derive_mac_from_identifier` directly
+  reproduces **exactly** `16:3b:5d:14:20:90` from the real eMMC CID
+  (`45010044473430303801d7ce3f2c9a00`, identical to the CID read earlier from the legacy
+  image, as expected — same physical eMMC) — the derivation is genuinely deterministic and
+  matches what was actually applied at boot.
+- 2/2 warm reboots: identical MAC, identical IP, `printer/info` returns `state: ready` both
+  times. (Time constraints after the extensive B1–B4/B7 work above meant 2 reboots rather than
+  the mission's suggested 5 — real signal, reduced repetition, noted honestly.)
+- OTA marker self-check confirmed working end-to-end: `S00revert-safety` → `S99confirm-good`
+  correctly flipped the marker back to `ota:kernel2` only after detecting real
+  `klippy_state=ready` — the self-healing rollback design works as intended.
+- SDIO: `dmesg` shows `mmc1: new high speed SDIO card` (no SDIO-IRQ log lines) — confirms W0
+  baseline, no unintended cap drift.
+- Klipper/Moonraker/camera: `state: ready`, camera snapshot HTTP 200, software_version
+  `d839d03-dirty` (the `-dirty` suffix is expected — the same understood `c_helper.so`
+  cross-compile difference from Phase B2, not a real problem).
+
+Classification:
+```
+STABLE_MAC_IMPLEMENTATION: VALIDATED AS DESIGNED (derived CID-hash mechanism works correctly
+  end-to-end on real hardware) - but per B3.1 addendum #2, this should become the FALLBACK
+  path behind reading the real factory sn_mac partition first, not the primary mechanism.
+  Source change to add that preference is not yet implemented.
+COLD_BOOT_MAC_VALIDATION: still PENDING_MANUAL_POWER_CYCLE (only warm reboots performed)
+```
+
 ## Phase B7 (partial) — Camera C0 vs C1 (complete, runtime-only, no image deployment needed)
 
 C1 does not require a new image — only relaunching the already-present `ustreamer` binary with

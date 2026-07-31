@@ -99,7 +99,12 @@ start() {
 	start-stop-daemon -S -b -m -p "$PIDFILE" \
 		-x /usr/sbin/wpa_supplicant -- \
 		-i wlan0 -c "$CONF"
-	sleep 2
+	if [ -f /etc/nebulaos-wifi-boot-wait.sh ]; then
+		. /etc/nebulaos-wifi-boot-wait.sh
+		nebulaos_wifi_boot_wait wlan0 || true
+	else
+		sleep 2
+	fi
 	/sbin/ifup wlan0 2>/dev/null
 }
 

@@ -809,6 +809,7 @@ check /etc/init.d/S01wifi
 check /etc/nebulaos-stable-mac.sh
 check /etc/nebulaos-wifi-power-save.sh
 check /usr/libexec/nebulaos-wifi-power-save
+check /etc/nebulaos-wifi-boot-wait.sh
 check /etc/init.d/S99confirm-good
 check /etc/ota_marker.sh
 check /opt/printer_data/config/GuppyScreen/scripts/static_ip.py

@@ -149,9 +149,71 @@ on a true factory-reset unit.
 
 ---
 
-## Phase B3 — MAC provenance and stability (not yet started)
+## Phase B3 — MAC provenance and stability (in progress)
+
+### B3.1 — Static investigation (read-only, complete)
+
+Searched, all read-only, no writes to any factory partition:
+- `/proc/device-tree`: no `local-mac-address` or `mac-address` property anywhere.
+- `/sys/bus/nvmem/devices/`: does not exist on this image (no nvmem framework in use).
+- `/proc/cmdline`: no `mac=` parameter.
+- U-Boot environment: not accessible from this running system (no `fw_printenv`, no exposed env
+  partition found under standard paths).
+- eMMC CID (`/sys/class/mmc_host/mmc0/mmc0:*/cid`): `45010044473430303801d7ce3f2c9a00` — present
+  and readable, but no current code path on this legacy image derives anything from it.
+
+No external stable-identity source was found feeding the live MAC through any standard Linux
+mechanism. This means the MAC's stability (see B3.2) is coming from somewhere inside
+brcmfmac/firmware itself, not from device-tree/nvmem/cmdline/U-Boot/bootloader-fixup — most
+plausibly the chip's own SDIO CIS (Card Information Structure) or OTP, read directly by the
+driver at runtime rather than exposed through any Linux-standard identity framework. This is a
+plausible explanation, not confirmed to kernel-source level — flagged as such rather than
+asserted.
+
+### B3.2 — Warm reboot stability (complete, 3/3 reboots)
+
+Each reboot preceded by a fresh read-only safety check (refused if not `standby`), issued via a
+separate SSH invocation from the safety check itself, per the mandatory safety pattern.
+
+| Reboot | wlan0 MAC | IP | Safety state after |
+|---|---|---|---|
+| baseline (pre-reboot) | `20:0b:74:69:99:fd` | 192.168.0.129 | standby |
+| warm reboot 1 | `20:0b:74:69:99:fd` | 192.168.0.129 | standby |
+| warm reboot 2 | `20:0b:74:69:99:fd` | 192.168.0.129 | standby |
+| warm reboot 3 | `20:0b:74:69:99:fd` | 192.168.0.129 | standby |
+
+**Result: identical MAC and identical IP across all 3 warm reboots.** This directly
+contradicts the source-only analysis's assumption that brcmfmac generates a new random MAC on
+every boot. Note: each reboot took approximately 5–7 minutes of real wall-clock time from
+`reboot` issued to SSH becoming reachable again — longer than a typical embedded warm boot;
+not investigated further here since it did not block testing, but worth flagging for the boot-
+timing work done earlier in Mode A.
+
+Classification:
+```
+MAC_STABILITY: STABLE_ACROSS_WARM_REBOOTS (3/3)
+COLD_BOOT_MAC_VALIDATION: PENDING_MANUAL_POWER_CYCLE
+```
+
+### B3.3–B3.5 — B0 deployment, derived-MAC validation, legacy-vs-B0 comparison
+
+Not yet started.
+
+### Provisional MAC_PROVENANCE reasoning (pending B3.3–B3.5 to finalize)
+
+Given: (a) the address does not match either NVRAM placeholder, (b) it does not have the
+locally-administered bit set (looks like a genuine universally-administered/vendor-assigned
+address, not a kernel `eth_random_addr()` product), and (c) it is stable across 3 independent
+warm reboots — the evidence so far points toward the legacy MAC being a real, stable,
+non-random identity (most likely chip-level, e.g. SDIO CIS/OTP), not the "random every boot"
+mechanism the source-only analysis assumed. Per the mission's own decision rule, this weighs
+toward **not** forcing the derived (CID-hash, locally-administered) stable-MAC implementation
+as the default, and instead treating the existing address as the preferred production identity
+if B3.3–B3.5 (rootfs-slot switch, rollback, and comparison against the B0 derived-MAC
+implementation) confirm it holds across those too. Final classification deferred until those
+steps complete.
 
 ## Remaining phases
 
-B3 (MAC provenance/stability) through B12 (PREEMPT_RT non-motion A/B) are not yet started. This
+B3.3 onward (B0 deployment) through B12 (PREEMPT_RT non-motion A/B) are not yet started. This
 document will be updated as each completes.

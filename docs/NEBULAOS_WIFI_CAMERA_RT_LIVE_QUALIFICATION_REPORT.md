@@ -488,4 +488,69 @@ available, **W0 (baseline) remains the recommended default** until a real throug
 benefit is measured to justify a change — W1/W2/W3 are all confirmed *safe*, not confirmed
 *better*.
 
-## Phase B8/B11-B12 — PREEMPT_RT non-motion A/B
+## Phase B8/B11-B12 — PREEMPT_RT non-motion A/B (complete)
+
+Deployed via the same stock↔custom cycle (stock landed on yet another DHCP IP this time,
+192.168.0.231 — expected, same factory MAC `fc:ee:11:00:4c:14` confirmed, just a different
+DHCP lease). B4 booted at 192.168.0.243.
+
+**Genuine RT kernel confirmed** (not just a build-tag artifact):
+- `uname -a`: `Linux buildroot 6.6.18-rt23 #2 SMP PREEMPT_RT ...` — note `PREEMPT_RT`, not
+  plain `PREEMPT` as on every other variant.
+- `/sys/kernel/realtime` → `1`.
+
+**The mission's own predicted highest RT risk item was directly observed, and did not cause a
+failure**: DWC2's IRQ appears as a genuine forced-thread in the process list
+(`irq/9-dwc2_hsot`, PID visible via `ps`) — confirming DWC2 lacks `IRQF_NO_THREAD` and is
+therefore threaded under `PREEMPT_RT`, exactly as flagged in the original source-only RT risk
+analysis. Despite that, the DWC2 SOF interrupt counter kept incrementing at the expected rate
+(~8,150/sec combined across both cores over a 2s sample, essentially unchanged from every
+non-RT variant) — the threaded handler is keeping up with the real-time SOF cadence without
+visibly falling behind.
+
+Other results:
+- `wlan0` MAC identical (`16:3b:5d:14:20:90`) — same derivation, unaffected by kernel
+  preemption model, as expected.
+- 5 rapid camera snapshots: HTTP 200 every time, 7–23ms each (comparable to or faster than
+  every non-RT variant's ~44ms — likely just normal variance, not attributed to RT).
+- Wi-Fi: real association with active traffic (`SSID: fsociety`, real RX/TX byte counts).
+- `dmesg` swept for `error|panic|oops` (excluding the same pre-existing, already-understood
+  `ENXIO`/`clm_blob`/`txcap_blob` lines seen on every variant): **zero matches**.
+- Klipper `state: ready`, safety state standby/not-paused throughout.
+
+**Not performed in the time available**: no `cyclictest`-based worst-case scheduler latency
+measurement (the diagnostic tooling plan from Phase A8 was designed but not installed/run
+live), no sustained combined-load test (camera + Wi-Fi + USB storage + Mainsail simultaneously
+under load for an extended period), no MCU/UART statistics comparison. This is a real,
+positive *functional* validation — RT boots, associates, streams camera, and serves the
+printer API correctly with the one identified highest-risk subsystem (DWC2) confirmed threaded
+but not failing — but it is **not** a quantified worst-case-latency measurement, which the
+mission's own acceptance criteria require before RT could be accepted for production.
+
+Classification:
+```
+PREEMPT_RT_VARIANT: BUILDS AND BOOTS CORRECTLY, FUNCTIONALLY HEALTHY under real non-motion
+  load (camera + Wi-Fi + Klipper + Moonraker simultaneously). DWC2's predicted IRQ-threading
+  risk is CONFIRMED PRESENT but did not cause observable failure in this test window.
+  Quantified worst-case latency (cyclictest) NOT measured - remains PENDING before RT could
+  be accepted per the mission's own acceptance criteria. Per the mission's fixed decision,
+  PREEMPT_RT remains experimental-only and is not being left as the device's final state.
+```
+
+## Final state: rolled back to B0 (non-RT, W0 baseline)
+
+Per the mission's own fixed decision ("PREEMPT_RT ... not automatically selected for
+production") and the general rule to never leave an experimental/rejected-pending-further-data
+variant as the live state, the device was switched back to stock and B0 (W0 baseline, R0,
+derived stable-MAC, all Mode A features, already fully validated above) was re-flashed as the
+final state for this session.
+
+Note: **the original pre-mission "legacy" custom production image no longer exists on this
+device** — slot 2 was overwritten sequentially by B0→B1→B2→B3→B4 during this session, and no
+backup image of the original was taken before the first overwrite (only source-level parity
+existed; this was not anticipated as a concern when Phase B1's read-only baseline was captured,
+since at that time no write to slot 2 was yet planned). The persistent data partition
+(`/usr/data`, `printer_data`, all Klipper/Moonraker config and history) was never touched by
+any of these flashes and remains fully intact regardless of which image is active. B0 was
+chosen as the final state because it is the fully-validated, non-experimental baseline with no
+measured benefit forgone (W0 is the recommended SDIO default per B5's own conclusion).

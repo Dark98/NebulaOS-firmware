@@ -59,7 +59,7 @@ clone_pinned() {
 # it, this script now fails loudly instead of silently building different
 # kernel source. Bump X2000_KERNEL_6_6_PIN deliberately (in a dedicated commit)
 # when you actually want to pick up new upstream `openke` commits.
-X2000_KERNEL_6_6_PIN=f7ff80a8aa21886a32783dab167e451298c60a8d
+X2000_KERNEL_6_6_PIN=295b7101d751fd888ae39e6f1746a4a940664a5f
 if [ ! -d "x2000_kernel_6.6/.git" ]; then
 	echo "== cloning x2000_kernel_6.6 (sparse: kernel/kernel-6.6 only) =="
 	git clone --filter=blob:none --sparse \

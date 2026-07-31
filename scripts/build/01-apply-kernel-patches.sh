@@ -37,7 +37,7 @@ fi
 # that it ran first/correctly - keep the same pin constant here and verify
 # independently, so a hand-run `git pull` inside this checkout between the
 # two scripts still gets caught.
-X2000_KERNEL_6_6_PIN=f7ff80a8aa21886a32783dab167e451298c60a8d
+X2000_KERNEL_6_6_PIN=295b7101d751fd888ae39e6f1746a4a940664a5f
 ACTUAL_SHA=$(git rev-parse HEAD)
 if [ "$ACTUAL_SHA" != "$X2000_KERNEL_6_6_PIN" ]; then
 	echo "vendor/x2000_kernel_6.6 HEAD is $ACTUAL_SHA, expected pinned commit $X2000_KERNEL_6_6_PIN - re-run 00-fetch-vendor-sources.sh (it will refuse to proceed and explain why)" >&2

@@ -91,6 +91,23 @@ fi
 docker run --label "openke-build-pid=$$" --rm --user root \
 	-v "$KERNEL_MOUNT:/kernel_6_6/kernel/kernel-6.6" \
 	-v "$BUILDROOT_DIR:/src" -w /src pellcorp/k1-bash-build bash -c '
+# Stale-config purge (2026-07-31, per the NEBULAOS_CAMERA_USB_RT_SOURCE
+# _ANALYSIS.md vendor-pin audit): a real, previously-undetected gotcha was found on this
+# exact checkout - vendor/x2000_kernel_6.6/kernel/kernel-6.6/.config and
+# .config.old, dated well before a real Kconfig fragment fix (the BCMDHD-
+# disable change), sitting stale in the mounted kernel source tree, root-owned
+# from a prior --user root run (a plain host-side `rm` cannot touch them - has
+# to happen in here). Whether `make linux-dirclean` below reliably wipes an
+# override-srcdir kernels own in-tree .config/.config.old/include/config on
+# every host/Buildroot version combination is not something this project
+# trusts blindly (this files own header already documents three separate,
+# real instances of Buildroots stamp/config invalidation not doing what
+# youd assume) - so wipe them explicitly here first, unconditionally, before
+# dirclean even runs. This guarantees the kernel source tree never carries
+# forward a stale Kconfig resolution from a previous, possibly-different
+# build.
+rm -f /kernel_6_6/kernel/kernel-6.6/.config /kernel_6_6/kernel/kernel-6.6/.config.old
+rm -rf /kernel_6_6/kernel/kernel-6.6/include/config /kernel_6_6/kernel/kernel-6.6/include/generated
 apt-get -qq update >/dev/null 2>&1
 apt-get install -y -qq python3 bc cpio rsync unzip bison flex libncurses5-dev file \
 	build-essential libssl-dev libelf-dev libffi-dev zlib1g-dev libsqlite3-dev \

@@ -28,9 +28,20 @@ fi
 # performs real network clones and shouldn't be pulled into a read-only
 # verify pass.
 echo "=== vendor source pin drift ==="
+# Extended 2026-07-31 (NEBULAOS_CAMERA_USB_RT_SOURCE_ANALYSIS.md's vendor-pin
+# audit): now also verifies the origin remote URL (catches a checkout quietly
+# repointed at a fork/mirror) and working-tree cleanliness against an
+# explicit per-repo allowlist of paths this project's own build scripts
+# deterministically modify (e.g. buildroot-x2000's vendor-patches copy-in) -
+# an allowed path showing as different is NOT silently ignored as "fine
+# either way", it's explicitly named so a reader knows exactly why it's
+# expected, same convention as the rest of this project's "corrected in
+# place with a note" pattern.
 check_vendor_pin() {
 	vp_name="$1"
 	vp_expected="$2"
+	vp_expected_url="$3"
+	shift 3
 	vp_dir="$REPO_ROOT/vendor/$vp_name"
 	if [ ! -d "$vp_dir/.git" ]; then
 		echo "MISS vendor/$vp_name is not a git checkout - cannot verify its pin"
@@ -42,21 +53,80 @@ check_vendor_pin() {
 	else
 		echo "MISS vendor/$vp_name HEAD is $vp_actual, expected pinned commit $vp_expected"
 	fi
+	if [ -n "$vp_expected_url" ]; then
+		vp_remotes=$(git -C "$vp_dir" remote -v 2>/dev/null)
+		if printf '%s\n' "$vp_remotes" | grep -qF "$vp_expected_url"; then
+			echo "OK   vendor/$vp_name has a remote matching $vp_expected_url"
+		else
+			echo "MISS vendor/$vp_name has no remote matching expected URL $vp_expected_url"
+		fi
+	fi
+	vp_dirty=$(git -C "$vp_dir" status --porcelain -uall 2>/dev/null)
+	for vp_allow in "$@"; do
+		vp_dirty=$(printf '%s\n' "$vp_dirty" | grep -v -F "$vp_allow" || true)
+	done
+	vp_dirty=$(printf '%s\n' "$vp_dirty" | sed '/^$/d')
+	if [ -z "$vp_dirty" ]; then
+		echo "OK   vendor/$vp_name working tree has no unexplained changes"
+	else
+		echo "MISS vendor/$vp_name has unexplained working-tree changes:"
+		printf '%s\n' "$vp_dirty" | sed 's/^/     /'
+	fi
 }
-# Pre-existing, real drift found live while adding this check (2026-07-29,
-# unrelated to the SimpleAF backend work itself): vendor/klipper's actual
-# checked-out HEAD is d839d0375a31327e57e0a35e99e70ba60814ec05 (a genuine,
-# already-shipped "chelper: replace incompatible upstream c_helper.so"
-# fix, see docs/NEBULAOS_MOONRAKER_UPDATE_AND_CAMERA_ANALYSIS.md), one
-# real commit ahead of the pin 00-fetch-vendor-sources.sh's own
-# clone_pinned call still records (b3d5ab2b9484f1558586c3a2ea43d46ff9a473a7).
-# This MISS is expected until that script's own pin comment is bumped to
-# match - not something to "fix" by changing the expected value here to
-# whatever the checkout currently happens to be (that would defeat the
-# entire point of this check).
-check_vendor_pin klipper b3d5ab2b9484f1558586c3a2ea43d46ff9a473a7
-check_vendor_pin moonraker d5ee17128bb88434aacdab90c2e9e990e2b64e4a
-check_vendor_pin pellcorp-creality d18d354456a89c20507e574feaa34d6389e679ca
+# klipper: pin bumped 2026-07-31 to d839d0375 in 00-fetch-vendor-sources.sh
+# (previously stuck one real, already-shipped commit behind - see that
+# script's own comment). `klippy/chelper/c_helper.so` is expected to differ
+# (the correctly cross-compiled MIPS binary vs. whatever's tracked in git -
+# same allowlisted-path convention as make-seed-archive.sh's own dirty-tree
+# guard fix).
+check_vendor_pin klipper d839d0375a31327e57e0a35e99e70ba60814ec05 \
+	https://github.com/coreflake1/NebulaOS-klipper.git \
+	klippy/chelper/c_helper.so
+check_vendor_pin moonraker d5ee17128bb88434aacdab90c2e9e990e2b64e4a \
+	https://github.com/Arksine/moonraker.git
+check_vendor_pin pellcorp-creality d18d354456a89c20507e574feaa34d6389e679ca \
+	https://github.com/pellcorp/creality.git
+# buildroot-x2000: the .mk change and board/halley5-nebulaos-* files are
+# deterministically copied in by 02-configure-buildroot.sh from tracked
+# sources in this repo (scripts/build/vendor-patches/, this project's own
+# config layer) - expected every time, not accidental drift.
+check_vendor_pin buildroot-x2000 74d020081096972857acdb9e76c6c5335455d430 \
+	https://github.com/lone0/buildroot-x2000.git \
+	package/python-matplotlib/python-matplotlib.mk \
+	board/halley5-nebulaos-busybox-fragment.config \
+	board/halley5-nebulaos-fragment.config \
+	board/halley5-nebulaos-overlay/ \
+	board/halley5-nebulaos-wheels/
+check_vendor_pin k1-ustreamer 18e30bb313d54b1b01dd995bd31ce5a3d5adffd6 \
+	https://github.com/pellcorp/k1-ustreamer.git
+# k1-ustreamer's own real git submodules (jpeg-9d, ustreamer) - pinned via
+# the parent commit's own recorded submodule SHAs, so a plain `git status`
+# on the parent won't show submodule drift; `submodule status` is the real
+# check (a leading '+' means checked out at a different SHA than recorded,
+# '-' means not initialized).
+if [ -d "$REPO_ROOT/vendor/k1-ustreamer/.git" ]; then
+	ku_submodules=$(git -C "$REPO_ROOT/vendor/k1-ustreamer" submodule status 2>/dev/null)
+	if printf '%s\n' "$ku_submodules" | grep -qE '^[+-]'; then
+		echo "MISS vendor/k1-ustreamer submodules are not at their pinned commits:"
+		printf '%s\n' "$ku_submodules" | sed 's/^/     /'
+	else
+		echo "OK   vendor/k1-ustreamer submodules (jpeg-9d, ustreamer) match their pinned commits"
+	fi
+fi
+# v4l-utils: pinned to the exact commit v4l-utils-1.20.0 resolves to (not the
+# tag name) as of the 2026-07-31 pin audit; messages.mo is a harmless
+# untracked compiled gettext artifact.
+check_vendor_pin v4l-utils 3b22ab02b960e4d1e90618e9fce9b7c8a80d814a \
+	https://git.linuxtv.org/v4l-utils.git \
+	messages.mo
+# x2000_kernel_6.6: same enforcement as 00-fetch-vendor-sources.sh's own
+# X2000_KERNEL_6_6_PIN and 01-apply-kernel-patches.sh's independent check -
+# duplicated here on purpose (this script never re-fetches, so it can't
+# accidentally paper over drift the other two scripts would have caught).
+# Remote name is "nebulaos" here, not "origin" - check_vendor_pin's URL check
+# greps all remotes, so this is remote-name-agnostic.
+check_vendor_pin x2000_kernel_6.6 f7ff80a8aa21886a32783dab167e451298c60a8d \
+	https://github.com/coreflake1/NebulaOS.git
 
 # ns2009, the display panel, brcmfmac and the RNG are all built statically
 # into vmlinux (=y, not =m) - see halley5-nebulaos-fragment.config's own

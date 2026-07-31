@@ -31,6 +31,19 @@ if [ "$BRANCH" != "openke" ]; then
 	exit 1
 fi
 
+# Defense in depth (2026-07-31, NEBULAOS_CAMERA_USB_RT_SOURCE_ANALYSIS.md's
+# vendor-pin audit): 00-fetch-vendor-sources.sh already enforces this exact
+# pin and fails loudly on drift, but this script shouldn't silently trust
+# that it ran first/correctly - keep the same pin constant here and verify
+# independently, so a hand-run `git pull` inside this checkout between the
+# two scripts still gets caught.
+X2000_KERNEL_6_6_PIN=f7ff80a8aa21886a32783dab167e451298c60a8d
+ACTUAL_SHA=$(git rev-parse HEAD)
+if [ "$ACTUAL_SHA" != "$X2000_KERNEL_6_6_PIN" ]; then
+	echo "vendor/x2000_kernel_6.6 HEAD is $ACTUAL_SHA, expected pinned commit $X2000_KERNEL_6_6_PIN - re-run 00-fetch-vendor-sources.sh (it will refuse to proceed and explain why)" >&2
+	exit 1
+fi
+
 echo "== confirming the openke branch's real changes are present =="
 test -f kernel/kernel-6.6/drivers/input/touchscreen/ns2009.c
 test -f kernel/kernel-6.6/module_drivers/drivers/video/fbdev/ingenic/displays/panel-openke-general-480x272.c

@@ -12,13 +12,32 @@ cd "$VENDOR"
 clone_pinned() {
 	name="$1"; url="$2"; ref="$3"; extra="$4"
 	if [ -d "$name/.git" ]; then
-		echo "== $name already present, skipping clone =="
-		return
+		echo "== $name already present, verifying pin (not re-cloning) =="
+	else
+		echo "== cloning $name @ $ref =="
+		git clone $extra "$url" "$name"
+		git -C "$name" fetch origin "$ref" 2>/dev/null || true
+		git -C "$name" checkout "$ref"
 	fi
-	echo "== cloning $name @ $ref =="
-	git clone $extra "$url" "$name"
-	git -C "$name" fetch origin "$ref" 2>/dev/null || true
-	git -C "$name" checkout "$ref"
+	# Pin enforcement (2026-07-31, NEBULAOS_CAMERA_USB_RT_SOURCE_ANALYSIS.md's
+	# vendor-pin audit): previously this function only checked out the pinned
+	# ref the FIRST time a vendor/ dir was absent - an already-present checkout
+	# (e.g. after a stray `git pull` run by hand, or a stale checkout left over
+	# from before a pin was bumped) was never re-verified. Resolve the pin
+	# (branch/tag/SHA - all valid `ref` forms used by callers below) to its
+	# exact commit and fail loudly on any mismatch, every run, not just on
+	# first clone.
+	expected=$(git -C "$name" rev-parse "$ref" 2>/dev/null) || {
+		echo "FATAL: vendor/$name - could not resolve pin '$ref' to a commit at all (bad ref, or needs a fetch)" >&2
+		exit 1
+	}
+	actual=$(git -C "$name" rev-parse HEAD)
+	if [ "$actual" != "$expected" ]; then
+		echo "FATAL: vendor/$name HEAD is $actual, expected pinned ref '$ref' ($expected)" >&2
+		echo "Either this checkout drifted (git -C vendor/$name checkout $expected to fix), or the pin needs a deliberate, reviewed bump in this script." >&2
+		exit 1
+	fi
+	echo "== $name pinned commit verified ($expected) =="
 }
 
 # X2000 kernel SDK, OpenKE fork (FIRMWARE.md sec 39): coreflake1/NebulaOS is a
@@ -29,6 +48,18 @@ clone_pinned() {
 # on the `openke` branch, rather than a patch file applied at build time -
 # `main` on the fork tracks upstream unmodified. Sparse-checked-out to
 # kernel/kernel-6.6 only (the full repo is ~684MB).
+#
+# Pin enforcement (2026-07-31, NEBULAOS_CAMERA_USB_RT_SOURCE_ANALYSIS.md's
+# vendor-pin audit): every other clone_pinned call below pins to an exact
+# commit SHA; this one used to check out the `openke` branch by name only,
+# which meant a future upstream push to that branch would be silently picked
+# up by any fresh fetch with no error. The branch is still used to locate and
+# clone the right ref (it identifies which fork history this is), but the
+# actual pin enforced here is the exact SHA below - if `openke` has moved past
+# it, this script now fails loudly instead of silently building different
+# kernel source. Bump X2000_KERNEL_6_6_PIN deliberately (in a dedicated commit)
+# when you actually want to pick up new upstream `openke` commits.
+X2000_KERNEL_6_6_PIN=f7ff80a8aa21886a32783dab167e451298c60a8d
 if [ ! -d "x2000_kernel_6.6/.git" ]; then
 	echo "== cloning x2000_kernel_6.6 (sparse: kernel/kernel-6.6 only) =="
 	git clone --filter=blob:none --sparse \
@@ -37,8 +68,17 @@ if [ ! -d "x2000_kernel_6.6/.git" ]; then
 	git -C x2000_kernel_6.6 sparse-checkout set kernel/kernel-6.6
 	git -C x2000_kernel_6.6 checkout openke
 else
-	echo "== x2000_kernel_6.6 already present, skipping =="
+	echo "== x2000_kernel_6.6 already present, skipping clone =="
 fi
+kernel_actual=$(git -C x2000_kernel_6.6 rev-parse HEAD)
+if [ "$kernel_actual" != "$X2000_KERNEL_6_6_PIN" ]; then
+	echo "FATAL: vendor/x2000_kernel_6.6 HEAD is $kernel_actual, expected pinned commit $X2000_KERNEL_6_6_PIN" >&2
+	echo "The openke branch has moved (or this checkout was never on the pinned commit)." >&2
+	echo "If this is a deliberate, reviewed pin bump, update X2000_KERNEL_6_6_PIN in this script." >&2
+	echo "Otherwise: git -C vendor/x2000_kernel_6.6 checkout $X2000_KERNEL_6_6_PIN" >&2
+	exit 1
+fi
+echo "== x2000_kernel_6.6 pinned commit verified ($X2000_KERNEL_6_6_PIN) =="
 
 # Buildroot config for this board family (Phase 0's find).
 clone_pinned buildroot-x2000 https://github.com/lone0/buildroot-x2000.git \
@@ -77,8 +117,16 @@ clone_pinned pellcorp-creality https://github.com/pellcorp/creality.git \
 # own tracked history on top of that commit, instead of being copied in as
 # untracked files by 04-cross-compile-app-stack.sh after every fetch (see
 # that script's own comment, now removed, for the gap this replaces).
+#
+# Pin bumped 2026-07-31 (NEBULAOS_CAMERA_USB_RT_SOURCE_ANALYSIS.md's vendor-
+# pin audit): this pin was stuck one real commit behind the actual, already-
+# shipped fork state - d839d0375 ("chelper: replace incompatible upstream
+# c_helper.so with NebulaOS's own build") had been pushed and was already
+# what every real build depended on, but a fresh fetch would have silently
+# checked out the older b3d5ab2 and missed it. 06-verify.sh's check_vendor_pin
+# already caught and documented this exact MISS; this bump resolves it.
 clone_pinned klipper https://github.com/coreflake1/NebulaOS-klipper.git \
-	b3d5ab2b9484f1558586c3a2ea43d46ff9a473a7
+	d839d0375a31327e57e0a35e99e70ba60814ec05
 
 # Official Moonraker - not a fork, no reason to deviate.
 clone_pinned moonraker https://github.com/Arksine/moonraker.git \
@@ -100,7 +148,15 @@ git -C k1-ustreamer submodule update --init --recursive
 # toolchain cross-compiles (pellcorp/k1-bash-build) has no python3/meson/
 # ninja, so staying on the plain autotools ./configure && make build here
 # avoids adding that whole toolchain just for one diagnostic utility.
-clone_pinned v4l-utils https://git.linuxtv.org/v4l-utils.git v4l-utils-1.20.0
+#
+# Pinned to the tag's exact resolved commit (not the tag name) as of
+# 2026-07-31 (NEBULAOS_CAMERA_USB_RT_SOURCE_ANALYSIS.md's vendor-pin audit) -
+# every other clone_pinned call in this script pins an exact SHA; a tag name
+# is normally immutable for a release but is not a hard guarantee the way a
+# commit SHA is. Confirmed via `git describe --tags` that this SHA is exactly
+# what v4l-utils-1.20.0 resolves to.
+clone_pinned v4l-utils https://git.linuxtv.org/v4l-utils.git \
+	3b22ab02b960e4d1e90618e9fce9b7c8a80d814a
 
 # Mainsail - a built Vue app, fetched as a real release archive, not built
 # from source here (no Node.js toolchain needed for this build at all).

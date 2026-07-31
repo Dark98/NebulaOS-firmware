@@ -8,9 +8,20 @@
 # fixture - the script's whole job is editing that real file via git-
 # scoped sed ranges, and a fixture DTS would need to duplicate its exact
 # msc0/msc1 structure to be meaningful, risking drifting out of sync with
-# the real file. Safety net: a trap guarantees the checkout is always
-# reset to a clean W0 baseline on exit, pass or fail, so this suite never
-# leaves the real vendor tree in a modified state even if interrupted.
+# the real file.
+#
+# Alpha baseline freeze mission (2026-08-01): real build-integrity defect
+# found live - this suite's cleanup used to unconditionally reset the DTS
+# to W0 on exit, regardless of what variant was selected before the suite
+# ran. Running this suite after deliberately applying W3 (as part of
+# building a combined W3+R1 alpha image) silently discarded that W3
+# selection back to W0 before the build ever started - the build then
+# produced a plain baseline image despite W3 having been correctly applied
+# moments earlier. Caught only by inspecting the built artifact's own
+# hashes, not by this suite's own exit status (which was, and always had
+# been, a clean pass). Fixed: snapshot the DTS's exact real pre-test bytes
+# before any mutation, restore exactly those bytes on exit (success,
+# failure, or signal) - never assume W0 was the starting state.
 #
 # Skips (not fails) if vendor/x2000_kernel_6.6 isn't fetched yet.
 #
@@ -41,10 +52,29 @@ pass() {
 	PASS=$((PASS + 1))
 }
 
+# Snapshot the REAL pre-test state (whatever it actually is - W0, W1, W2,
+# W3, or anything else) before this suite's first mutation, so cleanup can
+# restore exactly that state rather than assuming a fixed baseline.
+PRETEST_SNAPSHOT=$(mktemp)
+cp "$DTS" "$PRETEST_SNAPSHOT"
+
 cleanup() {
-	sh "$VARIANT_SCRIPT" W0 >/dev/null 2>&1
+	cp "$PRETEST_SNAPSHOT" "$DTS"
+	rm -f "$PRETEST_SNAPSHOT"
 }
-trap cleanup EXIT INT TERM
+# EXIT alone runs cleanup on every path (normal completion, `exit` calls
+# below, or any other termination) - POSIX shells do NOT terminate a
+# process just because it received INT/TERM while a handler is trapped;
+# without the process actually exiting afterward, execution would
+# otherwise resume with whatever test was next, silently re-mutating the
+# just-restored file (confirmed live: a real, distinct bug from the one
+# this suite already fixed - a bare `trap cleanup INT TERM` runs cleanup
+# but then keeps running the remaining tests, undoing the very restore
+# it just performed). `exit` here triggers the EXIT trap on its own; it
+# does not call cleanup directly to avoid running it twice.
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 msc1_props() {
 	sed -n '/^&msc1 {/,/^};/p' "$DTS" | grep -E 'cap-sdio-irq;|cap-sd-highspeed;|cap-mmc-highspeed;'

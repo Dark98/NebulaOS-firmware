@@ -4,9 +4,21 @@
 # qualification mission Phase A8, 2026-07-31). Operates against the real
 # tracked Kconfig fragment (artifacts/buildroot-halley5-v30-image/
 # halley5-nebulaos-fragment.config) - it's a small, git-tracked text file
-# in the main repo, not a gitignored vendor checkout, so a trap
-# guarantees `git checkout --` restores it to a clean, unmodified state
-# on exit, pass or fail.
+# in the main repo, not a gitignored vendor checkout.
+#
+# Alpha baseline freeze mission (2026-08-01): real build-integrity defect
+# found live - this suite's cleanup used to unconditionally `git checkout
+# --` the fragment on exit, which restores whatever is COMMITTED (always
+# R0, since R1 is never committed), not whatever was actually selected
+# before this suite ran. Running this suite after deliberately applying
+# R1 (as part of building a combined W3+R1 alpha image) silently discarded
+# that R1 selection back to R0 before the build ever started - the build
+# then produced a plain non-RT image despite R1 having been correctly
+# applied moments earlier. Caught only by inspecting the built artifact's
+# own kernel config, not by this suite's own exit status (a clean pass
+# throughout). Fixed: snapshot the fragment's exact real pre-test bytes
+# before any mutation, restore exactly those bytes on exit (success,
+# failure, or signal) - never assume R0/git-HEAD was the starting state.
 #
 # Usage: sh tests/preempt-variant-tests.sh
 
@@ -29,15 +41,30 @@ pass() {
 	PASS=$((PASS + 1))
 }
 
-cleanup() {
-	git -C "$REPO_ROOT" checkout -- "$FRAGMENT" 2>/dev/null
-}
-trap cleanup EXIT INT TERM
-
 [ -f "$FRAGMENT" ] || {
 	echo "SKIP: $FRAGMENT not present"
 	exit 0
 }
+
+# Snapshot the REAL pre-test state (whatever it actually is - R0, R1, or
+# anything else) before this suite's first mutation, so cleanup can
+# restore exactly that state rather than assuming a fixed baseline.
+PRETEST_SNAPSHOT=$(mktemp)
+cp "$FRAGMENT" "$PRETEST_SNAPSHOT"
+
+cleanup() {
+	cp "$PRETEST_SNAPSHOT" "$FRAGMENT"
+	rm -f "$PRETEST_SNAPSHOT"
+}
+# See tests/wifi-sdio-variant-tests.sh's identical comment: a bare
+# `trap cleanup INT TERM` runs cleanup but does not itself terminate the
+# process, so execution would otherwise resume at the next test and
+# silently re-mutate the file it just restored. `exit` triggers the EXIT
+# trap on its own; it is not called directly here to avoid running
+# cleanup twice.
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # --- Test 1: R0 leaves the tracked fragment file git-clean (today's
 # real baseline needs no override at all). ---

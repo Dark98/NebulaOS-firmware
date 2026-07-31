@@ -1,0 +1,157 @@
+# NebulaOS Live Wi-Fi / Camera / PREEMPT_RT Qualification Report
+
+Mode B (live hardware) execution log for the pre-qualification mission. Printer: Creality
+Ender-3 V3 KE + Nebula Pad, IP 192.168.0.129, booted on the "custom" (NebulaOS) rootfs slot
+throughout this session unless noted. This document is updated continuously as phases complete.
+
+**Status: IN PROGRESS.** No production selections have been committed. No production tag has
+been created.
+
+## Phase B1 — Read-only live baseline (complete)
+
+Captured with zero state changes. Confirms prior source-only analysis on:
+
+- DWC2 SOF IRQ rate: measured ~8,197/sec (sum of both CPU cores over a 2s sample) — matches
+  the predicted ~8,000/sec from the source-only analysis.
+- Camera: `/dev/video0`/`/dev/video1` present; ustreamer running `--resolution=1920x1080
+  --desired-fps=30`; snapshot HTTP 200 in 44ms. Matches documented C0 baseline exactly.
+- CPU: 95% idle, load 0.04–0.15 with camera streaming continuously.
+- Wi-Fi: associated (SSID `fsociety`, -69dBm, 57.7/72.2 Mbit/s bitrates); `ccode=CN` confirmed
+  present in `/lib/firmware/brcm/brcmfmac43430-sdio.txt`.
+- Power-save: currently **on** (matches documented P0/PM_FAST default).
+- Safety state at session start: `print_stats.state=standby`, not paused, `homed_axes=""`,
+  temps at ambient (~29°C). Confirmed safe to proceed.
+
+**Open finding carried into B3**: NVRAM contains the known placeholder
+(`macaddr=00:11:22:33:44:55`, `il0macaddr=00:90:4c:c5:12:38`), but the live `wlan0` MAC is
+`20:0b:74:69:99:fd` — this address does **not** have the locally-administered bit set
+(`0x20` = `00100000`, bit 1 clear), meaning it is not the product of the standard kernel
+`eth_random_addr()`/`eth_hw_addr_random()` fallback the source-only analysis assumed. MAC
+provenance is unresolved pending B3.
+
+## Phase B2 — Venv-seed fast-path / fallback-path validation (complete)
+
+### Protected-data baseline methodology
+
+Live device data is split across two real, independently bind-mounted sources (confirmed via
+`/proc/self/mountinfo`, not assumed):
+- `/usr/data/nebulaos/printer_data` (config/history/db, 4.9MB, 33 files) — bind-mounted onto
+  `/opt/printer_data`.
+- `/usr/data/printer_data/gcodes` (184 files, ~350MB) — bind-mounted onto
+  `/opt/printer_data/gcodes`. Excludes the external USB drive mounted at
+  `.../gcodes/USB/sda` (14.6GB, user's own removable media, not NebulaOS state).
+
+Manifests recorded at `/usr/data/nebulaos/maintenance/qualification/protected-data-{before,after}.txt`
+(size+mtime+owner listing for both paths, full SHA-256 for the smaller nebulaos/printer_data
+tree). Replaceable-state inventory at `replaceable-state-before.txt`; filesystem free space at
+`filesystem-before.txt` (1.2GB free of 5.9GB on `/usr/data` at test start — ample headroom;
+backups used same-filesystem atomic `mv`, not copies, so no extra space was consumed anyway).
+
+### Real finding: this legacy image ships with no venv-seed archives
+
+`/opt/nebulaos-seeds/` on the currently-running image contains only `klipper.tar.gz` and
+`moonraker.tar.gz` (git-history archives) — **no** `klipper-venv-seed.tar.gz` or
+`moonraker-venv-seed.tar.gz`. Those two files were only introduced by
+`04-cross-compile-app-stack.sh`'s venv-seed feature (Phase 11 of the prior optimization
+mission) — this running image predates that. Consequence: **every boot of this image has
+always taken the on-device `python3 -m venv --system-site-packages` fallback path; the fast
+path has never once executed on this hardware.** This directly explains memory's "implemented
+but not yet hardware-tested" caveat. Fast-path validation is deferred to B3.3 once a build that
+includes the venv-seed archives (B0–B4, built this session) is deployed and booted.
+
+### Backup (B2.2)
+
+Atomic same-filesystem rename, verified readable before removing originals:
+```
+apps/{klipper,moonraker,mainsail} -> apps/{...}.pre-qualification-20260731T183029Z
+envs/{klipper,moonraker}          -> envs/{...}.pre-qualification-20260731T183029Z
+```
+All 5 backups confirmed readable (`.git` present for klipper/moonraker, `index.html` for
+mainsail, `bin/python3` executable for both venvs) before originals were removed. Originals
+confirmed genuinely absent before proceeding. Backups retained for the remainder of this
+qualification (not yet deleted).
+
+### Fallback-path exercise (B2.4 — the only path available on this image) — real bug found
+
+Services stopped cleanly (`S55klipper`, `S56moonraker`, `S58guppyscreen`, `S50webcam`) after a
+fresh safety re-check. `sh /etc/init.d/S04nebulaos-factory-seed start` run against the
+genuinely-absent namespace. Result, 117s elapsed:
+
+- Moonraker: seeded successfully (`d5ee17128bb88434aacdab90c2e9e990e2b64e4a`, matches this
+  project's own vendor pin exactly).
+- Mainsail: seeded successfully from the immutable `/usr/share/mainsail` copy.
+- Both venvs: created successfully via the on-device fallback (`python3 -m venv
+  --system-site-packages`), smoke tests passed.
+- **Klipper: `ERROR: klipper seeded checkout has a dirty working tree - rejecting`.**
+  `/usr/data/nebulaos/apps/klipper` was left completely unseeded — a genuinely fresh device
+  hitting this exact path would have no Klipper installation at all.
+
+**Root cause (confirmed by direct diagnosis)**: extracting `/opt/nebulaos-seeds/klipper.tar.gz`
+into a scratch directory and running `git status --porcelain` shows exactly one line:
+`M klippy/chelper/c_helper.so`. `scripts/build/lib/make-seed-archive.sh`'s
+`make_seed_archive()` **already** excludes this exact path from its own dirty-tree check (its
+own comments explain why: the real cross-compiled MIPS binary the build pipeline bakes in
+always differs from whatever's tracked in git for that path — this is intentional, not
+corruption). But the on-device consumer, `S04nebulaos-factory-seed`'s `seed_git_app()`, had a
+plain unqualified `git status --porcelain` with no matching exclusion. The producer and
+consumer dirty-tree checks were asymmetric — **this would have broken first-boot Klipper
+installation on every genuinely fresh or wiped NebulaOS device**, and had never been physically
+exercised before this test.
+
+**Immediate remediation**: restored `apps/klipper` from the verified backup
+(`git rev-parse HEAD` = `d839d0375a...`, clean tree, matches vendor pin). Restarted all
+services. Confirmed `printer/info` returns `state: ready`, safety state still standby/not
+paused. A duplicate/orphaned pre-existing Moonraker process (PID 3598, `PPid=1`, predating this
+test entirely, running on bare `/usr/bin/python3`) was found blocking port 7125 during
+restoration — killed (safe: not tied to any print/session) and Moonraker restarted cleanly on
+its correct venv interpreter.
+
+**Fix committed** (`c03757e`, `scripts/build/overlay/etc/init.d/S04nebulaos-factory-seed` +
+`tests/factory-seed-git-tests.sh`): `seed_git_app()` now accepts an optional 4th
+`dirty_exclude` argument mirroring `make_seed_archive()`'s own `sparse_exclude` parameter,
+passed only for the klipper call site (`klippy/chelper/c_helper.so`). 2 new host-side tests
+added proving the exclusion works (dirty c_helper.so tolerated) and does not become a blanket
+bypass (an unrelated dirty file in the same archive is still rejected). All 19 tests in the
+suite pass.
+
+**Fix validated live**: copied the fixed script to the device's writable `/tmp` (scp `-O`,
+BusyBox has no `sftp-server`), removed `apps/klipper` again, ran the fixed script directly —
+Klipper seeded successfully (`d839d0375a...`, exact match, clean tree, 4s elapsed since the
+venv already existed). Restarted services, confirmed `state: ready` again.
+
+**Caveat**: B0–B4 (built earlier this session, before this fix existed) do **not** yet include
+this fix. It must be folded into whichever build becomes the actual final production candidate
+before that candidate is treated as fresh-install-safe. It does not block the remaining
+Wi-Fi/camera/RT A/B experiments in this mission, since `/usr/data` (where `apps`/`envs` live) is
+shared across both rootfs A/B slots and is not wiped by a slot switch — Klipper stays seeded
+across the SDIO/camera/RT variant tests to follow.
+
+### Protected-data comparison (B2.5)
+
+`protected-data-after.txt` generated and diffed against `protected-data-before.txt`. The
+**only** differences: `klippy.log`, `moonraker.log`, `guppyscreen.log` grew (expected — these
+services were stopped/started/restarted repeatedly during this test) and
+`moonraker-sql.db` changed (expected — Moonraker's own database records its own
+restart/history bookkeeping). **Zero differences** in any of the 184 gcode files, any
+`config/*.cfg` file, or any other printer-data content. Classification: protected data fully
+preserved.
+
+### VENV_SEED classification
+
+```
+VENV_SEED: ACCEPT_WITH_FIX
+```
+Fallback path works correctly (validated live, real timing ~117s for the full first-boot
+sequence). Fast path cannot be validated on this image (venv-seed archives absent) — deferred
+to B3.3. The git-app-seed fix (dirty c_helper.so exclusion) is required before this mechanism
+is safe to rely on for a genuinely fresh/wiped device; without it, Klipper would never install
+on a true factory-reset unit.
+
+---
+
+## Phase B3 — MAC provenance and stability (not yet started)
+
+## Remaining phases
+
+B3 (MAC provenance/stability) through B12 (PREEMPT_RT non-motion A/B) are not yet started. This
+document will be updated as each completes.

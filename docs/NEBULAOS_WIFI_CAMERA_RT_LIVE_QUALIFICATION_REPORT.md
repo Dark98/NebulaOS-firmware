@@ -261,7 +261,47 @@ real gap worth flagging for future work (wiring brcmfmac to this factory partiti
 genuinely traceable, printed-label-matching identity), but is out of scope to fix in this
 session.
 
-## Phase B3.3 — B0 deployment: BLOCKED by a real architectural finding
+### B3.1 addendum #2 — MAC provenance CONCLUSIVELY resolved via stock comparison
+
+To deploy B0 safely (see B3.3 below), the device was switched to stock firmware (writing
+`ota:kernel` to the marker at `/dev/mmcblk0p1` via the project's own `write_ota_marker()`,
+then rebooting). Stock came up on a **different DHCP IP** (192.168.0.138, vs custom's
+192.168.0.129) — itself evidence the MAC differs by boot target. Confirmed directly: stock's
+`wlan0` shows `link/ether fc:ee:11:00:4c:14` — an **exact match** for the `sn_mac` partition's
+stored MAC field found in B3.1. Stock's own hostname is `Ender3V3KE-4C14`, also matching the
+partition's serial suffix. **Stock correctly reads and uses the real factory MAC; NebulaOS
+(custom) currently does not — it produces a completely different, still only partially
+explained address (`20:0b:74:69:99:fd`) through some other internal brcmfmac/firmware
+mechanism.**
+
+```
+MAC_PROVENANCE: FACTORY_STABLE (confirmed directly - stock uses fc:ee:11:00:4c:14 from the
+  sn_mac partition, mmcblk0p2, exactly as stored)
+STABLE_MAC_IMPLEMENTATION: REVISE_TO_PRESERVE_FACTORY_MAC
+```
+
+Per the mission's own decision rule ("a factory-programmed universally administered MAC should
+normally be preserved rather than replaced by a locally administered derived MAC... identify
+how to expose or preserve the factory address reliably; recommend using the factory address as
+production identity; retain the derived method only as a fallback"): **the stable-MAC design
+built in Mode A (Phase A3, eMMC-CID-hash-derived, locally-administered) should be revised** to
+prefer reading `/dev/disk/by-partlabel/sn_mac`'s real MAC field first, falling back to the
+CID-derived mechanism only if that partition is absent/unprogrammed on a given unit. This is a
+better, more correct design than what was built in Mode A, discovered only because live
+hardware comparison against stock was possible. Not yet implemented in this session
+(source change deferred; noting the finding and required direction here).
+
+## Phase B3.3 — B0 deployment: real slot-architecture finding, unblocked by user
+
+**Initial finding**: no spare NebulaOS slot exists on this board — see below. **Resolution
+(user-directed)**: never touch stock; explicitly switch the boot target to stock before each
+flash (stock's own slot, kernel/rootfs, is never written), flash the now-inactive custom slot
+(kernel2/rootfs2) with each candidate image, switch back to custom to test it, then switch back
+to stock again before the next candidate. This matches exactly how this project's own
+`flash-spare-slot.sh` and `S00revert-safety`/`S99confirm-good` marker mechanism were designed
+to be used (they already assume "stock active, custom inactive" as the normal flashing state -
+the earlier finding below was based on the wrong assumption that two interchangeable custom
+slots should exist, not that stock is meant to be the safe harbor between custom flashes).
 
 `scripts/flash-spare-slot.sh`'s own header and safety history describe this board's actual
 partition layout precisely, and it does not match the mission text's assumption of a rotating

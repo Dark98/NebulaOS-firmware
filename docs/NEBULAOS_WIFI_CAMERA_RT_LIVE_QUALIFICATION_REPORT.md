@@ -296,7 +296,46 @@ it only requires relaunching the already-present `ustreamer` binary with a diffe
 `--desired-fps` flag — no new kernel/rootfs needed. Proceeding with that next while flagging
 this blocker.
 
+## Phase B7 (partial) — Camera C0 vs C1 (complete, runtime-only, no image deployment needed)
+
+C1 does not require a new image — only relaunching the already-present `ustreamer` binary with
+a different `--desired-fps` flag. C2 (idle-pause) remains blocked (its controller script is not
+present on this legacy image).
+
+| Metric | C0 (30fps) | C1 (requested 15fps) |
+|---|---|---|
+| DWC2 IRQ/sec (both cores, 2s sample) | ~8,149 | ~8,118 |
+| Snapshot latency | 44ms | 43.7ms |
+
+**Confirms the mission's own prediction exactly**: reducing FPS does not reduce the DWC2 SOF
+interrupt rate — it's governed by USB bus frame timing, not camera frame rate. No meaningful
+snapshot-latency difference either.
+
+**Real finding, separate from the above**: `v4l2-ctl --list-frameintervals` on `/dev/video0`
+shows this camera genuinely supports an exact discrete 15.000fps interval (`0.067s`) alongside
+30/25/20/10/5fps. But ustreamer's own log reported `Using HW FPS: 1/25` when launched with
+`--desired-fps=15` — ustreamer negotiated 25fps instead of the requested 15, despite the
+hardware supporting the exact requested rate. This is a real ustreamer-level FPS-negotiation
+quirk (not a hardware limitation) — not investigated further or fixed in this session, flagged
+for whoever picks up C1 as a production candidate.
+
+A process-management mistake was made and corrected during this test: after switching to C1,
+`/etc/init.d/S50webcam stop`+`start` did not actually replace the manually-launched C1
+`ustreamer` process (the supervisor's own start-if-not-running check saw a live process on the
+same port and did nothing) — confirmed by the process list still showing `--desired-fps=15`
+after the "restore" step. Fixed by killing the stray PID directly, then cleanly restarting the
+supervisor. Final state verified: `--desired-fps=30` (production default), snapshot HTTP 200.
+
+Classification:
+```
+CAMERA_1080P15_ALWAYS: READY (runtime-switchable, no new image needed) - but ustreamer's own
+  FPS negotiation quirk (25fps instead of the requested/hardware-supported 15fps) should be
+  fixed before this is offered as a real "C1" production mode.
+```
+
 ## Remaining phases
 
-B3.3-B3.5, B5, B6, C2, B8, B11-B12 as originally scoped are blocked pending a decision on how
-to handle the missing spare slot (see above). B7 (camera, C0/C1 only) continues below.
+B3.3-B3.5, B5, B6, C2 (idle-pause), B8, B11-B12 as originally scoped are blocked pending a
+decision on how to handle the missing spare slot (see B3.3 above) — all require deploying a new
+kernel/rootfs image, and this board has no spare NebulaOS slot to deploy one into without either
+flashing the active slot or overwriting the stock-firmware fallback.

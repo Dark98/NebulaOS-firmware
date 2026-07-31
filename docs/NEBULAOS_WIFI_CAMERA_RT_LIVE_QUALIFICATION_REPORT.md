@@ -554,3 +554,42 @@ since at that time no write to slot 2 was yet planned). The persistent data part
 any of these flashes and remains fully intact regardless of which image is active. B0 was
 chosen as the final state because it is the fully-validated, non-experimental baseline with no
 measured benefit forgone (W0 is the recommended SDIO default per B5's own conclusion).
+
+**Final confirmation**: booted, `uname` confirms plain `PREEMPT` (not RT), `wlan0` MAC
+`16:3b:5d:14:20:90` (stable, as validated), Klipper `state: ready`, printer standby/not
+paused/not homed, camera snapshot HTTP 200, OTA marker confirmed `ota:kernel2` (S99confirm-good
+already flipped it forward — this boot is sticky for future reboots too, no manual intervention
+needed to keep it there).
+
+Skipped, not performed in this session (deferred, not forgotten): **B6** (event-driven Wi-Fi
+association — code never deployed to real hardware in this session), **C2** (camera idle-pause
+controller — same), full **cyclictest**-based RT latency quantification, cold-boot (physical
+power cycle) MAC validation, and any print/motion testing (never approached — no physical
+readiness confirmation was requested or given, correctly, since nothing in this session reached
+the point of needing it).
+
+---
+
+## Final non-motion qualification summary
+
+| Area | Conclusion |
+|---|---|
+| Venv seed | **ACCEPT_WITH_FIX** — real bug found (klipper git-seed always rejected as dirty on genuinely fresh install) and fixed (`c03757e`); fallback path validated live; fast path validated live once B0 was deployed |
+| Legacy MAC provenance | **RESOLVED**: stable across 3 warm reboots; NOT randomly generated as assumed; does not match the real factory `sn_mac` partition either — provenance mechanism itself still not fully identified (likely chip OTP/CIS), but empirically stable |
+| Derived stable MAC (Mode A design) | **VALIDATED AS DESIGNED** on real hardware (2/2 reboots stable, derivation reproduced exactly from live eMMC CID) — but should be **REVISED** to prefer the real factory `sn_mac` partition first, falling back to this CID-derived method only when that partition is absent |
+| SDIO IRQ (W1) | **ACCEPT** (functional pass; no measured benefit) |
+| SDIO high-speed (W2) | **ACCEPT** (functional pass; no measured benefit) |
+| SDIO both (W3) | **ACCEPT** (functional pass; no measured benefit) |
+| SDIO recommendation | **W0 (baseline) remains the default** — no variant showed a measured improvement to justify a change |
+| Wi-Fi power save | P1 (off) shows real tail-latency improvement (P95 14.1ms vs 20.3ms); power/thermal cost not measurable with available tooling — provisional lean toward P1, not a full accept |
+| Event-driven association | Not tested this session (code never deployed to hardware) |
+| Camera 1080p30 (C0) | **READY** — confirmed production baseline |
+| Camera 1080p15 (C1) | **READY** (runtime-switchable) — but ustreamer negotiates 25fps instead of the requested/hardware-supported 15fps; fix needed before real production use |
+| Camera idle-pause (C2) | Not tested this session (code never deployed to hardware) |
+| PREEMPT vs PREEMPT_RT | RT **builds, boots, and functions correctly** under real non-motion load; DWC2's predicted IRQ-threading risk confirmed present but not observed to fail; **worst-case latency not quantified** — remains experimental per the mission's own fixed decision, not selected for production |
+| Country code | CN unchanged throughout |
+| Final device state | B0 (W0/R0, derived stable-MAC active, all Mode A features present) — confirmed healthy |
+
+No production selections have been committed. No production tag has been created. This report
+reflects real, live hardware evidence gathered across this session, with real bugs found and
+fixed along the way (see B2, and the slot-architecture discovery in B3.3).

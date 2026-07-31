@@ -96,7 +96,8 @@ check_vendor_pin buildroot-x2000 74d020081096972857acdb9e76c6c5335455d430 \
 	board/halley5-nebulaos-busybox-fragment.config \
 	board/halley5-nebulaos-fragment.config \
 	board/halley5-nebulaos-overlay/ \
-	board/halley5-nebulaos-wheels/
+	board/halley5-nebulaos-wheels/ \
+	local.mk
 check_vendor_pin k1-ustreamer 18e30bb313d54b1b01dd995bd31ce5a3d5adffd6 \
 	https://github.com/pellcorp/k1-ustreamer.git
 # k1-ustreamer's own real git submodules (jpeg-9d, ustreamer) - pinned via

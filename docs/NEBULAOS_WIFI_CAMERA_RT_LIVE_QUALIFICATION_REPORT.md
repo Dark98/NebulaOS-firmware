@@ -213,6 +213,31 @@ if B3.3–B3.5 (rootfs-slot switch, rollback, and comparison against the B0 deri
 implementation) confirm it holds across those too. Final classification deferred until those
 steps complete.
 
+## Phase B4 — Wi-Fi power-save A/B (legacy image, complete)
+
+Same kernel/rootfs/SDIO/camera throughout; only `iw dev wlan0 set power_save on|off` toggled.
+Ping target: default gateway (192.168.0.1), 50 samples per state, `-i 0.2`.
+
+| State | Median | P95 | P99 | Loss |
+|---|---|---|---|---|
+| P0 (power_save on, production default) | 5.20ms | 20.3ms | 31.4ms | 0% |
+| P1 (power_save off) | 5.33ms | 14.1ms | 25.9ms | 0% |
+
+P1 shows lower tail latency (P95/P99) with an equivalent median and zero packet loss in both
+states — consistent with power-management sleep/wake cycles contributing to occasional latency
+spikes. Moonraker API latency (loopback, not Wi-Fi-dependent) was ~11–14ms in both states, as
+expected since that call never traverses the radio. Restored to P0 (production default) after
+testing; safety state confirmed standby/not-paused throughout and afterward.
+
+Classification:
+```
+WIFI_POWER_SAVE_AB: P1 (off) shows a real, repeatable tail-latency improvement.
+  Cannot be fully "accepted" per the mission's own acceptance criteria, which requires
+  justifying against measured power/temperature cost - no power or thermal measurement
+  tooling is available on this hardware. Provisional lean: P1, pending either accepting
+  the unmeasured power cost as acceptable or acquiring the missing instrumentation.
+```
+
 ## Remaining phases
 
 B3.3 onward (B0 deployment) through B12 (PREEMPT_RT non-motion A/B) are not yet started. This

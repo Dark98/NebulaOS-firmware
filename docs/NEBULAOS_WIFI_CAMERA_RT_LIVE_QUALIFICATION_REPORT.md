@@ -238,7 +238,65 @@ WIFI_POWER_SAVE_AB: P1 (off) shows a real, repeatable tail-latency improvement.
   the unmeasured power cost as acceptable or acquiring the missing instrumentation.
 ```
 
+### B3.1 addendum — real factory identity partition found, but not consumed by wlan0
+
+While investigating the partition table for B3.3's slot deployment (see below), a
+`sn_mac` partlabel (`/dev/mmcblk0p2`, 1024 bytes) was found — not previously known to this
+project. Read-only bounded read (512 bytes):
+```
+26096911004C14;FCEE11004C14;F005;NEBULA V1.0.0.1;;;;;
+```
+Semicolon-delimited fields: a serial number (`26096911004C14`), what is structurally a MAC
+address with no separators (`FCEE11004C14` = `FC:EE:11:00:4C:14`), a short code (`F005`), and a
+model/firmware string (`NEBULA V1.0.0.1`). The serial's last 6 hex digits (`004C14`) match the
+MAC's last 3 bytes exactly — strong evidence this is a genuine, real, per-unit factory identity
+record, not a placeholder.
+
+**This factory MAC (`FC:EE:11:00:4C:14`) does not match the live `wlan0` MAC
+(`20:0b:74:69:99:fd`).** Neither the OUI nor any byte overlaps. This means: a real factory
+identity partition exists on this hardware, but the current Wi-Fi stack does not consume it —
+the live MAC's stability (B3.2) comes from some other mechanism, still not fully identified
+(most likely still chip-internal OTP/CIS, now proven distinct from this partition). This is a
+real gap worth flagging for future work (wiring brcmfmac to this factory partition would give a
+genuinely traceable, printed-label-matching identity), but is out of scope to fix in this
+session.
+
+## Phase B3.3 — B0 deployment: BLOCKED by a real architectural finding
+
+`scripts/flash-spare-slot.sh`'s own header and safety history describe this board's actual
+partition layout precisely, and it does not match the mission text's assumption of a rotating
+"active/inactive NebulaOS slot" pair:
+
+```
+partlabel kernel  (mmcblk0p5) / rootfs  (mmcblk0p7)  = slot 1 = STOCK Creality firmware
+partlabel kernel2 (mmcblk0p6) / rootfs2 (mmcblk0p8)  = slot 2 = THIS project's ONE custom slot
+```
+
+`flash-spare-slot.sh` is deliberately hardcoded to only ever write slot 2, and to never touch
+slot 1 — a design choice made after a real, documented incident (see the script's own header)
+where writing to the then-active slot caused live segfaults across running processes. Live
+confirmation this session: `/proc/cmdline` shows `root=/dev/mmcblk0p8`, which **is** slot 2 —
+the device is currently booted from the only slot this project's own tooling is designed to
+ever deploy to. There is no second, spare NebulaOS slot to deploy B0 (or B1–B4) into without
+either:
+
+1. flashing the currently-active slot (explicitly one of the mission's own hard stop
+   conditions — "the active slot would have to be flashed"), or
+2. overwriting slot 1 (stock Creality firmware) — something `flash-spare-slot.sh` was
+   specifically built to never do, and which would destroy the user's factory-fallback path,
+   a materially different and larger decision than anything else authorized so far.
+
+**This blocks B3.3–B3.5 (derived stable-MAC hardware validation), B5 (SDIO W0–W3 variant A/B),
+B6 (event-driven association — code not present on this legacy image), C2 camera idle-pause
+(code not present on this legacy image), and B8/B11–B12 (PREEMPT_RT A/B) as originally
+scoped** — all of them assume a deployable spare slot that does not exist on this board.
+
+What remains genuinely testable without any image deployment: C1 (1080p15) camera mode, since
+it only requires relaunching the already-present `ustreamer` binary with a different
+`--desired-fps` flag — no new kernel/rootfs needed. Proceeding with that next while flagging
+this blocker.
+
 ## Remaining phases
 
-B3.3 onward (B0 deployment) through B12 (PREEMPT_RT non-motion A/B) are not yet started. This
-document will be updated as each completes.
+B3.3-B3.5, B5, B6, C2, B8, B11-B12 as originally scoped are blocked pending a decision on how
+to handle the missing spare slot (see above). B7 (camera, C0/C1 only) continues below.

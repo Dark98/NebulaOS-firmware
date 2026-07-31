@@ -126,7 +126,7 @@ check_vendor_pin v4l-utils 3b22ab02b960e4d1e90618e9fce9b7c8a80d814a \
 # accidentally paper over drift the other two scripts would have caught).
 # Remote name is "nebulaos" here, not "origin" - check_vendor_pin's URL check
 # greps all remotes, so this is remote-name-agnostic.
-check_vendor_pin x2000_kernel_6.6 f7ff80a8aa21886a32783dab167e451298c60a8d \
+check_vendor_pin x2000_kernel_6.6 295b7101d751fd888ae39e6f1746a4a940664a5f \
 	https://github.com/coreflake1/NebulaOS.git
 
 echo "=== release artifact provenance (docs/NEBULAOS_RELEASE_ARTIFACT_PROVENANCE.md) ==="

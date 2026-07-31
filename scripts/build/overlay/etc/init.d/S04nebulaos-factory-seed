@@ -105,6 +105,17 @@ seed_git_app() {
 	dest="$APPS/$name"
 	branch="$2"
 	origin="$3"
+	# Real bug found live (Mode B pre-qualification, 2026-07-31): the archive
+	# side (scripts/build/lib/make-seed-archive.sh) deliberately excludes
+	# klippy/chelper/c_helper.so from ITS OWN dirty-tree check, because the
+	# real cross-compiled MIPS binary the build pipeline bakes in always
+	# differs from whatever is tracked in git for that path (see that
+	# script's own comments). This check never carried the same exclusion,
+	# so every real seed archive for klipper was rejected here as "dirty" -
+	# confirmed live, first genuine fresh-namespace test this whole seed
+	# mechanism has ever had. $4 mirrors make_seed_archive()'s own
+	# sparse_exclude-style opt-in, empty for every caller except klipper.
+	dirty_exclude="${4:-}"
 
 	if [ -e "$dest/.git" ]; then
 		log "$name already seeded ($dest/.git exists) - skipping"
@@ -159,7 +170,12 @@ seed_git_app() {
 		rm -rf "$dest.partial"
 		return 1
 	fi
-	if [ -n "$(git -C "$dest.partial" status --porcelain 2>/dev/null)" ]; then
+	if [ -n "$dirty_exclude" ]; then
+		dirty_status=$(git -C "$dest.partial" status --porcelain -- . ":!$dirty_exclude" 2>/dev/null)
+	else
+		dirty_status=$(git -C "$dest.partial" status --porcelain 2>/dev/null)
+	fi
+	if [ -n "$dirty_status" ]; then
 		log "ERROR: $name seeded checkout has a dirty working tree - rejecting"
 		rm -rf "$dest.partial"
 		return 1
@@ -394,7 +410,8 @@ start() {
 	# memory is fully released (process exit) before the next begins;
 	# `sync` after each step flushes rather than leaving dirty pages to
 	# compete with the next step's own memory needs.
-	seed_git_app klipper master "https://github.com/coreflake1/NebulaOS-klipper.git"
+	seed_git_app klipper master "https://github.com/coreflake1/NebulaOS-klipper.git" \
+		klippy/chelper/c_helper.so
 	setup_klipper_env
 	seed_git_app moonraker master "https://github.com/Arksine/moonraker.git"
 	setup_moonraker_env

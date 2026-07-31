@@ -216,10 +216,10 @@ mkdir -p "$S/seeds" "$S/apps" "$S/system" "$S/locks"
 run_seed_git_app() {
 	# Sources the real production script and calls its real function -
 	# no reimplementation of seed_git_app's own rules.
-	name="$1"; branch="$2"; origin="$3"
+	name="$1"; branch="$2"; origin="$3"; dirty_exclude="${4:-}"
 	SEEDS="$S/seeds" APPS="$S/apps" SYSTEM="$S/system" LOCKDIR="$S/locks" \
 		S04NEBULAOS_FACTORY_SEED_NO_AUTORUN=1 \
-		sh -c '. "$1"; seed_git_app "$2" "$3" "$4"' -- "$S04_SCRIPT" "$name" "$branch" "$origin" 2>&1
+		sh -c '. "$1"; seed_git_app "$2" "$3" "$4" "$5"' -- "$S04_SCRIPT" "$name" "$branch" "$origin" "$dirty_exclude" 2>&1
 }
 
 # Test: genuine archive with correct branch/origin is accepted.
@@ -268,6 +268,38 @@ if [ "$rc" -ne 0 ] && [ ! -e "$S/apps/dirtyseed/.git" ]; then
 	pass "dirty working tree baked into the archive is independently rejected"
 else
 	fail "dirty archived working tree was not correctly rejected (rc=$rc): $out"
+fi
+
+# Test: real bug found live (Mode B pre-qualification, 2026-07-31) - a
+# dirty klippy/chelper/c_helper.so (the one path make_seed_archive() itself
+# always leaves dirty on purpose) must be tolerated when the caller passes
+# it as dirty_exclude, while any OTHER dirty file in the same archive must
+# still be rejected - the exclusion must not become a blanket bypass.
+rm -rf "$S/apps/chelperseed"
+build_real_repo "$M/chelperseed-src" master ""
+git -C "$M/chelperseed-src" remote add origin "https://example.invalid/chelperseed.git"
+mkdir -p "$M/chelperseed-src/klippy/chelper"
+echo "pretend cross-compiled binary" > "$M/chelperseed-src/klippy/chelper/c_helper.so"
+tar -C "$M/chelperseed-src" -czf "$S/seeds/chelperseed.tar.gz" .
+out=$(run_seed_git_app chelperseed master "https://example.invalid/chelperseed.git" "klippy/chelper/c_helper.so"); rc=$?
+if [ "$rc" -eq 0 ] && [ -e "$S/apps/chelperseed/.git" ]; then
+	pass "dirty klippy/chelper/c_helper.so is tolerated when passed as dirty_exclude"
+else
+	fail "dirty klippy/chelper/c_helper.so was rejected even with dirty_exclude set (rc=$rc): $out"
+fi
+
+rm -rf "$S/apps/chelperseed2"
+build_real_repo "$M/chelperseed2-src" master ""
+git -C "$M/chelperseed2-src" remote add origin "https://example.invalid/chelperseed2.git"
+mkdir -p "$M/chelperseed2-src/klippy/chelper"
+echo "pretend cross-compiled binary" > "$M/chelperseed2-src/klippy/chelper/c_helper.so"
+echo "unrelated uncommitted change" >> "$M/chelperseed2-src/file.txt"
+tar -C "$M/chelperseed2-src" -czf "$S/seeds/chelperseed2.tar.gz" .
+out=$(run_seed_git_app chelperseed2 master "https://example.invalid/chelperseed2.git" "klippy/chelper/c_helper.so"); rc=$?
+if [ "$rc" -ne 0 ] && [ ! -e "$S/apps/chelperseed2/.git" ]; then
+	pass "dirty_exclude does not mask an unrelated dirty file in the same archive"
+else
+	fail "dirty_exclude incorrectly let an unrelated dirty file through (rc=$rc): $out"
 fi
 
 # Test: a synthetic wrapper commit baked directly into the archive

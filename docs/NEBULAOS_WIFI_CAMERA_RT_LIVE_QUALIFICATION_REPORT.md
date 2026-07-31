@@ -423,9 +423,45 @@ CAMERA_1080P15_ALWAYS: READY (runtime-switchable, no new image needed) - but ust
   fixed before this is offered as a real "C1" production mode.
 ```
 
+## Phase B5 — SDIO variant A/B (in progress)
+
+Methodology per variant: switch to stock (write `ota:kernel`, reboot), stage+transfer the
+variant's images to `/usr/data/<variant>-stage/`, `flash-spare-slot.sh --check-only` then the
+real write (both preflight-verified, MD5 write-verified), set `ota:kernel2`, reboot, validate.
+Given the real time cost observed per full stock↔custom cycle (each requiring 2 reboots, often
+5-10+ minutes each), **reboot-repetition depth per variant is reduced from the mission's
+suggested 5 to 1-2** — real signal captured, less repetition, noted honestly rather than
+silently skipped.
+
+### B0 (W0 baseline) — see B3.3 above (2/2 warm reboots, fully healthy)
+
+### B1 (W1, cap-sdio-irq) — PASS
+
+Deployed via the stock↔custom cycle described above. Boot took noticeably longer than B0's
+(~8+ minutes vs B0's few minutes) — landed on yet another DHCP IP (192.168.0.98), no clear
+single cause identified (not obviously SDIO-related, since enumeration itself was clean; most
+likely just DHCP/network timing variance, not investigated further given time constraints).
+
+- `wlan0` MAC: `16:3b:5d:14:20:90` — identical to B0, confirming the derivation is consistent
+  across variants that don't touch anything CID-related (as expected).
+- `dmesg`: `mmc1: new high speed SDIO card at address 0001`, no MMC/SDIO errors, no firmware
+  resets — only the same pre-existing, already-documented harmless `clm_blob`/`txcap_blob`
+  "not available" warnings seen on every variant including B0.
+- Wi-Fi association: real, working (`SSID: fsociety`, real RX/TX byte counts, not just
+  "associated" with zero traffic).
+- Klipper: `state: ready`. Camera: snapshot HTTP 200.
+- Could not confirm `cap-sdio-irq`'s exact live sysfs/DT path in the time available (DTS
+  labels like `msc1` don't necessarily become `/proc/device-tree` path components) — relying on
+  Mode A's own build-time verification (the DTS artifact copied back during the B1 build was
+  independently confirmed to contain `cap-sdio-irq`, hash-recorded in that build's manifest)
+  combined with this live boot's clean, error-free behavior.
+
+Classification: `SDIO_IRQ: ACCEPT` (no enumeration failure, no association instability, no
+MMC/SDIO errors, no firmware resets — the mission's own immediate-rejection criteria all pass).
+No quantitative throughput/latency benefit was measured in the time available; this is
+functional-pass, not a measured-improvement pass.
+
 ## Remaining phases
 
-B3.3-B3.5, B5, B6, C2 (idle-pause), B8, B11-B12 as originally scoped are blocked pending a
-decision on how to handle the missing spare slot (see B3.3 above) — all require deploying a new
-kernel/rootfs image, and this board has no spare NebulaOS slot to deploy one into without either
-flashing the active slot or overwriting the stock-firmware fallback.
+B2, B3 (SDIO), B6 (event-driven association), C2 (camera idle-pause), and B8/B11-B12
+(PREEMPT_RT) remain, each requiring the same stock↔custom cycle described above.

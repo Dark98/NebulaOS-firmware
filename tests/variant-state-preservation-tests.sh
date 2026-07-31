@@ -67,14 +67,6 @@ terminate_tree() {
 	[ -n "$children" ] && kill -TERM $children 2>/dev/null
 }
 
-# Always leave both real files at a clean W0/R0 baseline when this suite
-# itself exits, regardless of what it was doing when interrupted.
-final_cleanup() {
-	[ -f "$DTS" ] && sh "$WIFI_VARIANT_SCRIPT" W0 >/dev/null 2>&1
-	[ -f "$FRAGMENT" ] && git -C "$REPO_ROOT" checkout -- "$FRAGMENT" 2>/dev/null
-}
-trap final_cleanup EXIT INT TERM
-
 if [ ! -f "$DTS" ]; then
 	echo "SKIP: $DTS not present - run 00-fetch-vendor-sources.sh first to exercise this suite"
 	exit 0
@@ -83,6 +75,32 @@ if [ ! -f "$FRAGMENT" ]; then
 	echo "SKIP: $FRAGMENT not present"
 	exit 0
 fi
+
+# This suite is itself exactly the kind of mutating suite Phase 2's fix
+# requires to preserve exact pre-test state, not reset to a hardcoded
+# baseline - real inconsistency found live while performing this
+# mission's own Phase 6 clean-rebuild proof: this suite's own original
+# cleanup reset both files to W0/R0 unconditionally on exit, the exact
+# anti-pattern it exists to catch in wifi-sdio-variant-tests.sh and
+# preempt-variant-tests.sh. Snapshot the real pre-test bytes, same as
+# those two suites now do, and restore exactly those bytes.
+DTS_PRETEST_SNAPSHOT=$(mktemp)
+FRAGMENT_PRETEST_SNAPSHOT=$(mktemp)
+cp "$DTS" "$DTS_PRETEST_SNAPSHOT"
+cp "$FRAGMENT" "$FRAGMENT_PRETEST_SNAPSHOT"
+
+final_cleanup() {
+	cp "$DTS_PRETEST_SNAPSHOT" "$DTS"
+	cp "$FRAGMENT_PRETEST_SNAPSHOT" "$FRAGMENT"
+	rm -f "$DTS_PRETEST_SNAPSHOT" "$FRAGMENT_PRETEST_SNAPSHOT"
+}
+# Same EXIT/INT/TERM split as the two suites this one tests - a bare
+# `trap final_cleanup INT TERM` runs cleanup but does not itself
+# terminate a POSIX shell process, so execution would otherwise resume
+# at the next group after a signal and re-mutate the just-restored file.
+trap final_cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # --- Group 1: non-baseline preservation (wifi-sdio-variant-tests.sh) ---
 # Starting from W3, running the real suite must not disturb it.

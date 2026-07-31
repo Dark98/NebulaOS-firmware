@@ -80,6 +80,7 @@ cp '/repo/vendor/buildroot-x2000/output/images/rootfs.ext2' '/repo/artifacts/bui
 cp '/repo/vendor/buildroot-x2000/output/images/rootfs.squashfs' '/repo/artifacts/buildroot-halley5-v30-image/rootfs.squashfs'
 cp '/repo/vendor/buildroot-x2000/.config' '/repo/artifacts/buildroot-halley5-v30-image/buildroot.config'
 cp '/repo/vendor/buildroot-x2000/output/build/linux-custom/.config' '/repo/artifacts/buildroot-halley5-v30-image/kernel.config'
+cp '/repo/vendor/x2000_kernel_6.6/kernel/kernel-6.6/module_drivers/dts/x2000/halley5_v30.dts' '/repo/artifacts/buildroot-halley5-v30-image/halley5_v30.dts'
 chown $HOST_UID:$HOST_GID /repo/artifacts/buildroot-halley5-v30-image/*
 "
 

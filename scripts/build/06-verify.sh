@@ -347,6 +347,8 @@ check /lib/firmware/brcm/brcmfmac43430-sdio.txt
 echo "=== camera ==="
 check /usr/bin/ustreamer
 check /etc/init.d/S50webcam
+check /etc/nebulaos-camera-idle-controller.sh
+check /etc/init.d/S51nebulaos-camera-idle-controller
 
 echo "=== app stack ==="
 # FIRMWARE.md sec 23 (2026-07-23): real, previously-silent bug - the

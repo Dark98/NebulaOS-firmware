@@ -73,6 +73,22 @@ POLL_INTERVAL=5
 RESOLUTION=1920x1080
 DESIRED_FPS=30
 
+# Pre-qualification mission Phase A7 (2026-07-31, C1 candidate - see
+# docs/NEBULAOS_CAMERA_USB_RT_SOURCE_ANALYSIS.md sec 18.16/18.20): an
+# optional, disabled-by-default 15fps qualification mode for the later
+# Wi-Fi-bandwidth/CPU comparison A/B, controlled by an explicit
+# maintenance marker - this does NOT reopen or contradict the real,
+# measured 30fps qualification above; C0 (this file's own already-
+# qualified 30fps default) remains what every build ships unless the
+# marker below is explicitly present. Per the mission's own explicit
+# instruction, do not claim 15fps changes the ~8,000/sec USB SOF
+# interrupt rate - it does not (that rate is tied to VIDIOC_STREAMON
+# being active at all, not the configured frame rate).
+CAMERA_FPS_MODE_MARKER=/usr/data/nebulaos/maintenance/camera-fps-mode
+if [ -f "$CAMERA_FPS_MODE_MARKER" ] && [ "$(cat "$CAMERA_FPS_MODE_MARKER" 2>/dev/null)" = "C1" ]; then
+	DESIRED_FPS=15
+fi
+
 # Print the /dev/videoN path of the first node that is:
 #   - driven by uvcvideo (not the SoC's own jz-rot/vpu-helix/vpu-felix M2M
 #     nodes, which also live under /dev/video*)

@@ -80,20 +80,123 @@
 			   regulator-always-on;
 			   regulator-boot-on;
 		  };
+
+		  /* OpenKE (2026-07-22, FIRMWARE.md sec 44): 3 real GPIO-based fixes in a row
+		   * (wrong pin -> wrong polarity -> pin stolen by uart4's over-wide mux group)
+		   * all left "mmc1: Failed to initialize a non-removable card" byte-identical -
+		   * the card never responds at all, at any frequency. Reconsidered the model
+		   * itself rather than tuning gpio values further: PA01 (wifi_power_on) is a
+		   * shared COMBO-CHIP POWER RAIL per stock's own insmod scripts (soc_msc.sh/
+		   * cywdhd.sh - same gpio referenced by both the mmc host module AND the
+		   * separate wlan chip module), not a per-card reset/wake line the way gpd4
+		   * (WL_REG_ON) is. mmc-pwrseq-simple's reset-gpios models ONE reset concept
+		   * toggled as a single unit with one shared delay - it can't express "this
+		   * rail needs its own independent ramp-up window before the reset line even
+		   * starts toggling". Modeled as its own regulator instead, wired as msc1's
+		   * vmmc-supply - a real, actively-checked property in this exact driver
+		   * (confirmed: ingenic,sdhci already prints "No vmmc regulator found" when
+		   * absent, meaning mmc_regulator_get_supply() is real and already wired into
+		   * this SDHCI-ingenic build, not hypothetical). regulator-always-on +
+		   * -boot-on (same pattern already used by cam_avdd/cam_dvdd/cam_dovdd above)
+		   * gets this GPIO driven to its enabled state at the regulator subsystem's
+		   * own early probe, well before mmc1 ever probes - decoupled from pwrseq's
+		   * post_power_on delay entirely, since a shared rail's real settling time has
+		   * nothing to do with any individual card's reset sequencing. */
+		  /* OpenKE (2026-07-22, FIRMWARE.md sec 52): a LIVE read of PA01 on the
+		   * real, currently-working, currently-associated stock system -
+		   * /sys/kernel/debug/gpio, "gpio-1 (|bt_wifi_power) out lo" - shows raw
+		   * LOW during real, active WiFi traffic. This directly confirms
+		   * bt_wifi_power_valid_level=0 (cywdhd.ko's own insmod parameter,
+		   * always available but never previously verified against a live
+		   * read): raw LOW is the real enabled state for this shared rail, not
+		   * raw HIGH as GPIO_ACTIVE_HIGH + regulator-always-on/-boot-on below
+		   * assumed - the same class of unverified-polarity mistake sec 50 found
+		   * and fixed for WL_REG_ON, on the OTHER real GPIO this investigation
+		   * has touched, discovered by finally checking stock's own live state
+		   * directly instead of inferring from a module-parameter name.
+		   * enable-active-high below was always a no-op on this kernel's
+		   * drivers/regulator/fixed.c - of_get_fixed_voltage_config() never
+		   * reads it, only the gpio cell's own active-flag controls polarity -
+		   * removed along with the fix so nothing misleading is left behind. */
+		  wifi_bt_power: wifi_bt_power_regulator {
+			   compatible = "regulator-fixed";
+			   regulator-name = "wifi_bt_power";
+			   regulator-min-microvolt = <3300000>;
+			   regulator-max-microvolt = <3300000>;
+			   gpio = <&gpa 1 GPIO_ACTIVE_LOW INGENIC_GPIO_NOBIAS>;
+			   regulator-always-on;
+			   regulator-boot-on;
+		  };
 };
 
+/* OpenKE (2026-07-23): was status="okay" with pinctrl-0 = <&uart0_pd> (gpd 23-26), which
+ * hard-conflicts with msc0_8bit (gpd 17-26) - the real eMMC boot storage, already confirmed
+ * essential above. dmesg showed "pin GPD-23 already requested by 13450000.msc; cannot claim
+ * for 10030000.serial" every boot; msc0 always wins the pin so nothing actually broke, but
+ * nothing in this project uses uart0 either (unlike uart1/uart3/uart4, all documented real
+ * links above) - disabling it outright removes the conflict instead of just tolerating it. */
 &uart0 {
+	status = "disable";
+};
+
+/* OpenKE (2026-07-21, FIRMWARE.md sec 43): real, confirmed gap - this board file never
+ * referenced &uart1 at all, unlike every other uart actually in use here. Klipper's own
+ * printer.cfg confirms /dev/ttyS1 is the real serial link to the printer's mainboard MCU
+ * ([mcu] serial:/dev/ttyS1, vendor/device-backups/printer_data_config/printer.cfg) - the
+ * base x2000.dtsi leaves uart1 with no explicit status property at all (defaults to
+ * enabled per devicetree spec), but without this pinctrl assignment the physical TX/RX
+ * pins were never actually muxed to the UART1 function, only the controller itself being
+ * nominally "on".
+ *
+ * OpenKE (2026-07-23, stock-parity audit): the fix above used x2000-pinctrl.dtsi's own
+ * uart1_pc (gpc 21-24, a 4-pin TX/RX/RTS/CTS group - the SoC vendor SDK's only defined
+ * uart1 group) on the assumption it was the sole option. Live evidence disproved that:
+ * pulled and decoded the real, running stock device's own live pinctrl debugfs
+ * (artifacts/parity/stock/42-debugfs-pinctrl-pinmux-pins.txt) and stock's uart1 only ever
+ * claims gpc 23-24 (2 pins, TX/RX only) - gpc 21/22 are never touched by uart1 on stock.
+ * Worse, gpc 21 is a REAL, ACTIVE conflict on custom: simultaneously claimed by uart1's
+ * alt-function *and* by lcd_vdd_en (the LCD power-enable line) as a plain GPIO output,
+ * confirmed from the same live boot's own debugfs GPIO capture
+ * (artifacts/parity/custom/40-debugfs-gpio.txt). Harmless so far only because Klipper's
+ * MCU protocol doesn't use hardware flow control - not because the conflict isn't real.
+ * uart1_pc_txrx below is a board-local 2-pin group (gpc 23-24 only, same FUNCTION1 mux
+ * value as uart1_pc) matching stock's real, narrower wiring exactly - see
+ * docs/PIN_OWNERSHIP_MAP.md and docs/PRINTER_MAINBOARD_PRECONNECTION_CHECKLIST.md. The
+ * printer mainboard was never connected for any of this - pinmux/live-pin-state audit
+ * only, real MCU handshake still untested. */
+&uart1_pin {
+	uart1_pc_txrx: uart1-pc-txrx {
+		ingenic,pinmux = <&gpc 23 24>;
+		ingenic,pinmux-funcsel = <PINCTL_FUNCTION1>;
+	};
+};
+
+&uart1 {
 	status = "okay";
 	pinctrl-names = "default";
-	pinctrl-0 = <&uart0_pd>;
+	pinctrl-0 = <&uart1_pc_txrx>;
 };
 
 &uart2 {
 	status = "disable";
 };
 
+/* 2026-07-23 (final cleanup mission, Phase 3, Path A): status flipped to
+ * "disabled". The pin-sharing analysis below stands unchanged and is the
+ * reason this is a clean disable rather than a real fix - i2c4/touch always
+ * wins the GPC-25/26 race (confirmed every boot), so this node was
+ * unconditionally, guaranteedly going to fail its own pinctrl apply, every
+ * single boot, forever, in its previous "okay" state. That's real, avoidable
+ * noise ("pin GPC-25 already requested by 10054000.i2c; cannot claim for
+ * 10033000.serial", "Error applying setting, reverse things back") for a
+ * node that was never going to succeed anyway - not a case of "might work
+ * this time." Disabling it doesn't lose anything: BT never worked over this
+ * node regardless of its status here. Preserved in full below for whoever
+ * eventually implements the real fix (stock's own dynamic runtime pin
+ * hand-off, not a static devicetree change) - see docs/BOOT_WARNING_AUDIT.md.
+ */
 &uart3 {
-	status = "okay";
+	status = "disabled";
 	pinctrl-names = "default";
 	pinctrl-0 = <&uart3_pc>;
 
@@ -108,10 +211,49 @@
 	 * Broadcom path. No enable-gpios property: no dedicated BT reset/
 	 * enable pin has been confirmed live (only the shared WiFi-side
 	 * regulator/reset in &msc1's wlan_pwrseq below is confirmed) - the
-	 * driver treats this as optional and skips GPIO toggling if absent. */
+	 * driver treats this as optional and skips GPIO toggling if absent.
+	 *
+	 * OpenKE (2026-07-23): uart3_pc (gpc 25-26) is the SAME two physical pins
+	 * as i2c4_pc (&i2c4 below, real touchscreen bus) - confirmed by resolving
+	 * both pinctrl phandles in the real stock device's own live DTB: identical
+	 * <bank 25 26>, only the funcsel differs (uart3 FUNCTION0 vs i2c4 FUNCTION1).
+	 * Stock's own DTB has this exact same dual-claim on both nodes - this is a
+	 * genuine hardware pin-sharing design, not a bug in this file. Since both
+	 * this node and &i2c4 are statically "okay" here, whichever driver probes
+	 * first wins the pin permanently (currently i2c4/touch, confirmed via
+	 * dmesg: "pin GPC-25 already requested by 10054000.i2c; cannot claim for
+	 * 10033000.serial"), and this uart3 node's own pinctrl apply silently
+	 * fails - BT will not actually work over these pins while touch is active.
+	 * Stock resolves this by dynamically re-muxing at runtime when the user
+	 * actually invokes bt_enable_bsa.sh (releasing i2c4's claim first), not by
+	 * having both statically enabled at boot the way this file does. Properly
+	 * supporting BT here needs the same kind of runtime pin hand-off, not a
+	 * static devicetree change - moving this project's &i2c4 to its i2c4_pd
+	 * alternate (gpd 0-1) was considered and rejected: stock's real DTB never
+	 * references i2c4_pd, only i2c4_pc, so there's no confirmation those
+	 * alternate pins are physically wired to the NS2009 touch chip on this
+	 * board - moving it would risk silently breaking the touchscreen (a
+	 * confirmed, load-bearing peripheral) to maybe fix BT (never confirmed
+	 * working against real mainboard hardware at all). Left as-is; touch wins,
+	 * BT stays a known, real, unfixed limitation until someone implements the
+	 * dynamic hand-off. */
 	bluetooth {
 		compatible = "openke,bcm4343x-bt";
 	};
+};
+
+/* Console UART. Had no override at all before 2026-07-20 - uart4 defaults to
+ * status="disabled" in x2000.dtsi, meaning console=ttyS4 in the kernel cmdline
+ * would have produced zero output on real hardware. pinctrl-0 confirmed
+ * against the real device's own live device tree (pulled via
+ * /sys/firmware/fdt, decompiled with dtc) - the stock board's uart4 uses
+ * pinctrl group uart4-pa, physical pins PA2/PA3. This tree's own uart4_pa
+ * (gpa 0-3) is a superset covering the same two pins, so no new pinctrl node
+ * was needed, just this missing board-level override. */
+&uart4 {
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&uart4_pa>;
 };
 
 &cpufreq {
@@ -143,8 +285,17 @@
 };
 */
 
+/* Real, safety-relevant fix (found while answering a hardware question about
+ * connecting to the J1 UART header, 2026-07-20): this was GPIO_VOLTAGE_1V8,
+ * but the real device's own live device tree (pulled via /sys/firmware/fdt
+ * earlier this project) shows Port A is actually provisioned for 3.3V
+ * (ingenic,gpa_voltage = <0x02> = GPIO_VOLTAGE_3V3, decoded from the real
+ * enum in ingenic-gpio.h). A voltage-domain mismatch on this bank is a
+ * plausible (not confirmed) contributor to the first real boot attempt's
+ * early failure - independent of that, it's simply wrong for the real
+ * hardware and needed fixing regardless. */
 &pinctrl {
-	ingenic,gpa_voltage = <GPIO_VOLTAGE_1V8>;
+	ingenic,gpa_voltage = <GPIO_VOLTAGE_3V3>;
 };
 
 &i2c3 {
@@ -156,10 +307,48 @@
 	 * (confirmed live via /sys/bus/i2c/devices/4-0048/name on the real printer).
 	 * The reference v30 board disables this bus; our board customization needs it. */
 	status = "okay";
+	/* OpenKE (2026-07-20, FIRMWARE.md sec 32): pinctrl-0 was missing entirely here - the
+	 * base x2000.dtsi's own i2c4 node has none either, and this override never added one.
+	 * Found by pulling and decoding the real stock device's own live /sys/firmware/fdt: its
+	 * i2c4 node references a real "i2c4-pc" pinmux group - which already exists in our own
+	 * x2000-pinctrl.dtsi as i2c4_pc, just never wired up. Without this, the bus may not
+	 * actually be muxed to the real physical pins at all - same class of bug as msc0 above. */
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2c4_pc>;
 
 	ns2009@48 {
 		compatible = "nsiway,ns2009";
 		reg = <0x48>;
+		/* ke-mainline-klipper touch mission: the upstream ns2009.c driver
+		 * gates touch detection purely on the Z1 pressure ADC channel
+		 * (>=80 threshold), which was proven live (temporary
+		 * pr_info_ratelimited instrumentation) to read exactly 0 on every
+		 * poll on this real board, regardless of touch state - the pure
+		 * software-polling approach never detects a press.
+		 *
+		 * Stock's closed ns2009_touch.ko uses a completely different,
+		 * interrupt-driven architecture instead (devm_request_threaded_irq,
+		 * confirmed via disassembly symbols ns2009_hard_irq/ns2009_soft_irq,
+		 * and a real "Unbalanced enable for IRQ 74" kernel warning seen
+		 * live during stock's own ns2009_open()). Its I2C read commands
+		 * for X/Y (0xc0/0xd0) are byte-identical to this driver's, proven
+		 * via relocation-verified disassembly of stock's own soft-irq
+		 * handler - so the coordinate read path itself is not in question,
+		 * only how a press is detected in the first place.
+		 *
+		 * This exact GPIO was identified the same way, not guessed:
+		 * disassembly of stock's addirq() function shows a proven
+		 * relocation-confirmed call chain `gpio_to_desc(79)` ->
+		 * `gpiod_to_irq()` -> `devm_request_threaded_irq()`. Raw GPIO 79
+		 * decodes to GPIOC pin 15 under this project's own established
+		 * bank*32+pin convention (confirmed elsewhere via GPIO85=PC21).
+		 * A live register snapshot during a real, confirmed touch did not
+		 * show a level change on this pin - inconclusive, not
+		 * disconfirming: a single devmem snapshot over SSH can easily miss
+		 * a brief edge pulse, which is exactly what an interrupt-driven
+		 * design would produce. Physically validate this change before
+		 * keeping; revert if it doesn't fix real touch input. */
+		pendown-gpios = <&gpc 15 GPIO_ACTIVE_LOW INGENIC_GPIO_NOBIAS>;
 	};
 };
 
@@ -178,9 +367,21 @@
 		compatible = "openke,general-480x272";
 		/* GPIO roles + pin numbers confirmed live on the real device via
 		 * /sys/module/lcd_general_480x272/parameters/{gpio_lcd_power_en,gpio_lcd_rst}
-		 * (PC21, PB16). Polarity NOT confirmed - GPIO_ACTIVE_HIGH is a guess,
-		 * easy to flip here without a rebuild if the panel powers up inverted. */
-		ingenic,vdd-en-gpio = <&gpc 21 GPIO_ACTIVE_HIGH INGENIC_GPIO_NOBIAS>;
+		 * (PC21, PB16).
+		 *
+		 * ingenic,vdd-en-gpio (PC21) deliberately omitted - real, live,
+		 * stock-parity evidence (not a guess): with the exact real
+		 * lcd_general_480x272.ko loaded and lcd_is_inited=1 (display
+		 * genuinely working, confirmed visually), stock's own live GPIO
+		 * state for this exact pin is input, reading low - stock never
+		 * holds it as a driven output in its steady state, unlike this
+		 * driver's previous unconditional gpio_direction_output(..., 1)
+		 * at probe with no release. This DT node omitting the property
+		 * is what makes panel-openke-general-480x272.c's own existing
+		 * gpio_is_valid() guards skip requesting/driving it at all,
+		 * matching stock's observed hands-off steady state exactly - not
+		 * a polarity change, a real ownership-parity test.
+		 */
 		ingenic,rst-gpio = <&gpb 16 GPIO_ACTIVE_HIGH INGENIC_GPIO_NOBIAS>;
 	};
 };
@@ -216,60 +417,164 @@
 };
 
 &msc0 {
-	status = "disable";
-	/*mmc-hs200-1_8v;*/
+	/* OpenKE (2026-07-20, FIRMWARE.md sec 31/32): this is the real eMMC - confirmed by pulling
+	 * the actual live stock device's own /sys/firmware/fdt and decoding it with dtc. Stock has
+	 * this exact node (0x13450000) status="okay", 8-bit bus, mmc-hs200-1_8v, 100MHz,
+	 * non-removable - while msc1 (WiFi/SDIO) and msc2 (SD slot) are BOTH disabled on stock's own
+	 * DTB. This board file had it backwards: msc0 disabled (as a 4-bit, no-pinctrl template) while
+	 * msc2 (actually the SD card slot - has cd-gpio/wp-gpio/sd-uhs-sdr104, all SD-slot-only
+	 * properties) was left enabled instead. This is why the real xImage boot test (sec 31) got
+	 * all the way into userspace init but then hung forever at "Waiting for root device
+	 * /dev/mmcblk0p8..." - msc2's controller registered fine (it's a real, working SDHCI
+	 * instance) but had no eMMC card to attach, since the actual storage sits on msc0, which was
+	 * never even probed. pinctrl-0 = <&msc0_8bit> (real phandle, resolved from the live DTB's own
+	 * pinctrl-0 = <0x13>) was also completely missing before - msc1/msc2 both had one, msc0 had
+	 * none at all.
+	 */
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&msc0_8bit>;
+	mmc-hs200-1_8v;
 	cap-mmc-highspeed;
 	non-removable;
-	max-frequency = <50000000>;
-	bus-width = <4>;
-	non-removable;
+	max-frequency = <100000000>;
+	bus-width = <8>;
 	voltage-ranges = <1800 3300>;
 
 	/* special property */
+	ingenic,wp-gpios = <0>;
+	ingenic,cd-gpios = <0>;
 	ingenic,rst-gpios = <0>;
 };
 
 &msc1 {
 	status = "okay";
+	/* OpenKE (2026-07-22, FIRMWARE.md sec 52): reverted back to the base "ingenic,sdhci"
+	 * compatible (sdhci-ingenic.c) - sec 47's "wrong driver entirely" finding was itself
+	 * wrong. Disassembled the real, live, WORKING soc_msc.ko off the stock device (not
+	 * just cywdhd.ko this time) and its own symbol table proves stock's msc1 driver IS
+	 * sdhci-ingenic.c: real sdhci_ingenic_probe/sdhci_ingenic_set_clock/
+	 * sdhci_ingenic_power_set symbols, calling genuine sdhci_add_host()/sdhci_reset(),
+	 * PLUS real exported jzmmc_clk_ctrl/jzmmc_manual_detect symbols - proving this
+	 * driver family DOES support manual detection on stock, contrary to the sec 47
+	 * assumption. Confirmed our own sdhci-ingenic.c already has the matching
+	 * architecture: cd_type==SDHCI_INGENIC_CD_PERMANENT (from the "non-removable"
+	 * property below) sets MMC_CAP_NONREMOVABLE + SDHCI_QUIRK_BROKEN_CARD_DETECTION at
+	 * probe time, and sdhci_ingenic_mmc_manual_detect() (renamed from
+	 * ingenic_mmc_manual_detect in sec 47, exported, in manual_list unconditionally)
+	 * flips SDHCI_DEVICE_DEAD and calls mmc_detect_change() - the real, same mechanism
+	 * stock uses. ingenic_mmc.c (sec 47-51's whole investigation) was never stock's
+	 * actual msc1 driver at all - it's a different, unrelated Ingenic MSC-register-model
+	 * driver that happens to also export functions named jzmmc_manual_detect/
+	 * jzmmc_clk_ctrl, which is what caused the original misdirection once cywdhd.ko's
+	 * disassembly turned up those two names. */
+	compatible = "ingenic,sdhci";
+	/* OpenKE (2026-07-22, FIRMWARE.md sec 44): 4 real fixes to the reset/power gpios
+	 * (wrong pin, wrong polarity, pin stolen by uart4's mux group, wrong power model)
+	 * all left "mmc1: Failed to initialize a non-removable card" byte-identical -
+	 * confirmed via a decompiled build-output .dtb that every one of those fixes DID
+	 * compile in correctly, so the bug was never "did the change apply", something
+	 * else was still missing. rtc32k_enable/rtc32k_disable (x2000-pinctrl.dtsi) mux
+	 * gpe23 to either its real clock-output function (PINCTL_FUNCTION0) or a forced
+	 * GPIO-low state (PINCTL_FUNCLOLVL) - a real, physical 32kHz reference clock
+	 * pin, almost certainly shared with the WiFi/BT combo chip's own sleep clock
+	 * (the vendor's own out-of-tree ingenic_sdio.c has a whole rtc32k_enable()/
+	 * atomic-refcounted mechanism built around this exact pin, called specifically
+	 * from its wlan power-on path - a real, physical precondition, not incidental).
+	 * "default" (pinctrl-0, auto-selected by the driver core with zero driver code
+	 * needed, before sdhci-ingenic's own probe() even runs) had rtc32k_disable
+	 * bundled into it - the clock was being forced OFF automatically at every boot,
+	 * and nothing in this build's mainline brcmfmac path (unlike the vendor's own
+	 * bcmdhd path we deliberately don't use) ever selects the "enable" state
+	 * instead. If the chip genuinely needs this clock running to respond to
+	 * anything at all, this alone would explain zero response regardless of every
+	 * reset/power gpio being individually correct. */
+	/* OpenKE (2026-07-22, FIRMWARE.md sec 48): pinctrl-0 above used to also include
+	 * <&rtc32k_enable> (sec 45's fix for the "clock forced off at boot" theory) - but
+	 * stock's own real reference devicetree (vendor/x2000_kernel, the genuine 4.94 SDK
+	 * source stock was actually built from, as opposed to guessing) has pinctrl-0 =
+	 * <&msc1_4bit> ONLY, with rtc32k_enable/disable used exclusively via the dynamic
+	 * pinctrl-1/pinctrl-2 states, switched at runtime by actual rtc32k_enable()/
+	 * rtc32k_disable() function calls, never forced into the default/boot state. Real,
+	 * source-verified divergence, not a guess - reverted to match. sd-uhs-sdr104 and the
+	 * two "special property" ingenic,*-gpios placeholders below are also copied verbatim
+	 * from that same real reference node for exact fidelity. */
 	pinctrl-names ="default","enable", "disable";
-	pinctrl-0 = <&msc1_4bit> , <&rtc32k_disable>;
+	pinctrl-0 = <&msc1_4bit>;
 	pinctrl-1 = <&rtc32k_enable>;
 	pinctrl-2 = <&rtc32k_disable>;
 
+	sd-uhs-sdr104;
 	cap-mmc-highspeed;
 	max-frequency = <100000000>;
 	bus-width = <4>;
 	voltage-ranges = <1800 3300>;
 	non-removable;
+	vmmc-supply = <&wifi_bt_power>;
 
 	ingenic,sdio_clk = <1>;
 	keep-power-in-suspend;
+	ingenic,sdr-gpios = <0>;
+	ingenic,rst-gpios = <0>;
 	ingenic,removal-manual;
 
-	/* mainline brcmfmac wiring, added alongside the vendor's own bcmdhd_wlan node below
-	 * (left in place, inert, in case that driver is ever reconsidered instead). Real chip
-	 * confirmed live on the actual printer: Cypress CYW43438, SDIO, vendor:device 02D0:A9A6
-	 * (see FIRMWARE.md sec 6). WL_REG_ON is the same physical GPIO the vendor node already
-	 * names (gpd 1) - reset-gpios is ACTIVE_LOW here because mmc-pwrseq-simple's "reset"
-	 * semantics are inverted from the vendor's own "reg_on" naming (asserted=held-off,
-	 * matching the same real-world convention used for this exact class of chip on e.g.
-	 * Raspberry Pi's own device tree) - not independently hardware-verified, flagged as a
-	 * real assumption to confirm once this actually boots. */
-	mmc-pwrseq = <&wlan_pwrseq>;
+	/* OpenKE (2026-07-21, FIRMWARE.md sec 44): gpd 1 / gpd 0 below were WRONG - not a
+	 * guess, a confirmed hardware fact. Extracted stock's own out-of-tree module-loading
+	 * scripts (module_driver/soc_msc.sh, cywdhd.sh) from a real full-disk backup
+	 * (nebula_system_backup.bin's rootfs partition) and read the vendor's own insmod
+	 * parameters verbatim: wifi_reg_on=PD04 (port D pin 4, NOT pin 1), and
+	 * gpio_wlan_wake_host=PE02 (port E pin 2) - independently cross-confirmed against
+	 * this exact board's own stock-boot-reference-log.txt line
+	 * "[clooney]dhd_init_gpio_wlan_hostwake: WL_HOST_WAKE=130" (port E is the 5th gpio
+	 * chip, index 4: 4*32+2 = 130, exact match). There is also a THIRD gpio these scripts
+	 * reference that had no equivalent anywhere in this file at all: wifi_power_on /
+	 * gpio_bt_wifi_power = PA01 (port A pin 1), a separate shared power-rail enable for
+	 * the combo chip.
+	 *
+	 * OpenKE (2026-07-22): pin numbers alone (real-hardware tested) did NOT fix WiFi -
+	 * identical "Failed to initialize a non-removable card" persisted. Root cause: the
+	 * active-flag polarity below was backwards. Traced drivers/mmc/core/pwrseq_simple.c's
+	 * actual logical sequence: pre_power_on() sets the gpio array to logical 1 (asserted/
+	 * held-off), post_power_on() sets logical 0 (released) THEN sleeps - the chip is
+	 * expected to be truly enabled at logical-0, since that's the state held throughout
+	 * actual SDIO enumeration. GPIO_ACTIVE_HIGH means logical value == physical level
+	 * (no inversion); GPIO_ACTIVE_LOW inverts. The vendor's own insmod params give the
+	 * real enable level per pin - or so this reasoning assumed from the module
+	 * parameter *names* alone, without ever disassembling the real driver to check.
+	 *
+	 * OpenKE (2026-07-22, FIRMWARE.md sec 50): that assumption was wrong. Disassembling
+	 * stock's actual, live cywdhd.ko (bcm_wlan_power_on()/bcm_wlan_power_off()) shows
+	 * the real instruction sequence writes raw GPIO value 1 (physical HIGH) as the
+	 * enabled state on gpd 4/WL_REG_ON, and raw 0 (LOW) as held/reset - the opposite of
+	 * what "wifi_reg_on_level=0" was assumed to mean here. gpd 4 below is fixed to
+	 * GPIO_ACTIVE_LOW (so post_power_on's logical-0 release lands on the real,
+	 * disassembly-proven physical-HIGH enabled state) - see the reset-gpios comment
+	 * for the full trace. */
+	/* OpenKE (2026-07-22, FIRMWARE.md sec 51): moved WL_REG_ON out of
+	 * mmc-pwrseq-simple entirely - sec 50's live instrumentation proved
+	 * mmc_power_up() genuinely runs pwrseq's full pre/post_power_on sequence
+	 * (power_mode transitions 0->2) with the descriptor confirmed correctly
+	 * flagged ACTIVE_LOW, yet the physical pin never reached raw HIGH -
+	 * mmc_pwrseq_simple's own GPIO-array write path
+	 * (mmc_pwrseq_simple_set_gpios_value()/gpiod_set_array_value_cansleep())
+	 * isn't reaching the pin on this platform. Rather than debug that generic
+	 * framework further, sdhci-ingenic.c now acquires and drives this GPIO
+	 * directly via "wlan-reg-on-gpios" below, using raw GPIO calls
+	 * (gpiod_set_raw_value_cansleep(), never gpiod_set_value_cansleep()) so no
+	 * descriptor active-flag translation can invert stock's real, disassembly-
+	 * proven sequence: raw LOW (held/reset) -> 100ms -> raw HIGH (enabled) ->
+	 * detect immediately - see ingenic_mmc_manual_detect() in sdhci-ingenic.c.
+	 * The active flag on this property is documentation only, not load-
+	 * bearing, since every access is raw. */
+	wlan-reg-on-gpios = <&gpd 4 GPIO_ACTIVE_HIGH INGENIC_GPIO_NOBIAS>;
 
 	bcmdhd_wlan: bcmdhd_wlan {
 		 compatible = "android,bcmdhd_wlan";
-		 gpio_wl_reg_on = <&gpd 1 GPIO_ACTIVE_HIGH INGENIC_GPIO_NOBIAS>;
-		 gpio_wl_host_wake = <&gpd 0 GPIO_ACTIVE_HIGH INGENIC_GPIO_NOBIAS>;
+		 gpio_wl_reg_on = <&gpd 4 GPIO_ACTIVE_LOW INGENIC_GPIO_NOBIAS>;
+		 gpio_wl_host_wake = <&gpe 2 GPIO_ACTIVE_HIGH INGENIC_GPIO_NOBIAS>;
 	};
 };
 
-/ {
-	wlan_pwrseq: wlan_pwrseq {
-		compatible = "mmc-pwrseq-simple";
-		reset-gpios = <&gpd 1 GPIO_ACTIVE_LOW>;
-	};
-};
 
 &msc2 {
 	status = "okay";
@@ -288,6 +593,34 @@
 	ingenic,rst-gpio = <0>;
 };
 
+/* OpenKE (2026-07-23, stock-parity audit): disabled - inherited Halley5
+ * reference-board MSC2/microSD config with no evidence it belongs on this
+ * board. Stock's own live device tree never enables msc2 at all (Phase 1/2
+ * runtime and DTB comparison, docs/DTB_PARITY_REPORT.md); no physical SD
+ * slot has been identified on the Nebula Pad PCB; and its ingenic,sdr-gpio
+ * property above claims &gpc 0 - the exact same pin pwm0_pc uses for its
+ * only real PWM alternate function on this SoC, and the same pin stock's
+ * own live GPIO dump labels backlight_pwm0. Confirmed real, not
+ * speculative: driven as a plain GPIO output HIGH by msc2 on every custom
+ * boot before this fix, with no separate backlight_pwm0 GPIO claim
+ * present at all (docs/PIN_OWNERSHIP_MAP.md). This override (a later
+ * &msc2 block always wins over the earlier one's status for the same
+ * property) turns the controller off without deleting the reference
+ * node's properties, so the real pin numbers stay documented in one place
+ * if a genuine microSD slot is ever confirmed on a future board
+ * revision. */
+&msc2 {
+	/* OpenKE (2026-07-23): "disabled" is the real devicetree-spec value
+	 * (along with "okay"/"fail"/"fail-sss") - "disable" elsewhere in this
+	 * file (uart0, uart2, spi0, nemc, ...) is pre-existing, non-canonical,
+	 * and still functions correctly under this kernel's own
+	 * of_device_is_available() check (anything != "okay" is unavailable),
+	 * but this node is new enough this session to just use the correct
+	 * value outright rather than copy a convention worth fixing on its
+	 * own, unrelated to MSC2. */
+	status = "disabled";
+};
+
 &nemc {
 	status = "disable";
 	pinctrl-names = "default";
@@ -295,11 +628,19 @@
 };
 
 
+/* 2026-07-23 (boot-cleanup audit): no RJ45/wired-Ethernet port exists on Nebula
+ * Pad - this node is inherited reference-design boilerplate. Its own
+ * ingenic,rst-gpio (GPB-16) collides with lcd_rst, which already owns that
+ * pin for the display (confirmed live: gpio-48 "lcd_rst" out hi) - the real,
+ * populated consumer. Boot log showed "MII Probe failed"/"no PHY found",
+ * consistent with no PHY chip being present at all. Disabled rather than
+ * left enabled-but-failing; see docs/BOOT_WARNING_AUDIT.md.
+ */
 &mac1 {
 	pinctrl-names = "default", "reset";
 	pinctrl-0 = <&mac1_rgmii_p0_normal>, <&mac1_rgmii_p1_normal>;
 	pinctrl-1 = <&mac1_rgmii_p0_rst>, <&mac1_rgmii_p1_normal>;
-	status = "okay";
+	status = "disabled";
 	ingenic,rst-gpio = <&gpb 16 GPIO_ACTIVE_LOW INGENIC_GPIO_NOBIAS>;
 	ingenic,rst-ms = <10>;
 	ingenic,rst-delay-ms = <15>;
@@ -317,8 +658,22 @@
 	*/
 };
 
+/* 2026-07-23 (boot-cleanup audit, Phase 9): disabled - "unknown flash type" /
+ * probe failure -22 on every boot, on both stock and custom. Converging
+ * evidence this SPI-NOR/NAND controller has no populated flash chip on this
+ * board revision: /proc/mtd is empty (header only, zero devices) and
+ * /sys/class/mtd has zero entries on BOTH systems; /sys/bus/spi/devices only
+ * ever shows spi2.0 (the already-documented, unrelated FACTORY_TEST_DEVICE
+ * spidev placeholder) on stock, nothing SFC-related on either. The node's
+ * own norflash@0 child defines a uboot/kernel/rootfs partition scheme that
+ * doesn't match this board's real, extensively-verified eMMC-based OTA A/B
+ * boot architecture (kernel/kernel2/rootfs/rootfs2/ota on mmcblk0) -
+ * consistent with unmodified reference-design boilerplate for a board
+ * variant that boots from SPI-NOR instead. Classification:
+ * UNPOPULATED_REFERENCE_DESIGN_BLOCK - see docs/BOOT_WARNING_AUDIT.md.
+ */
 &sfc {
-	status = "okay";
+	status = "disabled";
 	pinctrl-names = "default";
 	pinctrl-0 = <&sfc_pe>;
 	ingenic,sfc-init-frequency = <200000000>;
@@ -421,21 +776,87 @@
 	status = "okay";
 	/*ingenic,id-dete-gpio = <&gpd 18 GPIO_ACTIVE_LOW INGENIC_GPIO_NOBIAS>; Shares pins with msc1*/
 	ingenic,vbus-dete-gpio = <&gpd 17 GPIO_ACTIVE_LOW INGENIC_GPIO_NOBIAS>;
-	ingenic,drvvbus-gpio = <&gpe 22 GPIO_ACTIVE_HIGH INGENIC_GPIO_NOBIAS>;
+	/* OpenKE (2026-07-21, FIRMWARE.md sec 42): wrong pin - real, live-confirmed via stock's
+	 * own decompiled DTB (vendor/device-backups/stock-live-device-tree.dtb): stock's real,
+	 * working drvvbus-gpio is gpc pin 9 (raw value <0x07 0x09 0x01 0x00>, phandle 0x07 = gpc
+	 * confirmed against stock's own gpio-bank phandle table), not gpe pin 22. Both our tree
+	 * and stock's use the exact same driver here (compatible "ingenic,usbphy-x2000" /
+	 * "ingenic,x2000-dwc2-hsotg" match on both sides, confirmed via stock's own live dmesg
+	 * showing serial number "13500000.otg_new" - same modern driver, just not suffixed here
+	 * since this tree only ever has the one variant) - this was never a "wrong driver"
+	 * problem, just the wrong physical pin on the right node the whole time. */
+	ingenic,drvvbus-gpio = <&gpc 9 GPIO_ACTIVE_HIGH INGENIC_GPIO_NOBIAS>;
+};
+
+/* 2026-07-23 (functional production-baseline mission, Phase 1/2): the entire PCM/ALSA
+ * audio graph below is disabled - Phase 1 of this mission booted the exact stock Nebula
+ * Pad firmware and found conclusive, converging evidence that stock never uses ALSA at
+ * all, not merely that this specific board revision doesn't populate a speaker:
+ *
+ *   - stock dmesg: "ALSA device list: No soundcards found." - the ASoC card never even
+ *     attempts to register, and none of icodec/as-baic/as-dsp/as-mixer/as-spdif/DMIC ever
+ *     print a probe message (the only "sound"-adjacent dmesg hits are the unrelated video
+ *     codec blocks, "13300000.felix vcodec"/"13200000.helix").
+ *   - /proc/asound/cards: "--- no soundcards ---"; /proc/asound/pcm: empty; the only
+ *     /proc/asound/devices entry is the generic ALSA sequencer timer (always present,
+ *     card-independent) - and /dev/snd contains only that same "timer" node.
+ *   - stock DOES ship a complete, real, carefully-tuned volume-control script
+ *     (/usr/bin/audio_setting.sh, real dB-step arrays, `amixer -D hw:icodecsoundcard`,
+ *     `alsactl store`) and a dedicated `audio-server` binary that references it - but
+ *     `audio-server` is not running (ps shows nothing), is not started by any
+ *     /etc/init.d/S* script, and stock's real, active production stack is Klipper +
+ *     GuppyScreen (S55klipper_service, S56moonraker_service, S99guppyscreen) - the whole
+ *     app-server/audio-server/display-server/master-server/web-server/wifi-server binary
+ *     family is inactive legacy-reference code from an earlier internal architecture,
+ *     present on the shared rootfs image but never wired into this product's own boot
+ *     sequence. Its presence on disk is not evidence of use.
+ *
+ * This supersedes the 2026-07-23 (beeper/BAIC4 audio investigation) note that kept
+ * as_be_baic/icodec enabled pending exactly this stock-evidence question - it's now
+ * answered, negatively, for the whole subsystem, not just BAIC4. The previously-confirmed
+ * real, independent PWM beeper (GPC-3/PWM channel 3, guppybeep, direct /dev/mem MMIO,
+ * entirely bypassing ALSA/kernel-PWM-subsystem) is completely unaffected by any node below
+ * and needs no audio component to keep working - see docs/BEEPER_CONTROL_PATH.md.
+ *
+ * GPIO 34/Speaker_en (previously classified UNKNOWN_REQUIRES_PCB_EVIDENCE, see
+ * docs/PIN_OWNERSHIP_MAP.md) is resolved by this same disable: the `sound` node below was
+ * its only live consumer, so the property is removed with it rather than left as a
+ * request nothing will ever process.
+ */
+&as_platform {
+	status = "disabled";
+};
+
+&as_virtual_fe {
+	status = "disabled";
+};
+
+&as_fmtcov {
+	status = "disabled";
+};
+
+&as_fe_dsp {
+	status = "disabled";
 };
 
 &as_be_baic {
-	pinctrl-names = "default";
-	pinctrl-0 =  <&baic4_pd>;
+	status = "disabled";
 };
 
 &as_dmic {
-	pinctrl-names = "default";
-	pinctrl-0 = <&dmic_pc_4ch>;
+	status = "disabled";
+};
+
+&as_aux_mixer {
+	status = "disabled";
+};
+
+&as_spdif {
+	status = "disabled";
 };
 
 &icodec {
-	ingenic,spken-gpio = <&gpb 2 GPIO_ACTIVE_HIGH INGENIC_GPIO_NOBIAS>;
+	status = "disabled";
 };
 
 / {
@@ -465,10 +886,14 @@
 		ingenic,wake-gpio = <&gpd 21 GPIO_ACTIVE_HIGH INGENIC_GPIO_NOBIAS>;
 	};
 
+	/* Functional production-baseline mission, Phase 2: disabled along with the rest of
+	 * the PCM/ALSA graph above - see that comment block for the full stock-evidence
+	 * rationale. Machine driver (halley5_v20.c) never probes; ingenic,spken-gpio (GPIO
+	 * 34) removed with it, since this was its only live consumer. */
 	sound {
 		compatible = "ingenic,x2000-sound";
 		ingenic,model = "halley5_v30";
-		ingenic,spken-gpio = <&gpb 2 GPIO_ACTIVE_HIGH INGENIC_GPIO_NOBIAS>;
+		status = "disabled";
 	};
 
 	spi_gpio {
@@ -542,4 +967,25 @@
 	ingenic,gpio-sleep-func1    = <>;
 	ingenic,gpio-sleep-func2    = <>;
 	ingenic,gpio-sleep-func3    = <>;
+};
+
+/* 2026-07-23 (final cleanup mission, Phase 4): disabled - both MScaler
+ * instances register as v4l2_subdev components (mscaler.c), meant to be part
+ * of the SoC's own internal ISP/camera pipeline, not directly opened as a
+ * /dev/videoN capture device the way this project's actual, confirmed
+ * working camera path (a USB UVC webcam via ustreamer) is. Zero userspace
+ * consumer anywhere on this rootfs references "mscaler" or VIDIOC ioctls
+ * against it (grepped live), and /sys/class/video4linux carries no
+ * mscaler-specific node. "IRQ index 0 not found" was already a driver-level
+ * dev_warn (not dev_err - probe continues regardless), and rotation/H.264
+ * encode/decode (the SoC blocks actually confirmed working) are entirely
+ * separate devices unaffected by this. Classification:
+ * UNUSED_REFERENCE_DESIGN_BLOCK - see docs/BOOT_WARNING_AUDIT.md.
+ */
+&mscaler0 {
+	status = "disabled";
+};
+
+&mscaler1 {
+	status = "disabled";
 };

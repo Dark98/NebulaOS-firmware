@@ -90,6 +90,10 @@ start() {
 		. /etc/nebulaos-stable-mac.sh
 		nebulaos_stabilize_iface_mac wlan0 || true
 	fi
+	if [ -f /etc/nebulaos-wifi-power-save.sh ]; then
+		. /etc/nebulaos-wifi-power-save.sh
+		nebulaos_wifi_ps_apply wlan0 || true
+	fi
 	echo "Starting wpa_supplicant on wlan0"
 	mkdir -p /var/run/wpa_supplicant
 	start-stop-daemon -S -b -m -p "$PIDFILE" \

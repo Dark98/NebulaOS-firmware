@@ -464,6 +464,31 @@ REQUIRED_LATER_TEST:
     after idle-pause; GuppyScreen camera-panel behavior specifically.
 ```
 
+> **SUPERSEDED BY LIVE EVIDENCE (2026-08-01, alpha baseline freeze mission)**:
+> the `BEST_CASE` claim above — "near-total elimination of the ~8,000/sec SOF
+> load while no viewer is connected" — was a `SOURCE_DERIVED_ESTIMATE`, never
+> a proven measurement, and live testing has since disproven it. C2 (the
+> shipped implementation of this exact mechanism) was deployed to real
+> hardware and exercised through a full pause/resume cycle; `/proc/interrupts`
+> was read directly while the controller reported the camera genuinely
+> paused. Measured result: **~8,036 IRQ/sec, statistically identical to the
+> always-active baseline (~8,000-8,150/sec) measured throughout this entire
+> project.** The DWC2 SOF interrupt is a USB bus/controller-level heartbeat,
+> not tied to any single endpoint's streaming state — closing the UVC
+> endpoint does not stop it. This paragraph is preserved as the original
+> source-only prediction, not deleted, precisely because it was wrong in an
+> instructive way: the close()/PM-release mechanism itself IS real and
+> proven from source (§8 above), but the inference from "the interface can
+> now autosuspend" to "the SOF interrupt goes away" does not hold in
+> practice on this hardware. See
+> `docs/NEBULAOS_ALPHA_MAX_RT_DEPLOYMENT_REPORT.md`'s `C2_PAUSED_IRQ_RATE`
+> field for the live measurement, and
+> `docs/NEBULAOS_ALPHA_BASELINE.md` for the corrected production guidance.
+> C2 remains a legitimate feature — it stops network camera-stream traffic
+> and the associated ustreamer JPEG-encode CPU work while idle — it is
+> simply not a USB-interrupt-rate mitigation, and must not be described as
+> one going forward.
+
 ### Exit ustreamer entirely while idle (Variant D)
 ```
 BASELINE:
@@ -1189,13 +1214,16 @@ without representative evidence.
   configured frame rate (§7 of the existing camera analysis). Visible
   frame-rate/smoothness loss is a real, direct feature cost.
 - **1080p30 idle pause/resume (Variant C from §10)**: while paused, camera
-  network traffic drops to zero and (per §7-8's already-established
-  mechanism) the USB SOF load also drops to near-zero — this is the same
-  mechanism already analyzed for the camera/USB decision, just restated here
-  for its Wi-Fi-bandwidth angle: pausing removes camera traffic from the
-  shared Wi-Fi link entirely while idle, freeing that bandwidth for
-  Moonraker/Mainsail/GuppyScreen traffic, with the same reopen-latency and
-  reliability risk already documented in §10-11.
+  network traffic drops to zero. **Correction (2026-08-01)**: this section
+  originally also claimed the USB SOF load "drops to near-zero" via the
+  same §7-8 mechanism — live testing has since disproven that specific
+  claim (see the correction note under §10/Variant C above; measured
+  ~8,036 IRQ/sec while genuinely paused, statistically unchanged from the
+  always-active baseline). The Wi-Fi-bandwidth point below is independent
+  and still holds: pausing removes camera traffic from the shared Wi-Fi
+  link entirely while idle, freeing that bandwidth for Moonraker/Mainsail/
+  GuppyScreen traffic, with the same reopen-latency and reliability risk
+  already documented in §10-11.
 
 Later measurements to define (not invented here): network throughput,
 packet loss, latency/jitter, Moonraker WebSocket responsiveness, and
@@ -1448,6 +1476,12 @@ Appends to §16's existing table:
 | Camera 1080p15 always-on | Lower active Wi-Fi bandwidth; no USB SOF-rate change | See §11 | See §11 | See §16 |
 | Camera 1080p30 idle pause | No Wi-Fi bandwidth while paused; same USB-IRQ mechanism as §10's Variant C | See §11 | See §11 | See §16 |
 | PREEMPT_RT with current Wi-Fi module | Wi-Fi itself adds no new RT blocker (Low risk, real in-tree source) | DWC2 remains the dominant risk, unchanged by this finding | High, after camera/USB is frozen | IMPLEMENT_LATER_AB (unchanged from §16, now confirmed not blocked by Wi-Fi) |
+
+> **Correction (2026-08-01)**: the "Camera 1080p30 idle pause" row's "same
+> USB-IRQ mechanism as §10's Variant C" no longer describes a real IRQ-rate
+> reduction — live testing disproved that mechanism (see the correction
+> note in §10/Variant C above). The row's other claim, "no Wi-Fi bandwidth
+> while paused," is unaffected and still holds.
 
 ---
 

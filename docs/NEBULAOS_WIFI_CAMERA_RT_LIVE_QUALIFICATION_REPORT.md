@@ -461,7 +461,17 @@ MMC/SDIO errors, no firmware resets — the mission's own immediate-rejection cr
 No quantitative throughput/latency benefit was measured in the time available; this is
 functional-pass, not a measured-improvement pass.
 
+### B2 (W2, cap-sd-highspeed) — PASS
+
+Same deployment cycle. Boot was fast this time (~1 min uptime observed). `wlan0` MAC identical
+(`16:3b:5d:14:20:90`). `dmesg`: `mmc1: new high speed SDIO card at address 0001`, no MMC/SDIO
+errors, no firmware resets, only the same expected `clm_blob` warning. Standby/not-paused
+confirmed. Camera snapshot HTTP 200. Klipper `state: ready`.
+
+Classification: `SDIO_HIGHSPEED: ACCEPT` (same reasoning as B1 — all immediate-rejection
+criteria pass; no quantitative throughput/latency benefit measured in the time available).
+
 ## Remaining phases
 
-B2, B3 (SDIO), B6 (event-driven association), C2 (camera idle-pause), and B8/B11-B12
+B3 (SDIO, both caps), B6 (event-driven association), C2 (camera idle-pause), and B8/B11-B12
 (PREEMPT_RT) remain, each requiring the same stock↔custom cycle described above.

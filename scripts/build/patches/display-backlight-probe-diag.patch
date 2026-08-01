@@ -50,10 +50,10 @@ index fef6e16fb..6271ffb26 100644
 +obj-$(CONFIG_NEBULAOS_BACKLIGHT_PROBE_DIAG) += nebulaos_backlight_probe_diag.o
 diff --git a/kernel/kernel-6.6/module_drivers/drivers/misc/nebulaos_backlight_probe_diag.c b/kernel/kernel-6.6/module_drivers/drivers/misc/nebulaos_backlight_probe_diag.c
 new file mode 100644
-index 000000000..34d70d5f7
+index 000000000..d43391bf2
 --- /dev/null
 +++ b/kernel/kernel-6.6/module_drivers/drivers/misc/nebulaos_backlight_probe_diag.c
-@@ -0,0 +1,662 @@
+@@ -0,0 +1,698 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * NebulaOS bounded backlight probe diagnostic (DISPLAY-B0-DIAG)
@@ -179,6 +179,21 @@ index 000000000..34d70d5f7
 + *   and "gpio_restore_is_exact: 1" fields (see
 + *   nebulaos_bl_diag_status_show()) so a human operator never has to
 + *   take this claim on faith from a comment alone.
++ *
++ *   UPDATE (NebulaOS PWM state readback mission, 2026-08-xx): pwm-ingenic-
++ *   v2.c now HAS a real .get_state implementation, gated behind
++ *   CONFIG_PWM_INGENIC_V2_GET_STATE (default n - see
++ *   scripts/build/patches/pwm-ingenic-v2-get-state.patch and
++ *   docs/NEBULAOS_PWM_STATE_READBACK_REPORT.md), so the paragraph above
++ *   is no longer universally true of the underlying driver - only of
++ *   this diagnostic's own still-hardcoded "pwm_restore_is_exact: 0"
++ *   field, which has NOT yet been wired up to query that new capability
++ *   (see the TODO comment at nebulaos_bl_diag_status_show()'s
++ *   corresponding seq_puts() call for why that cross-module wiring was
++ *   judged out of scope for a documentation-only edit). Until that TODO
++ *   is resolved, treat "pwm_restore_is_exact: 0" here as a conservative
++ *   floor, not a currently-accurate reflection of pwm-ingenic-v2.c's own
++ *   capability.
 + *
 + * Bounded debugfs command interface (write to .../command):
 + *   probe enable low  [timeout_ms]
@@ -595,6 +610,27 @@ index 000000000..34d70d5f7
 +	 * the live PxPIN register on every call - that restoration target is
 +	 * a genuine hardware readback. -1 means no candidate GPIO exists on
 +	 * this DT node at all, so the field is not applicable.
++	 *
++	 * TODO(NebulaOS PWM state readback mission, 2026-08-xx): pwm-ingenic-
++	 * v2.c now HAS a real .get_state implementation, gated behind
++	 * CONFIG_PWM_INGENIC_V2_GET_STATE (see
++	 * scripts/build/patches/pwm-ingenic-v2-get-state.patch and
++	 * docs/NEBULAOS_PWM_STATE_READBACK_REPORT.md) - so this "always 0"
++	 * hardcode is no longer universally true once that option is
++	 * selected. Wiring this field up to the real answer requires a
++	 * cross-module query this driver has no header for yet (the new
++	 * exported ingenic_pwm_channel_get_state_is_exact() takes a
++	 * pwm-ingenic-v2-specific struct pwm_chip pointer this generic PWM
++	 * consumer would need to safely identify/obtain a declaration for -
++	 * a small new shared header, plus a runtime check that diag->pwm's
++	 * chip is actually the ingenic v2 chip before calling it) - judged
++	 * out of scope for a comment-only edit, left here as a documented
++	 * follow-up rather than guessed at. Until that wiring exists, this
++	 * hardcoded 0 remains an intentional, conservative placeholder: it
++	 * is still literally true whenever CONFIG_PWM_INGENIC_V2_GET_STATE
++	 * is NOT selected (the default), and understates rather than
++	 * overstates exactness if it ever is selected without this TODO
++	 * being resolved - never the reverse.
 +	 */
 +	seq_puts(s, "pwm_restore_is_exact: 0\n");
 +	seq_printf(s, "gpio_restore_is_exact: %d\n", diag->enable_gpio ? 1 : -1);

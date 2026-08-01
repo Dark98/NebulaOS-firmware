@@ -148,18 +148,33 @@ else
 fi
 
 # --- Test 5: source inspection - only 25/50/75 duty values are ever
-# accepted; 0 and 100 are never present as accepted literals. ---
-if grep -q '!strcmp(value, "25")' "$DRIVER" && \
-   grep -q '!strcmp(value, "50")' "$DRIVER" && \
-   grep -q '!strcmp(value, "75")' "$DRIVER"; then
+# accepted; 0 and 100 are never present as accepted command literals.
+# UPDATED (command-interface hardening pass, 2026-08-xx): the old
+# free-form "probe pwm <value>" grammar (kind/value string pair) was
+# replaced by 5 fixed whole-command literals - "probe-pwm-25/50/75" map
+# directly to a dispatcher call with a fixed int duty argument, so the
+# original !strcmp(value, "25")-style check no longer applies verbatim.
+# This is intentional, not a regression - re-verified here against the
+# new grammar instead. ---
+if grep -q '"probe-pwm-25"' "$DRIVER" && \
+   grep -q '"probe-pwm-50"' "$DRIVER" && \
+   grep -q '"probe-pwm-75"' "$DRIVER"; then
 	pass
 else
-	fail "the driver does not accept exactly the 25/50/75 duty literals"
+	fail "the driver does not recognize exactly the probe-pwm-25/50/75 command literals"
 fi
-if grep -Eq '"0"|"100"' "$DRIVER"; then
-	fail "the driver source contains a literal \"0\" or \"100\" duty string - 0%/100% must never be an accepted request"
+if grep -Eq '"probe-pwm-0"|"probe-pwm-100"|"probe-enable-0"|"probe-enable-100"' "$DRIVER"; then
+	fail "the driver source contains a probe-pwm-0/probe-pwm-100 command literal - 0%/100% must never be an accepted request"
 else
 	pass
+fi
+# The dispatcher must never resolve to a value outside {25,50,75} even
+# defensively - nebulaos_bl_diag_cmd_probe()'s own duty-value guard must
+# still explicitly exclude everything else.
+if grep -q 'value != 25 && value != 50 && value != 75' "$DRIVER"; then
+	pass
+else
+	fail "nebulaos_bl_diag_cmd_probe() does not defensively reject any duty value outside {25,50,75}"
 fi
 
 # --- Test 6: source inspection - overlapping probes are rejected before
@@ -170,14 +185,25 @@ else
 	fail "the driver does not reject an overlapping probe with -EBUSY"
 fi
 
-# --- Test 7: source inspection - an out-of-range timeout is rejected
-# before any hardware is touched. ---
+# --- Test 7: source inspection - the fixed probe duration is bounds-
+# checked. UPDATED (command-interface hardening pass, 2026-08-xx): the
+# debugfs interface no longer accepts ANY caller-supplied timeout
+# argument at all (see the "COMMAND WHITELIST" section - every probe-*
+# command takes zero arguments), so there is no longer a runtime
+# "timeout_ms < MIN ||" branch to bounds-check a user value against - the
+# mission's "no arbitrary timeout" requirement is now satisfied by
+# construction (Test 11 below), not by a runtime rejection branch. What
+# replaces it: a compile-time static_assert() proving
+# NEBULAOS_BL_DIAG_DEFAULT_TIMEOUT_MS (the ONLY duration any probe can
+# ever use) is itself within [MIN,MAX] - an equally rigorous guarantee,
+# enforced by the compiler instead of a runtime branch no caller can ever
+# reach. ---
 if grep -q 'NEBULAOS_BL_DIAG_MIN_TIMEOUT_MS' "$DRIVER" && \
    grep -q 'NEBULAOS_BL_DIAG_MAX_TIMEOUT_MS' "$DRIVER" && \
-   grep -q 'timeout_ms < NEBULAOS_BL_DIAG_MIN_TIMEOUT_MS ||' "$DRIVER"; then
+   grep -q 'static_assert(NEBULAOS_BL_DIAG_DEFAULT_TIMEOUT_MS >= NEBULAOS_BL_DIAG_MIN_TIMEOUT_MS &&' "$DRIVER"; then
 	pass
 else
-	fail "the driver does not bounds-check the requested timeout"
+	fail "the driver does not compile-time bounds-check the fixed probe duration against [MIN,MAX]"
 fi
 
 # --- Test 8: source inspection - the auto-restore path is a kernel
@@ -209,19 +235,40 @@ else
 	fail "the driver does not enforce default=2000ms/max=3000ms exactly"
 fi
 
-# --- Test 11: hardening pass - a timeout greater than 3 seconds is
-# rejected. Source-inspection proof (no live kernel to exercise at test
-# time): the bounds check compares the user-supplied timeout_ms against
-# NEBULAOS_BL_DIAG_MAX_TIMEOUT_MS (=3000, proven by Test 10) with a
-# strict '>' before anything is armed or touched, and this check runs
-# before mutex_lock()/probe_active is ever set. ---
 probe_cmd_body=$(awk '/^static int nebulaos_bl_diag_cmd_probe/,/^}/' "$DRIVER")
-bounds_line=$(echo "$probe_cmd_body" | grep -n 'timeout_ms > NEBULAOS_BL_DIAG_MAX_TIMEOUT_MS' | head -1 | cut -d: -f1)
-lock_line=$(echo "$probe_cmd_body" | grep -n 'mutex_lock(&diag->lock)' | head -1 | cut -d: -f1)
-if [ -n "$bounds_line" ] && [ -n "$lock_line" ] && [ "$bounds_line" -lt "$lock_line" ]; then
+
+# --- Test 11: hardening pass - an arbitrary/unbounded timeout (or any
+# other trailing argument - a GPIO/channel number, a duty cycle, a
+# period) can never reach the probe logic at all. UPDATED (command-
+# interface hardening pass, 2026-08-xx): the old free-form grammar's
+# per-request runtime bounds-check ("timeout_ms > MAX ... before
+# mutex_lock()") no longer exists because there is no longer any
+# caller-supplied timeout to check - proving THAT absence is a stronger
+# claim than re-proving a now-nonexistent runtime branch. Source-
+# inspection proof: nebulaos_bl_diag_command_write() rejects any command
+# write with a trailing token (the "rest && *rest" whitelist-enforcement
+# check) BEFORE the if/else-if command-dispatch chain that would call
+# nebulaos_bl_diag_cmd_probe() at all - so "probe-pwm-25 9999",
+# "probe-pwm-25 <channel>", or any other trailing argument is rejected
+# with -EINVAL at the parser level, never reaching probe logic in the
+# first place. ---
+command_write_body=$(awk '/^static ssize_t nebulaos_bl_diag_command_write/,/^}/' "$DRIVER")
+whitelist_check_line=$(echo "$command_write_body" | grep -n 'if (rest && \*rest)' | head -1 | cut -d: -f1)
+dispatch_line=$(echo "$command_write_body" | grep -n 'if (!strcmp(cmd, "status"))' | head -1 | cut -d: -f1)
+if [ -n "$whitelist_check_line" ] && [ -n "$dispatch_line" ] && [ "$whitelist_check_line" -lt "$dispatch_line" ]; then
 	pass
 else
-	fail "a timeout_ms > NEBULAOS_BL_DIAG_MAX_TIMEOUT_MS (3s) is not rejected before the probe is armed"
+	fail "a trailing argument (arbitrary timeout/GPIO/channel/duty/period) is not rejected before command dispatch"
+fi
+# kstrtouint() - the old free-form timeout parser - must no longer be
+# CALLED anywhere in the file (comments are allowed to mention it, e.g.
+# to explain that it's gone - only look at real code, same
+# comment-stripping convention Test 4 uses).
+driver_no_comments=$(grep -v '^[[:space:]]*\*' "$DRIVER" | grep -v '^[[:space:]]*/\*')
+if echo "$driver_no_comments" | grep -q 'kstrtouint('; then
+	fail "the driver still calls kstrtouint() - an arbitrary caller-supplied numeric argument could be smuggled through"
+else
+	pass
 fi
 
 # --- Test 12: hardening pass - ARM-BEFORE-APPLY ordering. Within
@@ -293,33 +340,197 @@ else
 fi
 
 # --- Test 15: hardening pass - honest restoration-exactness reporting.
-# The debugfs status output must expose both pwm_restore_is_exact (always
-# 0 on this board - see Test 16) and gpio_restore_is_exact, and the file
-# header must document the RESTORATION EXACTNESS limitation explicitly
-# rather than silently relying on a reader noticing it. ---
-if grep -q '"pwm_restore_is_exact: 0' "$DRIVER" && \
+# UPDATED (PWM state readback cross-module wiring pass, 2026-08-xx): the
+# debugfs status output's pwm_restore_is_exact field is no longer a
+# hardcoded "0" literal - it is now a live "%d" formatted from a real
+# function call (see Test 20/21 below for proof it genuinely branches).
+# The old exact-hardcoded-"0" string can no longer appear; what must
+# appear instead is the dynamic format plus both exactness sections in
+# the file header. ---
+if grep -q '"pwm_restore_is_exact: %d\\n"' "$DRIVER" && \
    grep -q 'gpio_restore_is_exact' "$DRIVER" && \
-   grep -q 'RESTORATION EXACTNESS' "$DRIVER"; then
+   grep -q 'RESTORATION EXACTNESS' "$DRIVER" && \
+   grep -q 'PWM-EXACTNESS GATE' "$DRIVER"; then
 	pass
 else
-	fail "the driver does not expose honest pwm_restore_is_exact/gpio_restore_is_exact status fields with a documented rationale"
+	fail "the driver does not expose a live pwm_restore_is_exact/gpio_restore_is_exact status field with a documented rationale"
+fi
+if grep -q '"pwm_restore_is_exact: 0\\n"' "$DRIVER"; then
+	fail "the driver still hardcodes 'pwm_restore_is_exact: 0' as a literal string - it must be a live, computed value now"
+else
+	pass
 fi
 
 # --- Test 16: hardening pass - the file must NOT claim the PWM restore
-# path reads real hardware state. The known-dishonest phrase from an
-# earlier revision ("reads the descriptor's cached/hardware state",
-# implying a genuine register read for PWM) must not reappear, and the
-# header must instead explain that pwm-ingenic-v2.c has no .get_state
-# callback so pwm_get_state() cannot return real hardware content here. ---
+# path unconditionally reads real hardware state. The known-dishonest
+# phrase from an earlier revision ("reads the descriptor's cached/
+# hardware state", implying a genuine register read for PWM) must not
+# reappear, and the header must instead explain that whether
+# pwm_get_state() returns real hardware content depends on
+# pwm-ingenic-v2.c's .get_state callback (now real under
+# CONFIG_PWM_INGENIC_V2_GET_STATE, per the PWM state readback mission). ---
 if grep -q 'reads the descriptor.s cached/hardware state' "$DRIVER"; then
 	fail "the driver still contains the overclaiming 'cached/hardware state' phrasing for the PWM restore path"
 else
 	pass
 fi
-if grep -q 'implements only the .apply callback' "$DRIVER" || grep -q 'implements no .get_state' "$DRIVER"; then
+if grep -q 'apply callback' "$DRIVER" && grep -q 'get_state callback' "$DRIVER"; then
 	pass
 else
-	fail "the driver does not explain why pwm-ingenic-v2.c cannot supply a real hardware readback for restoration"
+	fail "the driver does not explain pwm-ingenic-v2.c's .apply/.get_state history for the PWM restoration path"
+fi
+
+# --- Test 20: command-interface hardening pass - the debugfs command
+# parser recognizes EXACTLY the 9 mission-whitelisted literal commands,
+# each dispatched by an exact !strcmp() against the fixed string. ---
+command_write_body=$(awk '/^static ssize_t nebulaos_bl_diag_command_write/,/^}/' "$DRIVER")
+whitelist_ok=1
+for word in status arm disarm restore probe-enable-low probe-enable-high probe-pwm-25 probe-pwm-50 probe-pwm-75; do
+	if ! echo "$command_write_body" | grep -q "!strcmp(cmd, \"$word\")"; then
+		whitelist_ok=0
+		fail "nebulaos_bl_diag_command_write() does not dispatch the whitelisted command \"$word\""
+	fi
+done
+[ "$whitelist_ok" = "1" ] && pass
+
+# --- Test 21: command-interface hardening pass - the OLD free-form
+# "probe <kind> <value> [timeout]" grammar is completely gone: there is
+# no remaining dispatch on a bare "probe" command word, and no remaining
+# string comparison against a separately-parsed "kind"/"value" argument
+# (the mechanism that used to allow an arbitrary-looking two-token
+# request). This is what makes an arbitrary GPIO number, PWM channel,
+# duty cycle, or period structurally impossible now, not just
+# discouraged. ---
+if echo "$command_write_body" | grep -q '!strcmp(cmd, "probe")'; then
+	fail "the driver still dispatches the old free-form \"probe\" command word - the whitelist is not exclusive"
+else
+	pass
+fi
+if grep -Eq '!strcmp\(kind,|!strcmp\(value,' "$DRIVER"; then
+	fail "the driver still parses a separate kind/value argument pair - an arbitrary GPIO/channel/duty/period could be smuggled through"
+else
+	pass
+fi
+
+# --- Test 22: command-interface hardening pass - persistent/unbounded
+# probe mode is impossible: nebulaos_bl_diag_cmd_probe() always schedules
+# the watchdog for exactly NEBULAOS_BL_DIAG_DEFAULT_TIMEOUT_MS (the only
+# value "timeout_ms" can ever hold now - Test 11 already proved no
+# caller-supplied value can reach this function at all). ---
+if echo "$probe_cmd_body" | grep -q 'unsigned int timeout_ms = NEBULAOS_BL_DIAG_DEFAULT_TIMEOUT_MS;' && \
+   echo "$probe_cmd_body" | grep -q 'schedule_delayed_work(&diag->restore_work, msecs_to_jiffies(timeout_ms));'; then
+	pass
+else
+	fail "nebulaos_bl_diag_cmd_probe() does not always use the fixed default timeout - persistent/unbounded probe mode may be reachable"
+fi
+
+# --- Test 23: diagnostic-level arm/disarm gate - disarmed by default at
+# every boot/bind (zero hardware-state change either way), and a probe is
+# rejected with -EPERM while disarmed. ---
+probe_fn_body=$(awk '/^static int nebulaos_bl_diag_probe\(struct platform_device/,/^}/' "$DRIVER")
+if echo "$probe_fn_body" | grep -q 'diag->diag_armed = false;'; then
+	pass
+else
+	fail "nebulaos_bl_diag_probe() (module bind) does not default diag_armed to false"
+fi
+if echo "$probe_cmd_body" | grep -q '!diag->diag_armed' && echo "$probe_cmd_body" | grep -q '\-EPERM'; then
+	pass
+else
+	fail "nebulaos_bl_diag_cmd_probe() does not reject a disarmed diagnostic with -EPERM"
+fi
+# The disarmed-gate check must run before any hardware capture (Step 1) -
+# same "reject before touching anything" discipline as every other check
+# in this function.
+armed_check_line=$(echo "$probe_cmd_body" | grep -n '!diag->diag_armed' | head -1 | cut -d: -f1)
+step1_line=$(echo "$probe_cmd_body" | grep -n 'Step 1: capture prior state' | head -1 | cut -d: -f1)
+if [ -n "$armed_check_line" ] && [ -n "$step1_line" ] && [ "$armed_check_line" -lt "$step1_line" ]; then
+	pass
+else
+	fail "the disarmed-diagnostic rejection does not run before the probe captures/touches any hardware state"
+fi
+
+# --- Test 24: "arm"/"disarm" commands themselves - arm sets diag_armed,
+# disarm forces an immediate synchronous restore of any active probe
+# (fail-safe) before clearing diag_armed. ---
+disarm_body=$(awk '/^static int nebulaos_bl_diag_cmd_disarm/,/^}/' "$DRIVER")
+arm_body=$(awk '/^static int nebulaos_bl_diag_cmd_arm/,/^}/' "$DRIVER")
+if echo "$arm_body" | grep -q 'diag->diag_armed = true;'; then
+	pass
+else
+	fail "nebulaos_bl_diag_cmd_arm() does not set diag_armed = true"
+fi
+if echo "$disarm_body" | grep -q 'cancel_delayed_work_sync(&diag->restore_work);' && \
+   echo "$disarm_body" | grep -q 'nebulaos_bl_diag_do_restore(diag, false);' && \
+   echo "$disarm_body" | grep -q 'diag->diag_armed = false;'; then
+	pass
+else
+	fail "nebulaos_bl_diag_cmd_disarm() does not force-restore any active probe before clearing diag_armed"
+fi
+
+# --- Test 25: PWM-exactness gate (closes the TODOs from the PWM state
+# readback mission) - nebulaos_bl_diag_pwm_restore_is_exact() genuinely
+# calls the real exported ingenic_pwm_channel_get_state_is_exact() when
+# CONFIG_PWM_INGENIC_V2_GET_STATE is selected, and returns false (never
+# true) in the #else fallback branch when it is not - proving this is a
+# real, live branch on the underlying driver's answer, not a hardcoded
+# constant either way. ---
+pwm_exact_fn_body=$(awk '/^static bool nebulaos_bl_diag_pwm_restore_is_exact/,/^}/' "$DRIVER")
+if echo "$pwm_exact_fn_body" | grep -q '#ifdef CONFIG_PWM_INGENIC_V2_GET_STATE' && \
+   echo "$pwm_exact_fn_body" | grep -q 'return ingenic_pwm_channel_get_state_is_exact(chip, diag->pwm->hwpwm);' && \
+   echo "$pwm_exact_fn_body" | grep -q '#else' && \
+   echo "$pwm_exact_fn_body" | grep -q 'return false;'; then
+	pass
+else
+	fail "nebulaos_bl_diag_pwm_restore_is_exact() does not genuinely branch on the real exported capability query"
+fi
+# The #else (config-not-selected) branch must be the ONLY return in that
+# arm, and it must never be "true" - the safe fallback is always "refuse
+# to arm", never "assume exact".
+else_branch=$(echo "$pwm_exact_fn_body" | awk '/#else/,/#endif/')
+if echo "$else_branch" | grep -q 'return true;'; then
+	fail "the CONFIG_PWM_INGENIC_V2_GET_STATE-unselected fallback returns true somewhere - must always conservatively return false"
+else
+	pass
+fi
+
+# --- Test 26: the exactness gate is genuinely called - and enforced -
+# from nebulaos_bl_diag_cmd_probe(), rejecting with -EOPNOTSUPP BEFORE
+# any hardware is captured/touched (Step 1), for both probe types (the
+# gate dispatches per-type via nebulaos_bl_diag_probe_type_restore_is_exact()
+# rather than only ever checking one resource). ---
+if echo "$probe_cmd_body" | grep -q 'nebulaos_bl_diag_probe_type_restore_is_exact(diag, type)' && \
+   echo "$probe_cmd_body" | grep -q '\-EOPNOTSUPP'; then
+	pass
+else
+	fail "nebulaos_bl_diag_cmd_probe() does not call the real per-type exactness gate and reject with -EOPNOTSUPP"
+fi
+gate_check_line=$(echo "$probe_cmd_body" | grep -n 'nebulaos_bl_diag_probe_type_restore_is_exact(diag, type)' | head -1 | cut -d: -f1)
+if [ -n "$gate_check_line" ] && [ -n "$step1_line" ] && [ "$gate_check_line" -lt "$step1_line" ]; then
+	pass
+else
+	fail "the PWM-exactness gate does not run before the probe captures/touches any hardware state"
+fi
+# nebulaos_bl_diag_probe_type_restore_is_exact() itself must dispatch to
+# the two distinct real per-resource checks, not a single hardcoded
+# answer for every type.
+dispatch_fn_body=$(awk '/^static bool nebulaos_bl_diag_probe_type_restore_is_exact/,/^}/' "$DRIVER")
+if echo "$dispatch_fn_body" | grep -q 'nebulaos_bl_diag_gpio_restore_is_exact(diag)' && \
+   echo "$dispatch_fn_body" | grep -q 'nebulaos_bl_diag_pwm_restore_is_exact(diag)'; then
+	pass
+else
+	fail "nebulaos_bl_diag_probe_type_restore_is_exact() does not dispatch to distinct real per-resource checks"
+fi
+
+# --- Test 27: the exported cross-module symbol name/signature this
+# driver consumes matches exactly what pwm-ingenic-v2.c actually exports
+# (ingenic_pwm_channel_get_state_is_exact(struct pwm_chip *, unsigned
+# int)) - guarding against a silently-mismatched extern declaration that
+# would still compile (implicit int / mismatched signature warnings
+# aside) but call the wrong thing. ---
+if grep -q 'extern bool ingenic_pwm_channel_get_state_is_exact(struct pwm_chip \*chip, unsigned int channel);' "$DRIVER"; then
+	pass
+else
+	fail "the driver's extern declaration of ingenic_pwm_channel_get_state_is_exact() does not match pwm-ingenic-v2.c's real signature"
 fi
 
 # --- Test 17: re-applying DIAG1 twice is idempotent. ---

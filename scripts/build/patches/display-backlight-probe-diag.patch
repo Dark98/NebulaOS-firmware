@@ -1,0 +1,530 @@
+diff --git a/kernel/kernel-6.6/module_drivers/drivers/misc/Kconfig b/kernel/kernel-6.6/module_drivers/drivers/misc/Kconfig
+index 4b5ac7e20..089957ff7 100644
+--- a/kernel/kernel-6.6/module_drivers/drivers/misc/Kconfig
++++ b/kernel/kernel-6.6/module_drivers/drivers/misc/Kconfig
+@@ -49,3 +49,23 @@ config BCM_4345C5_RFKILL
+ 	help
+ 	Creates an rfkill entry in sysfs for power control of Bluetooth
+ 	bcm-xxxx chips.
++
++config NEBULAOS_BACKLIGHT_PROBE_DIAG
++	bool "NebulaOS bounded backlight PWM/GPIO probe diagnostic (DISPLAY-B0-DIAG)"
++	depends on PWM
++	default n
++	help
++	  Display hardware analysis mission follow-on (2026-08-01+): a
++	  bounded, self-restoring, kernel-owned diagnostic for discovering
++	  the real candidate backlight PWM channel/enable-GPIO electrical
++	  behavior on this board without external measurement equipment,
++	  through a tightly-scoped debugfs command interface (probe enable
++	  low/high, probe pwm 25/50/75, restore, status). Never touches
++	  PWM/GPIO state at boot or module bind time - probing is 100%
++	  opt-in, and every probe auto-restores after a bounded timeout via
++	  a kernel workqueue, independent of any userspace process. Rejects
++	  0% and 100% duty-cycle requests outright.
++
++	  Disabled by default - never enable for a production/active-slot
++	  build until live hardware testing confirms the candidate PWM
++	  channel/enable-GPIO behavior. If unsure, say N.
+diff --git a/kernel/kernel-6.6/module_drivers/drivers/misc/Makefile b/kernel/kernel-6.6/module_drivers/drivers/misc/Makefile
+index fef6e16fb..6271ffb26 100644
+--- a/kernel/kernel-6.6/module_drivers/drivers/misc/Makefile
++++ b/kernel/kernel-6.6/module_drivers/drivers/misc/Makefile
+@@ -5,3 +5,4 @@ obj-$(CONFIG_INGENIC_EFUSE_V2)  += ingenic_efuse_v2.o
+ obj-$(CONFIG_JZ_EFUSE_X2500)    += jz_efuse_x2500.o
+ obj-$(CONFIG_RMEM)      += rmem.o
+ obj-$(CONFIG_BCM_4345C5_RFKILL) += bt_power_bluesleep.o
++obj-$(CONFIG_NEBULAOS_BACKLIGHT_PROBE_DIAG) += nebulaos_backlight_probe_diag.o
+diff --git a/kernel/kernel-6.6/module_drivers/drivers/misc/nebulaos_backlight_probe_diag.c b/kernel/kernel-6.6/module_drivers/drivers/misc/nebulaos_backlight_probe_diag.c
+new file mode 100644
+index 000000000..e9b95a740
+--- /dev/null
++++ b/kernel/kernel-6.6/module_drivers/drivers/misc/nebulaos_backlight_probe_diag.c
+@@ -0,0 +1,487 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * NebulaOS bounded backlight probe diagnostic (DISPLAY-B0-DIAG)
++ *
++ * Display hardware analysis mission follow-on (2026-08-01+) - see
++ * docs/NEBULAOS_DISPLAY_OFFLINE_IMPLEMENTATION_PLAN.md and
++ * build-work/display-analysis/backlight-path-analysis.txt.
++ *
++ * Purpose: let a human safely discover the real backlight PWM channel/
++ * frequency/enable-GPIO behavior on this board without any external
++ * measurement equipment, entirely through kernel-owned, self-restoring,
++ * time-bounded probes issued via a tightly-scoped debugfs command
++ * interface - never raw /dev/mem, never unrestricted GPIO/PWM sysfs.
++ *
++ * Candidate hardware (HYPOTHESES ONLY, not proven facts - see
++ * backlight-path-analysis.txt for the full evidence trail):
++ *   - PWM channel 0 (GPC-0 / pwm0_pc), period 20000ns (~50kHz, matching
++ *     stock's own pwm_backlight.sh pwm_freq=50000)
++ *   - a separate enable GPIO around PC22 (stock's own power_gpio)
++ * This driver treats both purely as candidates to probe - it never
++ * assumes either is correct, and it never touches either at module
++ * load/bind time. Probing is 100% opt-in via debugfs.
++ *
++ * Mandatory safety behavior, for every probe command:
++ *   - probe() only ever *reads* the PWM/GPIO state already present
++ *     (whatever the bootloader/earlier boot stage established) - it
++ *     never calls pwm_apply_state()/gpiod_direction_output() itself, so
++ *     binding this driver can never change what the panel is currently
++ *     doing.
++ *   - exactly one probe may be active at a time - a second "probe ..."
++ *     command while one is already active is rejected outright (-EBUSY),
++ *     no hardware is touched by the rejected command.
++ *   - every probe applies exactly one temporary state (either the
++ *     candidate enable-gpio to a requested level, or the candidate PWM
++ *     to a requested duty cycle - never both at once).
++ *   - a kernel workqueue timer (delayed_work), armed at probe start,
++ *     always auto-restores the saved state after a bounded timeout
++ *     (default 3000ms, clamped to [NEBULAOS_BL_DIAG_MIN_TIMEOUT_MS,
++ *     NEBULAOS_BL_DIAG_MAX_TIMEOUT_MS]) - this is entirely independent
++ *     of any userspace process's lifetime. A dropped SSH session, a
++ *     killed shell, or a signal delivered to whatever process issued the
++ *     probe command cannot prevent this from firing: the workqueue
++ *     callback is scheduled against the kernel's own timer wheel, not
++ *     against any file descriptor or process this driver ever holds a
++ *     reference to.
++ *   - an explicit "restore" command cancels that timer and restores
++ *     immediately, synchronously.
++ *   - 0% and 100% duty-cycle requests are explicitly rejected - only
++ *     25/50/75% are ever accepted through the "probe pwm" command, so an
++ *     unproven or wrong polarity/wiring assumption can never drive the
++ *     candidate PWM fully on or fully off through this diagnostic.
++ *   - driver remove() forces an immediate, synchronous restore if a
++ *     probe is still active, so unbinding never leaves hardware in a
++ *     probed (non-original) state.
++ *
++ * Bounded debugfs command interface (write to .../command):
++ *   probe enable low  [timeout_ms]
++ *   probe enable high [timeout_ms]
++ *   probe pwm 25      [timeout_ms]
++ *   probe pwm 50      [timeout_ms]
++ *   probe pwm 75      [timeout_ms]
++ *   restore
++ *   status                (also dumped via dev_info(); see .../status for
++ *                          the structured, scriptable read-only file)
++ *
++ * NEVER enable CONFIG_NEBULAOS_BACKLIGHT_PROBE_DIAG for a production/
++ * active-slot build - see scripts/build/display-backlight-diag-variant.sh
++ * and docs/NEBULAOS_DISPLAY_LIVE_QUALIFICATION_PLAN.md.
++ */
++
++#include <linux/module.h>
++#include <linux/platform_device.h>
++#include <linux/of.h>
++#include <linux/pwm.h>
++#include <linux/gpio/consumer.h>
++#include <linux/debugfs.h>
++#include <linux/seq_file.h>
++#include <linux/workqueue.h>
++#include <linux/jiffies.h>
++#include <linux/mutex.h>
++#include <linux/slab.h>
++#include <linux/string.h>
++#include <linux/uaccess.h>
++
++#define NEBULAOS_BL_DIAG_NAME			"nebulaos_backlight_diag"
++#define NEBULAOS_BL_DIAG_DEFAULT_TIMEOUT_MS	3000
++#define NEBULAOS_BL_DIAG_MIN_TIMEOUT_MS		250
++#define NEBULAOS_BL_DIAG_MAX_TIMEOUT_MS		10000
++/* Candidate period only - see backlight-path-analysis.txt. Never proven
++ * correct for this board's real backlight circuit, only a documented,
++ * stock-matching starting point. */
++#define NEBULAOS_BL_DIAG_CANDIDATE_PERIOD_NS	20000
++
++enum nebulaos_bl_diag_probe_type {
++	NEBULAOS_BL_DIAG_PROBE_NONE = 0,
++	NEBULAOS_BL_DIAG_PROBE_ENABLE_GPIO,
++	NEBULAOS_BL_DIAG_PROBE_PWM_DUTY,
++};
++
++struct nebulaos_bl_diag {
++	struct device			*dev;
++	struct pwm_device		*pwm;
++	struct gpio_desc		*enable_gpio;
++
++	/* Serializes every command handler and the restore path against
++	 * each other. Never held across cancel_delayed_work_sync() - see
++	 * nebulaos_bl_diag_cmd_restore()/_remove() for why that ordering
++	 * matters (the delayed_work callback itself also takes this lock;
++	 * calling the synchronous cancel while holding it would deadlock
++	 * against a concurrently-running watchdog restore). */
++	struct mutex			lock;
++	struct delayed_work		restore_work;
++
++	bool				probe_active;
++	enum nebulaos_bl_diag_probe_type probe_type;
++	int				requested_duty_pct;	/* -1 if n/a */
++	unsigned long			requested_period_ns;
++	int				candidate_gpio_state;	/* -1 if unknown/absent */
++	unsigned long			probe_deadline;		/* jiffies */
++	unsigned int			active_timeout_ms;
++
++	struct pwm_state		saved_pwm_state;
++	int				saved_gpio_value;	/* -1 if no gpio present */
++
++	unsigned int			restore_count;			/* explicit "restore" */
++	unsigned int			watchdog_restoration_count;	/* timeout-triggered */
++	unsigned int			probe_failure_count;		/* rejected/failed probes */
++
++	struct dentry			*debugfs_dir;
++};
++
++/* Always call with diag->lock held. No-op if no probe is currently
++ * active (safe to call speculatively from both the explicit-restore path
++ * and the watchdog path without either needing to prove the other didn't
++ * already run first). */
++static void nebulaos_bl_diag_do_restore(struct nebulaos_bl_diag *diag, bool is_watchdog)
++{
++	int ret;
++
++	if (!diag->probe_active)
++		return;
++
++	if (diag->probe_type == NEBULAOS_BL_DIAG_PROBE_PWM_DUTY) {
++		ret = pwm_apply_state(diag->pwm, &diag->saved_pwm_state);
++		if (ret)
++			dev_err(diag->dev,
++				"restore: failed to reapply saved PWM state: %d\n", ret);
++	} else if (diag->probe_type == NEBULAOS_BL_DIAG_PROBE_ENABLE_GPIO) {
++		if (diag->enable_gpio && diag->saved_gpio_value >= 0)
++			gpiod_set_raw_value_cansleep(diag->enable_gpio,
++						      diag->saved_gpio_value);
++	}
++
++	diag->probe_active = false;
++	diag->probe_type = NEBULAOS_BL_DIAG_PROBE_NONE;
++	diag->requested_duty_pct = -1;
++	diag->requested_period_ns = 0;
++
++	if (is_watchdog)
++		diag->watchdog_restoration_count++;
++	else
++		diag->restore_count++;
++}
++
++/* The kernel-owned watchdog: scheduled at the exact timeout requested by
++ * whichever probe command started it, entirely independent of any
++ * userspace process. Runs on the system workqueue - it fires whether or
++ * not anything ever issues an explicit "restore", and whether or not the
++ * process that issued the original probe command is still alive. */
++static void nebulaos_bl_diag_restore_work(struct work_struct *work)
++{
++	struct nebulaos_bl_diag *diag = container_of(to_delayed_work(work),
++						      struct nebulaos_bl_diag,
++						      restore_work);
++
++	mutex_lock(&diag->lock);
++	nebulaos_bl_diag_do_restore(diag, true);
++	mutex_unlock(&diag->lock);
++}
++
++static int nebulaos_bl_diag_cmd_restore(struct nebulaos_bl_diag *diag)
++{
++	/* Cancel the watchdog BEFORE taking diag->lock - the watchdog
++	 * callback also takes diag->lock, so canceling synchronously while
++	 * already holding it here could deadlock against a watchdog that is
++	 * concurrently running and blocked waiting for the same lock. This
++	 * is always safe to call even if no work is pending or already ran. */
++	cancel_delayed_work_sync(&diag->restore_work);
++
++	mutex_lock(&diag->lock);
++	if (!diag->probe_active) {
++		mutex_unlock(&diag->lock);
++		dev_info(diag->dev, "restore requested but no probe is active - nothing to do\n");
++		return 0;
++	}
++	nebulaos_bl_diag_do_restore(diag, false);
++	mutex_unlock(&diag->lock);
++	return 0;
++}
++
++static int nebulaos_bl_diag_cmd_probe(struct nebulaos_bl_diag *diag, const char *kind,
++				       const char *value, const char *timeout_arg)
++{
++	unsigned int timeout_ms = NEBULAOS_BL_DIAG_DEFAULT_TIMEOUT_MS;
++	int duty_pct = -1, gpio_val = -1;
++	struct pwm_state new_state;
++	int ret = 0;
++
++	if (!kind || !value)
++		return -EINVAL;
++
++	if (!strcmp(kind, "enable")) {
++		if (!strcmp(value, "low"))
++			gpio_val = 0;
++		else if (!strcmp(value, "high"))
++			gpio_val = 1;
++		else
++			return -EINVAL;
++	} else if (!strcmp(kind, "pwm")) {
++		if (!strcmp(value, "25"))
++			duty_pct = 25;
++		else if (!strcmp(value, "50"))
++			duty_pct = 50;
++		else if (!strcmp(value, "75"))
++			duty_pct = 75;
++		else
++			/* Deliberately rejects 0/100/anything else - see the
++			 * file header comment: only mid-range duty cycles are
++			 * ever allowed through this diagnostic. */
++			return -EINVAL;
++	} else {
++		return -EINVAL;
++	}
++
++	if (timeout_arg) {
++		if (kstrtouint(timeout_arg, 10, &timeout_ms))
++			return -EINVAL;
++	}
++	if (timeout_ms < NEBULAOS_BL_DIAG_MIN_TIMEOUT_MS ||
++	    timeout_ms > NEBULAOS_BL_DIAG_MAX_TIMEOUT_MS)
++		return -EINVAL;
++
++	mutex_lock(&diag->lock);
++
++	if (diag->probe_active) {
++		diag->probe_failure_count++;
++		mutex_unlock(&diag->lock);
++		dev_warn(diag->dev, "rejected probe: another probe is already active\n");
++		return -EBUSY;
++	}
++
++	if (gpio_val >= 0) {
++		if (!diag->enable_gpio) {
++			diag->probe_failure_count++;
++			mutex_unlock(&diag->lock);
++			dev_warn(diag->dev, "rejected probe: no candidate enable-gpios present\n");
++			return -ENODEV;
++		}
++		diag->saved_gpio_value = gpiod_get_raw_value_cansleep(diag->enable_gpio);
++		gpiod_set_raw_value_cansleep(diag->enable_gpio, gpio_val);
++		diag->candidate_gpio_state = gpio_val;
++		diag->probe_type = NEBULAOS_BL_DIAG_PROBE_ENABLE_GPIO;
++		diag->requested_duty_pct = -1;
++		diag->requested_period_ns = 0;
++	} else {
++		pwm_get_state(diag->pwm, &diag->saved_pwm_state);
++		new_state = diag->saved_pwm_state;
++		new_state.enabled = true;
++		new_state.period = NEBULAOS_BL_DIAG_CANDIDATE_PERIOD_NS;
++		new_state.duty_cycle = (u64)NEBULAOS_BL_DIAG_CANDIDATE_PERIOD_NS * duty_pct / 100;
++
++		ret = pwm_apply_state(diag->pwm, &new_state);
++		if (ret) {
++			diag->probe_failure_count++;
++			mutex_unlock(&diag->lock);
++			dev_err(diag->dev, "probe pwm %d%% failed to apply: %d\n", duty_pct, ret);
++			return ret;
++		}
++		diag->requested_duty_pct = duty_pct;
++		diag->requested_period_ns = NEBULAOS_BL_DIAG_CANDIDATE_PERIOD_NS;
++		diag->probe_type = NEBULAOS_BL_DIAG_PROBE_PWM_DUTY;
++	}
++
++	diag->probe_active = true;
++	diag->active_timeout_ms = timeout_ms;
++	diag->probe_deadline = jiffies + msecs_to_jiffies(timeout_ms);
++	schedule_delayed_work(&diag->restore_work, msecs_to_jiffies(timeout_ms));
++
++	mutex_unlock(&diag->lock);
++
++	dev_info(diag->dev, "probe active: %s %s, auto-restoring in %ums\n",
++		 kind, value, timeout_ms);
++	return 0;
++}
++
++static int nebulaos_bl_diag_cmd_status_log(struct nebulaos_bl_diag *diag)
++{
++	unsigned long remaining_ms = 0;
++
++	mutex_lock(&diag->lock);
++	if (diag->probe_active) {
++		long delta = (long)(diag->probe_deadline - jiffies);
++
++		remaining_ms = delta > 0 ? jiffies_to_msecs(delta) : 0;
++	}
++	dev_info(diag->dev,
++		 "status: active=%d type=%d duty=%d%% period=%luns gpio=%d "
++		 "timeout_remaining=%lums restore_count=%u probe_failure_count=%u "
++		 "watchdog_restoration_count=%u\n",
++		 diag->probe_active, diag->probe_type, diag->requested_duty_pct,
++		 diag->requested_period_ns, diag->candidate_gpio_state, remaining_ms,
++		 diag->restore_count, diag->probe_failure_count,
++		 diag->watchdog_restoration_count);
++	mutex_unlock(&diag->lock);
++	return 0;
++}
++
++static ssize_t nebulaos_bl_diag_command_write(struct file *file, const char __user *ubuf,
++					       size_t count, loff_t *ppos)
++{
++	struct nebulaos_bl_diag *diag = file->private_data;
++	char buf[64];
++	size_t len;
++	char *p, *cmd, *arg1, *arg2, *arg3;
++	int ret;
++
++	if (count == 0 || count >= sizeof(buf))
++		return -EINVAL;
++	len = count;
++	if (copy_from_user(buf, ubuf, len))
++		return -EFAULT;
++	buf[len] = '\0';
++
++	p = strim(buf);
++	cmd = strsep(&p, " ");
++	if (!cmd || !*cmd)
++		return -EINVAL;
++
++	if (!strcmp(cmd, "restore")) {
++		ret = nebulaos_bl_diag_cmd_restore(diag);
++	} else if (!strcmp(cmd, "status")) {
++		ret = nebulaos_bl_diag_cmd_status_log(diag);
++	} else if (!strcmp(cmd, "probe")) {
++		arg1 = strsep(&p, " ");
++		arg2 = strsep(&p, " ");
++		arg3 = strsep(&p, " ");
++		ret = nebulaos_bl_diag_cmd_probe(diag, arg1, arg2, arg3);
++	} else {
++		ret = -EINVAL;
++	}
++
++	return ret < 0 ? ret : count;
++}
++
++static const struct file_operations nebulaos_bl_diag_command_fops = {
++	.open = simple_open,
++	.write = nebulaos_bl_diag_command_write,
++	.llseek = no_llseek,
++};
++
++static int nebulaos_bl_diag_status_show(struct seq_file *s, void *unused)
++{
++	struct nebulaos_bl_diag *diag = s->private;
++	unsigned long remaining_ms = 0;
++
++	mutex_lock(&diag->lock);
++	if (diag->probe_active) {
++		long delta = (long)(diag->probe_deadline - jiffies);
++
++		remaining_ms = delta > 0 ? jiffies_to_msecs(delta) : 0;
++	}
++	seq_puts(s, "candidate_channel: 0\n");
++	seq_printf(s, "requested_duty_pct: %d\n", diag->requested_duty_pct);
++	seq_printf(s, "requested_period_ns: %lu\n", diag->requested_period_ns);
++	seq_printf(s, "candidate_gpio_state: %d\n", diag->candidate_gpio_state);
++	seq_printf(s, "probe_active: %d\n", diag->probe_active);
++	seq_printf(s, "timeout_remaining_ms: %lu\n", remaining_ms);
++	seq_printf(s, "restore_count: %u\n", diag->restore_count);
++	seq_printf(s, "probe_failure_count: %u\n", diag->probe_failure_count);
++	seq_printf(s, "watchdog_restoration_count: %u\n", diag->watchdog_restoration_count);
++	mutex_unlock(&diag->lock);
++	return 0;
++}
++DEFINE_SHOW_ATTRIBUTE(nebulaos_bl_diag_status);
++
++static int nebulaos_bl_diag_probe(struct platform_device *pdev)
++{
++	struct nebulaos_bl_diag *diag;
++	struct device *dev = &pdev->dev;
++
++	diag = devm_kzalloc(dev, sizeof(*diag), GFP_KERNEL);
++	if (!diag)
++		return -ENOMEM;
++
++	diag->dev = dev;
++	diag->candidate_gpio_state = -1;
++	diag->saved_gpio_value = -1;
++	diag->requested_duty_pct = -1;
++	mutex_init(&diag->lock);
++	INIT_DELAYED_WORK(&diag->restore_work, nebulaos_bl_diag_restore_work);
++
++	diag->pwm = devm_pwm_get(dev, NULL);
++	if (IS_ERR(diag->pwm)) {
++		dev_err(dev, "failed to get candidate PWM: %ld\n", PTR_ERR(diag->pwm));
++		return PTR_ERR(diag->pwm);
++	}
++	/* Read-only: pwm_get_state() reads the descriptor's cached/hardware
++	 * state without applying anything. This driver must NEVER call
++	 * pwm_apply_state() here - whatever the bootloader/earlier boot
++	 * stage established is preserved untouched until an explicit probe
++	 * command arrives. */
++	pwm_get_state(diag->pwm, &diag->saved_pwm_state);
++
++	/* GPIOD_ASIS: acquire the descriptor's current direction/value
++	 * without driving it - acquiring this consumer must never itself
++	 * change the pin's state. Optional: if the candidate enable-gpios
++	 * property is absent, this is simply NULL, and every "probe enable
++	 * ..." command is rejected as unavailable (-ENODEV) while the PWM
++	 * probes still work normally. */
++	diag->enable_gpio = devm_gpiod_get_optional(dev, "enable", GPIOD_ASIS);
++	if (IS_ERR(diag->enable_gpio)) {
++		dev_err(dev, "failed to get candidate enable-gpios: %ld\n",
++			PTR_ERR(diag->enable_gpio));
++		return PTR_ERR(diag->enable_gpio);
++	}
++	if (diag->enable_gpio) {
++		diag->saved_gpio_value = gpiod_get_raw_value_cansleep(diag->enable_gpio);
++		diag->candidate_gpio_state = diag->saved_gpio_value;
++	}
++
++	platform_set_drvdata(pdev, diag);
++
++	diag->debugfs_dir = debugfs_create_dir(NEBULAOS_BL_DIAG_NAME, NULL);
++	if (IS_ERR_OR_NULL(diag->debugfs_dir)) {
++		dev_warn(dev, "debugfs unavailable - diagnostic interface not exposed\n");
++		diag->debugfs_dir = NULL;
++	} else {
++		debugfs_create_file("command", 0200, diag->debugfs_dir, diag,
++				     &nebulaos_bl_diag_command_fops);
++		debugfs_create_file("status", 0444, diag->debugfs_dir, diag,
++				     &nebulaos_bl_diag_status_fops);
++	}
++
++	dev_info(dev, "backlight probe diagnostic ready (bounded, opt-in via debugfs; "
++		 "boot-time PWM/GPIO state untouched)\n");
++	return 0;
++}
++
++static int nebulaos_bl_diag_remove(struct platform_device *pdev)
++{
++	struct nebulaos_bl_diag *diag = platform_get_drvdata(pdev);
++
++	/* Remove debugfs first so no new probe command can race with the
++	 * teardown below. */
++	debugfs_remove_recursive(diag->debugfs_dir);
++	diag->debugfs_dir = NULL;
++
++	/* See nebulaos_bl_diag_cmd_restore() for why this must run before
++	 * taking diag->lock. */
++	cancel_delayed_work_sync(&diag->restore_work);
++
++	mutex_lock(&diag->lock);
++	if (diag->probe_active)
++		nebulaos_bl_diag_do_restore(diag, false);
++	mutex_unlock(&diag->lock);
++
++	return 0;
++}
++
++static const struct of_device_id nebulaos_bl_diag_of_match[] = {
++	{ .compatible = "nebulaos,backlight-probe-diag" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, nebulaos_bl_diag_of_match);
++
++static struct platform_driver nebulaos_bl_diag_driver = {
++	.probe = nebulaos_bl_diag_probe,
++	.remove = nebulaos_bl_diag_remove,
++	.driver = {
++		.name = NEBULAOS_BL_DIAG_NAME,
++		.of_match_table = nebulaos_bl_diag_of_match,
++	},
++};
++module_platform_driver(nebulaos_bl_diag_driver);
++
++MODULE_DESCRIPTION("NebulaOS bounded backlight PWM/GPIO probe diagnostic (DISPLAY-B0-DIAG)");
++MODULE_LICENSE("GPL");

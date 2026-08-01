@@ -199,6 +199,211 @@ state" phrasing).
   (only proven true by source inspection of the kernel API contract, not
   by a live test).
 
+## Addendum: command-interface hardening + real PWM-exactness gate (2026-08-xx)
+
+This addendum covers a second hardening pass performed after the PWM state
+readback mission landed (see `docs/NEBULAOS_PWM_STATE_READBACK_REPORT.md`
+and `scripts/build/patches/pwm-ingenic-v2-get-state.patch`), which added a
+real `.get_state` implementation to `pwm-ingenic-v2.c` behind
+`CONFIG_PWM_INGENIC_V2_GET_STATE` plus an exported capability query,
+`ingenic_pwm_channel_get_state_is_exact(chip, channel)`, but deliberately
+left two things as documented follow-ups rather than in-scope for that
+change: wiring this diagnostic's `pwm_restore_is_exact` status field up to
+the real answer, and constraining the debugfs command interface to the
+mission's exact whitelist. Both are done now.
+
+### Constrained command whitelist
+
+The debugfs `.../command` interface previously accepted a free-form
+`probe <kind> <value> [timeout_ms]` grammar (`kind` = `enable`/`pwm`,
+`value` = `low`/`high`/`25`/`50`/`75`, plus an optional caller-supplied
+timeout). It now accepts EXACTLY these 9 literal strings and nothing
+else, each taking zero arguments:
+
+```
+status
+arm
+disarm
+probe-enable-low
+probe-enable-high
+probe-pwm-25
+probe-pwm-50
+probe-pwm-75
+restore
+```
+
+Any trailing token after the command word - a GPIO/channel number, a
+duty cycle, a period, an MMIO address, a timeout, anything at all - is
+rejected outright with `-EINVAL` by a single check in
+`nebulaos_bl_diag_command_write()` (`if (rest && *rest) return -EINVAL;`)
+that runs *before* the command-dispatch chain, so it structurally cannot
+reach any command handler. This single check is what makes an arbitrary
+GPIO number, PWM channel, duty cycle, period, or timeout impossible to
+construct through this interface at all, not merely bounds-checked at
+the handler. The old free-form `kind`/`value`/`timeout_arg` parsing
+(`!strcmp(kind, ...)`, `!strcmp(value, ...)`, `kstrtouint()`) no longer
+exists anywhere in the file.
+
+- `probe-enable-low` / `probe-enable-high` drive the same candidate
+  enable-GPIO the driver already bound at `probe()` time
+  (`diag->enable_gpio`, acquired once via `devm_gpiod_get_optional(dev,
+  "enable", ...)`) to logical low/high, with the existing
+  snapshot-and-restore behavior unchanged.
+- `probe-pwm-25` / `probe-pwm-50` / `probe-pwm-75` drive the same
+  candidate PWM channel (`diag->pwm`) to exactly 25%/50%/75% duty -
+  never 0% or 100%, which cannot even be represented as a command
+  literal now (there is no `probe-pwm-0` or `probe-pwm-100`).
+- `arm` / `disarm` gate the whole diagnostic at a level above individual
+  probes: `diag->diag_armed` defaults to `false` at every boot/bind (see
+  `nebulaos_bl_diag_probe()`), and every `probe-*` command is rejected
+  with `-EPERM` while disarmed - re-verified in this pass, this remains
+  true after every change. `disarm` is fail-safe: it forces an
+  immediate, synchronous restore of any still-active probe (same
+  cancel-before-lock ordering as the existing `restore`/`remove()`
+  paths) before clearing the armed flag, so "disarm" genuinely
+  de-activates the diagnostic rather than merely blocking new probes.
+  `restore` itself is never gated behind `arm`/`disarm` - it is always
+  the safety escape hatch.
+
+### Fixed 2-second probe duration (interpretation decision)
+
+The mission spec's "default 2s, max 3s, no arbitrary timeout" was
+interpreted as: remove the free-form timeout argument entirely rather
+than keep accepting one and merely bounds-checking it. Reasoning: a
+bounds-checked-but-still-caller-supplied argument is a strictly weaker
+guarantee than an argument that cannot be constructed in the first
+place, and the whitelist's `probe-*` commands (unlike the old `probe
+<kind> <value>` two/three-token form) have no natural place left to put
+a timeout argument without reintroducing exactly the free-form grammar
+the whitelist is meant to close off. Every probe now always uses
+`NEBULAOS_BL_DIAG_DEFAULT_TIMEOUT_MS` (2000ms). The
+`[NEBULAOS_BL_DIAG_MIN_TIMEOUT_MS, NEBULAOS_BL_DIAG_MAX_TIMEOUT_MS]`
+constants (`[250ms, 3000ms]`, unchanged) remain as a compile-time
+invariant a `static_assert()` in `nebulaos_bl_diag_cmd_probe()` checks
+`DEFAULT` against, so a future edit can never silently push the fixed
+duration outside the mission's envelope - enforced by the compiler
+instead of a runtime branch no caller can ever reach.
+
+### Real PWM-exactness gate (closes the two TODOs)
+
+`nebulaos_bl_diag_pwm_restore_is_exact()` is the new single source of
+truth for whether the candidate PWM channel's restoration is currently
+exact:
+
+```c
+#ifdef CONFIG_PWM_INGENIC_V2_GET_STATE
+	/* ... chip/driver-name identity check ... */
+	return ingenic_pwm_channel_get_state_is_exact(chip, diag->pwm->hwpwm);
+#else
+	return false;   /* conservative: refuse to arm, never assume exact */
+#endif
+```
+
+Both the debugfs `.../status` file's `pwm_restore_is_exact` field and
+`nebulaos_bl_diag_cmd_probe()`'s arm/probe-refusal gate call this same
+function - neither has its own separate hardcoded answer anymore. The
+gate runs before `nebulaos_bl_diag_cmd_probe()` captures or touches any
+hardware (same "reject before touching anything" position as the
+existing `-EBUSY`/`-ENODEV` checks) and applies uniformly to both probe
+types via `nebulaos_bl_diag_probe_type_restore_is_exact()` - GPIO probes
+route to `nebulaos_bl_diag_gpio_restore_is_exact()` (`diag->enable_gpio
+!= NULL`, unconditionally true when present, per the existing GPIO
+readback proof), PWM probes route to the function above. A probe whose
+resource is not currently exact is rejected with `-EOPNOTSUPP`, before
+anything is armed or applied.
+
+Two defensive details worth calling out:
+
+- **Chip identity check.** A generic PWM consumer has no framework-level
+  way to prove a `struct pwm_chip *` really is a `pwm-ingenic-v2.c`
+  chip (the `to_ingenic_chip()` `container_of()` cast inside that driver
+  is only safe for a chip that genuinely is one). Rather than trust the
+  bound chip blindly, `nebulaos_bl_diag_pwm_restore_is_exact()` checks
+  `chip->dev->driver->name` equals `"ingenic-pwm"` (the platform driver
+  name `pwm-ingenic-v2.c` registers itself under) before calling the
+  exported query at all, and returns `false` if that doesn't hold.
+- **Kconfig/Makefile coupling stays soft, deliberately.** No `select` or
+  `depends on CONFIG_PWM_INGENIC_V2_GET_STATE` was added to
+  `NEBULAOS_BACKLIGHT_PROBE_DIAG` - the two options remain fully
+  independent Kconfig symbols in different subsystems, each still owned
+  exclusively by its own variant script
+  (`display-backlight-diag-variant.sh` / `pwm-state-readback-variant.sh`
+  - see those scripts' own header comments for why that ownership
+  boundary exists). The consumer-side reference to
+  `ingenic_pwm_channel_get_state_is_exact()` is wrapped in the matching
+  `#ifdef CONFIG_PWM_INGENIC_V2_GET_STATE`, so the symbol reference is
+  compiled out entirely (not just dead-code-eliminated) whenever that
+  option is unselected - the mandatory safe fallback for "PWM readback
+  not compiled in" is "treat as not exact, refuse every PWM probe",
+  never "assume exact". No shared header was added under
+  `module_drivers/include/` for a single one-line declaration; instead a
+  direct `extern bool ingenic_pwm_channel_get_state_is_exact(struct
+  pwm_chip *chip, unsigned int channel);` mirrors the exact
+  forward-declaration convention `pwm-ingenic-v2.c` itself already
+  established immediately above its own
+  `EXPORT_SYMBOL_GPL(ingenic_pwm_channel_get_state_is_exact)` line.
+
+### Boot-time behavior, re-confirmed
+
+`nebulaos_bl_diag_probe()` (module bind) still never calls
+`pwm_apply_state()`/`gpiod_direction_output()`/
+`gpiod_set_raw_value_cansleep()` - zero hardware-state change at bind
+time, unchanged from the original prototype. It now additionally
+initializes `diag->diag_armed = false` explicitly, so the diagnostic is
+fully inert (disarmed, no probe possible) until a human writes `arm`.
+
+### Compile testing
+
+Compile-tested via this project's docker cross-compile pattern
+(`docker run --rm --user root -v "$BUILDROOT_DIR:/src" -w
+/src/output/build/linux-custom pellcorp/k1-bash-build bash -c '...'`,
+`make ARCH=mips CROSS_COMPILE=mipsel-buildroot-linux-gnu- W=1
+module_drivers/drivers/misc/nebulaos_backlight_probe_diag.o`), in both
+configurations:
+
+- **`CONFIG_PWM_INGENIC_V2_GET_STATE` unselected (the real board
+  default):** compiled clean, zero errors, zero warnings. `nm` on the
+  resulting object confirms no `get_state_is_exact`-related symbol
+  reference at all - the `#ifdef` genuinely compiles the call out, not
+  merely hides it behind a runtime `false`.
+- **`CONFIG_PWM_INGENIC_V2_GET_STATE` selected:** compiled clean, zero
+  errors, zero warnings, alongside `pwm-ingenic-v2.o` (also rebuilt
+  clean under this option). `nm` confirms the expected pairing: the PWM
+  object exports `T ingenic_pwm_channel_get_state_is_exact`, and the
+  backlight-diag object references `U ingenic_pwm_channel_get_state_is_exact`
+  (undefined, correctly resolved at final link time) - proving the
+  cross-module wiring is real and would link.
+
+Unrelated finding, noted for the record and NOT fixed here (out of
+scope - `pwm-ingenic-v2.c` may only be touched to confirm the exported
+symbol per this pass's own constraints): the pristine, unpatched
+`pwm-ingenic-v2.c` baseline (i.e. with
+`CONFIG_PWM_INGENIC_V2_GET_STATE` unselected AND the get-state patch not
+applied at all) fails a combined `W=1` build with
+`-Werror=unused-but-set-variable` on `ingenic_pwm_config()`'s `prescale`
+local. This is pre-existing vendor baseline behavior, not a regression -
+`git diff` against vendor HEAD confirms `pwm-ingenic-v2.c` is untouched
+in that configuration - and happens not to matter for the mainline build
+today because module_drivers is compiled without `W=1`. The PWM state
+readback patch's own restructuring of that code path (adding `(void)prescale;`)
+incidentally fixes it under `CONFIG_PWM_INGENIC_V2_GET_STATE`, which is
+why it only surfaces in the "unselected AND unpatched" combination
+specifically, not in either configuration this project's own build
+actually ships.
+
+### Test results
+
+`sh tests/display-backlight-diag-variant-tests.sh`: **50 passed, 0
+failed** (of the original 32: 27 unchanged, 5 rewritten because they
+tested implementation details of the now-removed free-form grammar or
+the now-live-instead-of-hardcoded exactness field - not deleted, see the
+test file's own "UPDATED" comments at each rewritten block for the
+justification; plus 8 new test blocks covering the 9-command whitelist,
+removal of the old free-form grammar, the fixed-duration invariant, the
+diagnostic-level arm/disarm gate and its fail-safe disarm behavior, and
+that the PWM-exactness gate genuinely branches on the real exported
+function rather than a hardcoded constant in either direction).
+
 ## Packaging decision
 
 See the mission's final report for the packaging decision and the

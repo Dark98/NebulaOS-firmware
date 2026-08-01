@@ -40,3 +40,8 @@ scripts/build/overlay/lib/firmware/regulatory.db.LICENSE
 # 04-cross-compile-app-stack.sh's own scratch dir - downloaded pywheels and
 # extracted tarballs, pure build output like vendor/.
 /build-work/
+
+# Cross-compiled MIPS binary - build output, not source. Source
+# (fb-vsync-test.c) stays tracked; rebuild via the MIPS toolchain per
+# tools/fb-vsync-test/README.md.
+tools/fb-vsync-test/fb-vsync-test

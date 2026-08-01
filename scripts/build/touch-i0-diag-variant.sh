@@ -1,4 +1,25 @@
 #!/bin/sh
+# *** DEPRECATED (2026-08-01+) - DO NOT RUN AGAINST A CURRENT CHECKOUT ***
+# Superseded by scripts/build/touch-qualification-variant.sh
+# (CONFIG_TOUCHSCREEN_NS2009_QUALIFICATION), which subsumes this variant's
+# IRQ-observation-only diagnostic as its runtime "irq-observe" mode, plus
+# TOUCH-D0-DIAG's read-only poll counters and a new irq-assist mode, all
+# behind ONE Kconfig symbol.
+#
+# Kept only for project-history/test reference - DO NOT run this script
+# against the vendor kernel checkout, and NEVER compose it with
+# touch-qualification-variant.sh, touch-d0-diag-variant.sh, or
+# touch-irq-variant.sh in the same build. All four scripts do a full
+# `git checkout --` of the exact same two files
+# (kernel/kernel-6.6/drivers/input/touchscreen/{Kconfig,ns2009.c}) as their
+# own "off" step - applying one and then reverting a DIFFERENT one silently
+# discards the first one's patch too, including its Kconfig option's own
+# definition, with ZERO error anywhere in the build (this is the precise
+# failure mode touch-qualification-variant.sh exists to retire - see its
+# own header comment for the full incident history).
+#
+# Original header follows, describing this now-superseded variant:
+#
 # Applies the TOUCH-I0-DIAG compile-only IRQ observation diagnostic
 # (display/touch investigation mission follow-on, 2026-08-01+ - see
 # build-work/display-analysis/touch-path-analysis.txt and

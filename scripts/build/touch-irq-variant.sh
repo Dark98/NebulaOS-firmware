@@ -1,4 +1,30 @@
 #!/bin/sh
+# *** DEPRECATED (2026-08-01+) - DO NOT RUN AGAINST A CURRENT CHECKOUT ***
+# Superseded by scripts/build/touch-qualification-variant.sh
+# (CONFIG_TOUCHSCREEN_NS2009_QUALIFICATION). This script's I1 variant used
+# a both-edges trigger placeholder from before GPIO79's real edge/polarity
+# was known from live evidence - that placeholder is now known-outdated
+# (see docs/NEBULAOS_TOUCH_IRQ_TRIGGER_FINDINGS.md: GPIO79 is
+# IDLE_HIGH_ACTIVE_LOW, touch-down is a FALLING edge) and must not be
+# reused. touch-qualification-variant.sh's "irq-assist" mode is this
+# script's real successor: falling-edge IRQ plus a 250ms safety-poll
+# fallback, reusing the existing poll/report path for all I2C/coordinate
+# work instead of calling it directly from IRQ context.
+#
+# Kept only for project-history/test reference (e.g. as a citation for the
+# storm-protection pattern) - DO NOT run this script against the vendor
+# kernel checkout, and NEVER compose it with touch-qualification-variant.sh,
+# touch-d0-diag-variant.sh, or touch-i0-diag-variant.sh in the same build.
+# All four scripts do a full `git checkout --` of the exact same two files
+# (kernel/kernel-6.6/drivers/input/touchscreen/{Kconfig,ns2009.c}) as their
+# own "off" step - applying one and then reverting a DIFFERENT one silently
+# discards the first one's patch too, including its Kconfig option's own
+# definition, with ZERO error anywhere in the build (this is the precise
+# failure mode touch-qualification-variant.sh exists to retire - see its
+# own header comment for the full incident history).
+#
+# Original header follows, describing this now-superseded variant:
+#
 # Applies the TOUCH-I1 compile-only IRQ-assisted touch-down prototype
 # (powered-on display/touch investigation mission, 2026-08-01 - see
 # docs/NEBULAOS_DISPLAY_OS_HARDWARE_ANALYSIS.md and

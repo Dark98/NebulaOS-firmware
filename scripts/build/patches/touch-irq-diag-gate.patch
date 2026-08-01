@@ -1,3 +1,15 @@
+# *** DEPRECATED (2026-08-01+) *** - superseded by
+# scripts/build/patches/touch-qualification-unified.patch
+# (CONFIG_TOUCHSCREEN_NS2009_QUALIFICATION), applied only via
+# scripts/build/touch-qualification-variant.sh from now on. This patch's
+# TOUCH-I0-DIAG IRQ observation is subsumed by the unified driver's runtime
+# "irq-observe" mode. Kept only for project-history/test reference - do not
+# apply this patch directly, and never compose it with
+# touch-qualification-unified.patch, touch-poll-diag-gate.patch, or
+# touch-irq-gate.patch (all four touch the identical two files; composing
+# any of them silently discards whichever was applied first - see
+# scripts/build/touch-qualification-variant.sh's header for the full
+# incident history this retires).
 diff --git a/kernel/kernel-6.6/drivers/input/touchscreen/Kconfig b/kernel/kernel-6.6/drivers/input/touchscreen/Kconfig
 index d6a9b95cb..e93fcc075 100644
 --- a/kernel/kernel-6.6/drivers/input/touchscreen/Kconfig

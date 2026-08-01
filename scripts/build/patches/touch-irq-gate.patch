@@ -1,3 +1,20 @@
+# *** DEPRECATED (2026-08-01+) *** - superseded by
+# scripts/build/patches/touch-qualification-unified.patch
+# (CONFIG_TOUCHSCREEN_NS2009_QUALIFICATION), applied only via
+# scripts/build/touch-qualification-variant.sh from now on. This patch's
+# both-edges IRQ-assisted trigger placeholder is now known-outdated (see
+# docs/NEBULAOS_TOUCH_IRQ_TRIGGER_FINDINGS.md: GPIO79 is
+# IDLE_HIGH_ACTIVE_LOW, touch-down is a FALLING edge) and its real
+# successor is the unified driver's runtime "irq-assist" mode, which uses
+# a falling-edge trigger and reuses the existing poll/report path instead
+# of calling it directly from IRQ context. Kept only for project-history/
+# test reference (e.g. as a citation for the storm-protection pattern) -
+# do not apply this patch directly, and never compose it with
+# touch-qualification-unified.patch, touch-poll-diag-gate.patch, or
+# touch-irq-diag-gate.patch (all four touch the identical two files;
+# composing any of them silently discards whichever was applied first -
+# see scripts/build/touch-qualification-variant.sh's header for the full
+# incident history this retires).
 diff --git a/kernel/kernel-6.6/drivers/input/touchscreen/Kconfig b/kernel/kernel-6.6/drivers/input/touchscreen/Kconfig
 index d6a9b95cb..1290da8fb 100644
 --- a/kernel/kernel-6.6/drivers/input/touchscreen/Kconfig

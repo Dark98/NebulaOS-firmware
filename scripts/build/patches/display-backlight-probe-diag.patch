@@ -1,8 +1,8 @@
 diff --git a/kernel/kernel-6.6/module_drivers/drivers/misc/Kconfig b/kernel/kernel-6.6/module_drivers/drivers/misc/Kconfig
-index 4b5ac7e20..089957ff7 100644
+index 4b5ac7e20..e786fce00 100644
 --- a/kernel/kernel-6.6/module_drivers/drivers/misc/Kconfig
 +++ b/kernel/kernel-6.6/module_drivers/drivers/misc/Kconfig
-@@ -49,3 +49,23 @@ config BCM_4345C5_RFKILL
+@@ -49,3 +49,36 @@ config BCM_4345C5_RFKILL
  	help
  	Creates an rfkill entry in sysfs for power control of Bluetooth
  	bcm-xxxx chips.
@@ -17,11 +17,24 @@ index 4b5ac7e20..089957ff7 100644
 +	  the real candidate backlight PWM channel/enable-GPIO electrical
 +	  behavior on this board without external measurement equipment,
 +	  through a tightly-scoped debugfs command interface (probe enable
-+	  low/high, probe pwm 25/50/75, restore, status). Never touches
-+	  PWM/GPIO state at boot or module bind time - probing is 100%
-+	  opt-in, and every probe auto-restores after a bounded timeout via
-+	  a kernel workqueue, independent of any userspace process. Rejects
-+	  0% and 100% duty-cycle requests outright.
++	  low/high, probe pwm 25/50/75, restore, status) that exposes no
++	  channel/GPIO-number argument at all - only the one candidate PWM
++	  channel and one candidate enable-GPIO this DT node names can ever
++	  be touched. Never touches PWM/GPIO state at boot or module bind
++	  time - probing is 100% opt-in, restoration is armed (kernel
++	  workqueue timer scheduled) BEFORE the one candidate hardware write
++	  is ever made, and every probe auto-restores after a bounded
++	  timeout (default 2s, hard maximum 3s - longer is rejected)
++	  independent of any userspace process. Rejects 0% and 100%
++	  duty-cycle requests outright.
++
++	  Honest limitation: the candidate PWM channel's restore target is a
++	  safe default (disabled/zero-period), NOT a reconstruction of
++	  whatever the bootloader actually left running - this board's PWM
++	  driver cannot read that back. The candidate enable-GPIO's restore
++	  target IS an exact, live hardware readback. See
++	  nebulaos_backlight_probe_diag.c's file header and the debugfs
++	  .../status pwm_restore_is_exact / gpio_restore_is_exact fields.
 +
 +	  Disabled by default - never enable for a production/active-slot
 +	  build until live hardware testing confirms the candidate PWM
@@ -37,16 +50,17 @@ index fef6e16fb..6271ffb26 100644
 +obj-$(CONFIG_NEBULAOS_BACKLIGHT_PROBE_DIAG) += nebulaos_backlight_probe_diag.o
 diff --git a/kernel/kernel-6.6/module_drivers/drivers/misc/nebulaos_backlight_probe_diag.c b/kernel/kernel-6.6/module_drivers/drivers/misc/nebulaos_backlight_probe_diag.c
 new file mode 100644
-index 000000000..e9b95a740
+index 000000000..34d70d5f7
 --- /dev/null
 +++ b/kernel/kernel-6.6/module_drivers/drivers/misc/nebulaos_backlight_probe_diag.c
-@@ -0,0 +1,487 @@
+@@ -0,0 +1,662 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * NebulaOS bounded backlight probe diagnostic (DISPLAY-B0-DIAG)
 + *
 + * Display hardware analysis mission follow-on (2026-08-01+) - see
-+ * docs/NEBULAOS_DISPLAY_OFFLINE_IMPLEMENTATION_PLAN.md and
++ * docs/NEBULAOS_DISPLAY_OFFLINE_IMPLEMENTATION_PLAN.md,
++ * docs/NEBULAOS_BACKLIGHT_DIAGNOSTIC_PLAN.md and
 + * build-work/display-analysis/backlight-path-analysis.txt.
 + *
 + * Purpose: let a human safely discover the real backlight PWM channel/
@@ -62,23 +76,51 @@ index 000000000..e9b95a740
 + *   - a separate enable GPIO around PC22 (stock's own power_gpio)
 + * This driver treats both purely as candidates to probe - it never
 + * assumes either is correct, and it never touches either at module
-+ * load/bind time. Probing is 100% opt-in via debugfs.
++ * load/bind time. Probing is 100% opt-in via debugfs. The debugfs
++ * command interface exposes NO channel/GPIO-number argument at all -
++ * every probe always acts on exactly these two fixed hardware handles
++ * (diag->pwm / diag->enable_gpio), each acquired exactly once, in
++ * nebulaos_bl_diag_probe() below, via devm_pwm_get(dev, NULL) (the
++ * DT node's sole "pwms" entry) and devm_gpiod_get_optional(dev,
++ * "enable", ...) (the DT node's "enable-gpios" property by name). There
++ * is no code path anywhere in this file that parses a user-supplied
++ * channel or GPIO number - an arbitrary channel/GPIO can never be
++ * requested through this interface even in principle.
 + *
 + * Mandatory safety behavior, for every probe command:
-+ *   - probe() only ever *reads* the PWM/GPIO state already present
-+ *     (whatever the bootloader/earlier boot stage established) - it
-+ *     never calls pwm_apply_state()/gpiod_direction_output() itself, so
-+ *     binding this driver can never change what the panel is currently
-+ *     doing.
++ *   - probe() only ever *reads* the PWM/GPIO state already present at
++ *     bind time - it never calls pwm_apply_state()/
++ *     gpiod_direction_output() itself, so binding this driver can never
++ *     change what the panel is currently doing. (See the "RESTORATION
++ *     EXACTNESS" section below for an important, honest caveat about
++ *     what this "read" actually captures for the PWM side.)
 + *   - exactly one probe may be active at a time - a second "probe ..."
 + *     command while one is already active is rejected outright (-EBUSY),
 + *     no hardware is touched by the rejected command.
 + *   - every probe applies exactly one temporary state (either the
 + *     candidate enable-gpio to a requested level, or the candidate PWM
 + *     to a requested duty cycle - never both at once).
-+ *   - a kernel workqueue timer (delayed_work), armed at probe start,
-+ *     always auto-restores the saved state after a bounded timeout
-+ *     (default 3000ms, clamped to [NEBULAOS_BL_DIAG_MIN_TIMEOUT_MS,
++ *   - ARM-BEFORE-APPLY ORDERING (load-bearing - do not reorder): every
++ *     probe command (1) captures the prior state, (2) marks the probe
++ *     active and schedules the kernel-owned restore_work timer, and
++ *     ONLY THEN (3) applies the one candidate state to hardware. This
++ *     order is deliberate: if anything crashes/oopses/is killed between
++ *     steps (2) and (3), the watchdog is already armed and will simply
++ *     fire and restore against the saved state that was captured before
++ *     any hardware write happened (a harmless no-op, since nothing was
++ *     ever actually applied). The reverse order (apply, then arm) would
++ *     leave a real window where a crash between "apply" and "arm" leaves
++ *     hardware in the probed state with NO watchdog covering it - that
++ *     bug existed in an earlier revision of this driver and was fixed
++ *     here. If the hardware-apply step itself fails (pwm_apply_state()
++ *     returning an error - gpiod_set_raw_value_cansleep() cannot fail),
++ *     the probe state and the just-armed timer are unwound synchronously
++ *     before returning the error, so a probe that never actually took
++ *     effect can never trigger a spurious restore later.
++ *   - a kernel workqueue timer (delayed_work), armed (per the ordering
++ *     above) at probe start, always auto-restores the saved state after
++ *     a bounded timeout (default NEBULAOS_BL_DIAG_DEFAULT_TIMEOUT_MS,
++ *     clamped to [NEBULAOS_BL_DIAG_MIN_TIMEOUT_MS,
 + *     NEBULAOS_BL_DIAG_MAX_TIMEOUT_MS]) - this is entirely independent
 + *     of any userspace process's lifetime. A dropped SSH session, a
 + *     killed shell, or a signal delivered to whatever process issued the
@@ -92,9 +134,51 @@ index 000000000..e9b95a740
 + *     25/50/75% are ever accepted through the "probe pwm" command, so an
 + *     unproven or wrong polarity/wiring assumption can never drive the
 + *     candidate PWM fully on or fully off through this diagnostic.
++ *   - a requested timeout outside [MIN,MAX] is rejected with -EINVAL
++ *     before any hardware is touched or any state is armed.
 + *   - driver remove() forces an immediate, synchronous restore if a
 + *     probe is still active, so unbinding never leaves hardware in a
 + *     probed (non-original) state.
++ *
++ * RESTORATION EXACTNESS - read this before trusting any "restore" claim:
++ *
++ *   GPIO side (candidate enable-gpios, if present): EXACT. This board's
++ *   pinctrl-ingenic gpio_chip's .get callback (ingenic_gpio_get(), in
++ *   module_drivers/drivers/pinctrl/pinctrl-ingenic.c) reads the live
++ *   PxPIN hardware register on every single call - both the initial
++ *   capture in nebulaos_bl_diag_probe() and the per-probe capture in
++ *   nebulaos_bl_diag_cmd_probe() are genuine hardware readbacks, not a
++ *   cached/assumed value. Restoring to that captured value is a real,
++ *   exact restoration of the pin's actual prior electrical level.
++ *
++ *   PWM side (candidate PWM channel): NOT EXACT - a documented, honest
++ *   limitation, not a claim of exact restoration. This board's bound
++ *   PWM driver (module_drivers/drivers/pwm/pwm-ingenic-v2.c) implements
++ *   only the .apply callback in its "struct pwm_ops" - it does NOT
++ *   implement .get_state. The generic PWM core
++ *   (drivers/pwm/core.c:pwm_device_request()) only ever populates a
++ *   pwm_device's cached "state" struct from real hardware if
++ *   chip->ops->get_state is non-NULL; when it is NULL (as here), the
++ *   consumer's pwm_device.state simply stays whatever it was already
++ *   zero-initialized/left as. Because this diagnostic is the FIRST
++ *   consumer ever to request PWM channel 0 in this software stack (see
++ *   backlight-path-analysis.txt - channel 0 has zero other consumers in
++ *   the compiled tree), pwm_get_state() here does NOT return "whatever
++ *   the bootloader/earlier boot stage established" - it returns a
++ *   synthetic all-zero state (period=0, duty_cycle=0, enabled=false).
++ *   "Restoring" to that captured state therefore means driving the PWM
++ *   to disabled/zero-period, which is a REASONABLE, DELIBERATELY CHOSEN
++ *   SAFE DEFAULT (a disabled PWM output is the least surprising, least
++ *   likely-to-damage-anything state) - but it is NOT a reconstruction of
++ *   whatever electrical waveform (if any) the bootloader/SPL left
++ *   running on this pin, which this kernel has no way to read. Any
++ *   comment, log message, or documentation claiming "exact restoration"
++ *   for the PWM path would be dishonest; none should exist in this file
++ *   or its accompanying docs. This limitation is surfaced at runtime via
++ *   the read-only debugfs .../status file's "pwm_restore_is_exact: 0"
++ *   and "gpio_restore_is_exact: 1" fields (see
++ *   nebulaos_bl_diag_status_show()) so a human operator never has to
++ *   take this claim on faith from a comment alone.
 + *
 + * Bounded debugfs command interface (write to .../command):
 + *   probe enable low  [timeout_ms]
@@ -126,9 +210,12 @@ index 000000000..e9b95a740
 +#include <linux/uaccess.h>
 +
 +#define NEBULAOS_BL_DIAG_NAME			"nebulaos_backlight_diag"
-+#define NEBULAOS_BL_DIAG_DEFAULT_TIMEOUT_MS	3000
++/* Bounds mandated by the display hardware analysis mission's hardening
++ * pass: default 2s, hard maximum 3s - anything requesting longer is
++ * rejected outright (-EINVAL) before any hardware is touched. */
++#define NEBULAOS_BL_DIAG_DEFAULT_TIMEOUT_MS	2000
 +#define NEBULAOS_BL_DIAG_MIN_TIMEOUT_MS		250
-+#define NEBULAOS_BL_DIAG_MAX_TIMEOUT_MS		10000
++#define NEBULAOS_BL_DIAG_MAX_TIMEOUT_MS		3000
 +/* Candidate period only - see backlight-path-analysis.txt. Never proven
 + * correct for this board's real backlight circuit, only a documented,
 + * stock-matching starting point. */
@@ -184,11 +271,19 @@ index 000000000..e9b95a740
 +		return;
 +
 +	if (diag->probe_type == NEBULAOS_BL_DIAG_PROBE_PWM_DUTY) {
++		/* See the file header "RESTORATION EXACTNESS" section: this
++		 * reapplies whatever nebulaos_bl_diag_cmd_probe() captured
++		 * via pwm_get_state() before probing, which - on this
++		 * board's PWM driver - is a synthetic disabled/zero state,
++		 * not a genuine hardware readback. This is a safe, defined
++		 * default, not a claim of exact restoration. */
 +		ret = pwm_apply_state(diag->pwm, &diag->saved_pwm_state);
 +		if (ret)
 +			dev_err(diag->dev,
 +				"restore: failed to reapply saved PWM state: %d\n", ret);
 +	} else if (diag->probe_type == NEBULAOS_BL_DIAG_PROBE_ENABLE_GPIO) {
++		/* Genuine hardware readback captured pre-probe - see the
++		 * file header "RESTORATION EXACTNESS" section. */
 +		if (diag->enable_gpio && diag->saved_gpio_value >= 0)
 +			gpiod_set_raw_value_cansleep(diag->enable_gpio,
 +						      diag->saved_gpio_value);
@@ -252,6 +347,11 @@ index 000000000..e9b95a740
 +	if (!kind || !value)
 +		return -EINVAL;
 +
++	/* Note there is deliberately no third selector argument here for a
++	 * channel/GPIO number - see the file header comment. "kind"/"value"
++	 * only ever select among the two fixed hardware handles this driver
++	 * bound once at probe() time; they never index into an arbitrary
++	 * channel or GPIO number. */
 +	if (!strcmp(kind, "enable")) {
 +		if (!strcmp(value, "low"))
 +			gpio_val = 0;
@@ -279,6 +379,9 @@ index 000000000..e9b95a740
 +		if (kstrtouint(timeout_arg, 10, &timeout_ms))
 +			return -EINVAL;
 +	}
++	/* Bounds enforced BEFORE anything is armed or touched: reject any
++	 * request under the floor or - critically - over the mission's hard
++	 * 3-second ceiling (NEBULAOS_BL_DIAG_MAX_TIMEOUT_MS). */
 +	if (timeout_ms < NEBULAOS_BL_DIAG_MIN_TIMEOUT_MS ||
 +	    timeout_ms > NEBULAOS_BL_DIAG_MAX_TIMEOUT_MS)
 +		return -EINVAL;
@@ -292,21 +395,43 @@ index 000000000..e9b95a740
 +		return -EBUSY;
 +	}
 +
-+	if (gpio_val >= 0) {
-+		if (!diag->enable_gpio) {
-+			diag->probe_failure_count++;
-+			mutex_unlock(&diag->lock);
-+			dev_warn(diag->dev, "rejected probe: no candidate enable-gpios present\n");
-+			return -ENODEV;
-+		}
++	if (gpio_val >= 0 && !diag->enable_gpio) {
++		diag->probe_failure_count++;
++		mutex_unlock(&diag->lock);
++		dev_warn(diag->dev, "rejected probe: no candidate enable-gpios present\n");
++		return -ENODEV;
++	}
++
++	/* Step 1: capture prior state (read-only, no hardware write yet).
++	 * See the file header "RESTORATION EXACTNESS" section for what this
++	 * genuinely captures on each path. */
++	if (gpio_val >= 0)
 +		diag->saved_gpio_value = gpiod_get_raw_value_cansleep(diag->enable_gpio);
++	else
++		pwm_get_state(diag->pwm, &diag->saved_pwm_state);
++
++	/* Step 2: ARM the watchdog and mark the probe active BEFORE
++	 * changing any hardware below (see the file header "ARM-BEFORE-
++	 * APPLY ORDERING" section - load-bearing, do not reorder). At this
++	 * point a crash/kill/oops racing against the apply step below is
++	 * already covered: the watchdog will fire against the just-captured
++	 * saved state, which is a harmless no-op since nothing has actually
++	 * been written to hardware yet. */
++	diag->probe_type = (gpio_val >= 0) ? NEBULAOS_BL_DIAG_PROBE_ENABLE_GPIO
++					    : NEBULAOS_BL_DIAG_PROBE_PWM_DUTY;
++	diag->requested_duty_pct = (gpio_val >= 0) ? -1 : duty_pct;
++	diag->requested_period_ns = (gpio_val >= 0) ? 0 : NEBULAOS_BL_DIAG_CANDIDATE_PERIOD_NS;
++	diag->probe_active = true;
++	diag->active_timeout_ms = timeout_ms;
++	diag->probe_deadline = jiffies + msecs_to_jiffies(timeout_ms);
++	schedule_delayed_work(&diag->restore_work, msecs_to_jiffies(timeout_ms));
++
++	/* Step 3: apply exactly one candidate state to hardware now that
++	 * restoration is already armed. */
++	if (gpio_val >= 0) {
 +		gpiod_set_raw_value_cansleep(diag->enable_gpio, gpio_val);
 +		diag->candidate_gpio_state = gpio_val;
-+		diag->probe_type = NEBULAOS_BL_DIAG_PROBE_ENABLE_GPIO;
-+		diag->requested_duty_pct = -1;
-+		diag->requested_period_ns = 0;
 +	} else {
-+		pwm_get_state(diag->pwm, &diag->saved_pwm_state);
 +		new_state = diag->saved_pwm_state;
 +		new_state.enabled = true;
 +		new_state.period = NEBULAOS_BL_DIAG_CANDIDATE_PERIOD_NS;
@@ -314,20 +439,57 @@ index 000000000..e9b95a740
 +
 +		ret = pwm_apply_state(diag->pwm, &new_state);
 +		if (ret) {
++			/* The apply never actually took effect - unwind the
++			 * state/timer we already armed in step 2 so the
++			 * watchdog doesn't later "restore" a probe that never
++			 * ran, AND so the delayed_work object is idle again
++			 * before we release the lock below (otherwise a second
++			 * thread could call schedule_delayed_work() on this
++			 * same still-pending work item for its own new probe
++			 * immediately after we unlock, and a subsequent
++			 * cancel_delayed_work_sync() call made AFTER unlocking
++			 * would then race against - and could silently cancel -
++			 * THEIR timer instead of the one this failed attempt
++			 * armed; an earlier revision of this fix used exactly
++			 * that unlock-then-cancel_delayed_work_sync() ordering
++			 * and had this TOCTOU race).
++			 *
++			 * cancel_delayed_work() - the NON-blocking variant, not
++			 * cancel_delayed_work_sync() - is used here deliberately,
++			 * while diag->lock is still held: unlike the explicit
++			 * "restore"/remove() paths, this branch never itself
++			 * calls nebulaos_bl_diag_do_restore() (nothing was ever
++			 * actually applied for this failed attempt, so there is
++			 * nothing to restore), so correctness does not depend on
++			 * blocking until any in-flight watchdog callback has
++			 * fully finished - it only needs the pending timer entry
++			 * removed so a future schedule_delayed_work() call is
++			 * honored rather than silently ignored as already-
++			 * pending. cancel_delayed_work() never blocks, so calling
++			 * it here cannot deadlock against the watchdog callback
++			 * trying to take this same lock (unlike
++			 * cancel_delayed_work_sync(), which is exactly why every
++			 * OTHER call site in this file always calls that blocking
++			 * variant only without the lock held). In the
++			 * vanishingly unlikely case the watchdog had already
++			 * started running before this cancel call (impractical
++			 * here: pwm_apply_state() fails synchronously, almost
++			 * always long before NEBULAOS_BL_DIAG_MIN_TIMEOUT_MS's
++			 * 250ms floor could elapse), it will simply observe
++			 * probe_active == false below and no-op, exactly like
++			 * every other nebulaos_bl_diag_do_restore() caller
++			 * already tolerates. */
++			cancel_delayed_work(&diag->restore_work);
++			diag->probe_active = false;
++			diag->probe_type = NEBULAOS_BL_DIAG_PROBE_NONE;
++			diag->requested_duty_pct = -1;
++			diag->requested_period_ns = 0;
 +			diag->probe_failure_count++;
 +			mutex_unlock(&diag->lock);
 +			dev_err(diag->dev, "probe pwm %d%% failed to apply: %d\n", duty_pct, ret);
 +			return ret;
 +		}
-+		diag->requested_duty_pct = duty_pct;
-+		diag->requested_period_ns = NEBULAOS_BL_DIAG_CANDIDATE_PERIOD_NS;
-+		diag->probe_type = NEBULAOS_BL_DIAG_PROBE_PWM_DUTY;
 +	}
-+
-+	diag->probe_active = true;
-+	diag->active_timeout_ms = timeout_ms;
-+	diag->probe_deadline = jiffies + msecs_to_jiffies(timeout_ms);
-+	schedule_delayed_work(&diag->restore_work, msecs_to_jiffies(timeout_ms));
 +
 +	mutex_unlock(&diag->lock);
 +
@@ -349,11 +511,11 @@ index 000000000..e9b95a740
 +	dev_info(diag->dev,
 +		 "status: active=%d type=%d duty=%d%% period=%luns gpio=%d "
 +		 "timeout_remaining=%lums restore_count=%u probe_failure_count=%u "
-+		 "watchdog_restoration_count=%u\n",
++		 "watchdog_restoration_count=%u pwm_restore_is_exact=0 gpio_restore_is_exact=%d\n",
 +		 diag->probe_active, diag->probe_type, diag->requested_duty_pct,
 +		 diag->requested_period_ns, diag->candidate_gpio_state, remaining_ms,
 +		 diag->restore_count, diag->probe_failure_count,
-+		 diag->watchdog_restoration_count);
++		 diag->watchdog_restoration_count, diag->enable_gpio ? 1 : -1);
 +	mutex_unlock(&diag->lock);
 +	return 0;
 +}
@@ -421,6 +583,21 @@ index 000000000..e9b95a740
 +	seq_printf(s, "restore_count: %u\n", diag->restore_count);
 +	seq_printf(s, "probe_failure_count: %u\n", diag->probe_failure_count);
 +	seq_printf(s, "watchdog_restoration_count: %u\n", diag->watchdog_restoration_count);
++	/*
++	 * Honest restoration-exactness fields - see the file header
++	 * "RESTORATION EXACTNESS" section. pwm_restore_is_exact is always 0
++	 * on this board: pwm-ingenic-v2.c implements no .get_state callback,
++	 * so pwm_get_state() never reads a real hardware register for this
++	 * channel - "restoring" the PWM means driving it to a safe default
++	 * (disabled/zero-period), not reconstructing whatever the bootloader
++	 * actually left running. gpio_restore_is_exact is 1 when the
++	 * candidate enable-gpios is present, because ingenic_gpio_get() reads
++	 * the live PxPIN register on every call - that restoration target is
++	 * a genuine hardware readback. -1 means no candidate GPIO exists on
++	 * this DT node at all, so the field is not applicable.
++	 */
++	seq_puts(s, "pwm_restore_is_exact: 0\n");
++	seq_printf(s, "gpio_restore_is_exact: %d\n", diag->enable_gpio ? 1 : -1);
 +	mutex_unlock(&diag->lock);
 +	return 0;
 +}
@@ -447,11 +624,19 @@ index 000000000..e9b95a740
 +		dev_err(dev, "failed to get candidate PWM: %ld\n", PTR_ERR(diag->pwm));
 +		return PTR_ERR(diag->pwm);
 +	}
-+	/* Read-only: pwm_get_state() reads the descriptor's cached/hardware
-+	 * state without applying anything. This driver must NEVER call
-+	 * pwm_apply_state() here - whatever the bootloader/earlier boot
-+	 * stage established is preserved untouched until an explicit probe
-+	 * command arrives. */
++	/* Read-only from this driver's point of view: pwm_get_state() never
++	 * calls into hardware here, it just reads the PWM core's cached
++	 * pwm_device.state. This driver must NEVER call pwm_apply_state()
++	 * at bind time. IMPORTANT, see the file header "RESTORATION
++	 * EXACTNESS" section: because this board's PWM driver
++	 * (pwm-ingenic-v2.c) implements no .get_state callback, that cached
++	 * state was itself never populated from a real register read - for
++	 * this diagnostic (the first-ever consumer of this channel) it is a
++	 * synthetic zero/disabled state, not "whatever the bootloader
++	 * established". Binding this driver still never WRITES anything to
++	 * hardware, so it remains true that probing is 100% opt-in - just
++	 * not true that the later "restore" reconstructs a real prior
++	 * hardware state for the PWM side. */
 +	pwm_get_state(diag->pwm, &diag->saved_pwm_state);
 +
 +	/* GPIOD_ASIS: acquire the descriptor's current direction/value
@@ -459,7 +644,9 @@ index 000000000..e9b95a740
 +	 * change the pin's state. Optional: if the candidate enable-gpios
 +	 * property is absent, this is simply NULL, and every "probe enable
 +	 * ..." command is rejected as unavailable (-ENODEV) while the PWM
-+	 * probes still work normally. */
++	 * probes still work normally. Unlike the PWM side above, this IS a
++	 * genuine hardware readback - see the file header "RESTORATION
++	 * EXACTNESS" section. */
 +	diag->enable_gpio = devm_gpiod_get_optional(dev, "enable", GPIOD_ASIS);
 +	if (IS_ERR(diag->enable_gpio)) {
 +		dev_err(dev, "failed to get candidate enable-gpios: %ld\n",
@@ -485,7 +672,8 @@ index 000000000..e9b95a740
 +	}
 +
 +	dev_info(dev, "backlight probe diagnostic ready (bounded, opt-in via debugfs; "
-+		 "boot-time PWM/GPIO state untouched)\n");
++		 "boot-time PWM/GPIO state untouched; PWM restore target is a safe "
++		 "default, not exact - see .../status pwm_restore_is_exact)\n");
 +	return 0;
 +}
 +

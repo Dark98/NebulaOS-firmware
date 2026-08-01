@@ -200,7 +200,129 @@ else
 	fail "nebulaos_bl_diag_remove() does not force a restore of any still-active probe"
 fi
 
-# --- Test 10: re-applying DIAG1 twice is idempotent. ---
+# --- Test 10: hardening pass - the mission-mandated bounds are exactly
+# default=2000ms, max=3000ms (not the prior revision's 3000/10000). ---
+if grep -q '^#define NEBULAOS_BL_DIAG_DEFAULT_TIMEOUT_MS[[:space:]]*2000$' "$DRIVER" && \
+   grep -q '^#define NEBULAOS_BL_DIAG_MAX_TIMEOUT_MS[[:space:]]*3000$' "$DRIVER"; then
+	pass
+else
+	fail "the driver does not enforce default=2000ms/max=3000ms exactly"
+fi
+
+# --- Test 11: hardening pass - a timeout greater than 3 seconds is
+# rejected. Source-inspection proof (no live kernel to exercise at test
+# time): the bounds check compares the user-supplied timeout_ms against
+# NEBULAOS_BL_DIAG_MAX_TIMEOUT_MS (=3000, proven by Test 10) with a
+# strict '>' before anything is armed or touched, and this check runs
+# before mutex_lock()/probe_active is ever set. ---
+probe_cmd_body=$(awk '/^static int nebulaos_bl_diag_cmd_probe/,/^}/' "$DRIVER")
+bounds_line=$(echo "$probe_cmd_body" | grep -n 'timeout_ms > NEBULAOS_BL_DIAG_MAX_TIMEOUT_MS' | head -1 | cut -d: -f1)
+lock_line=$(echo "$probe_cmd_body" | grep -n 'mutex_lock(&diag->lock)' | head -1 | cut -d: -f1)
+if [ -n "$bounds_line" ] && [ -n "$lock_line" ] && [ "$bounds_line" -lt "$lock_line" ]; then
+	pass
+else
+	fail "a timeout_ms > NEBULAOS_BL_DIAG_MAX_TIMEOUT_MS (3s) is not rejected before the probe is armed"
+fi
+
+# --- Test 12: hardening pass - ARM-BEFORE-APPLY ordering. Within
+# nebulaos_bl_diag_cmd_probe(), schedule_delayed_work() (arming the
+# kernel-owned watchdog) must appear BEFORE both hardware-apply calls
+# (pwm_apply_state()/gpiod_set_raw_value_cansleep() for the candidate
+# state - the gpiod_get_raw_value_cansleep() capture call doesn't count,
+# only the later *_set_* apply call does). A crash between "apply" and
+# "arm" must never be possible - this was a real bug in an earlier
+# revision (apply-then-arm) fixed in this hardening pass. ---
+arm_line=$(echo "$probe_cmd_body" | grep -n 'schedule_delayed_work(&diag->restore_work' | head -1 | cut -d: -f1)
+apply_gpio_line=$(echo "$probe_cmd_body" | grep -n 'gpiod_set_raw_value_cansleep(diag->enable_gpio, gpio_val)' | head -1 | cut -d: -f1)
+apply_pwm_line=$(echo "$probe_cmd_body" | grep -n 'pwm_apply_state(diag->pwm, &new_state)' | head -1 | cut -d: -f1)
+if [ -n "$arm_line" ] && [ -n "$apply_gpio_line" ] && [ -n "$apply_pwm_line" ] && \
+   [ "$arm_line" -lt "$apply_gpio_line" ] && [ "$arm_line" -lt "$apply_pwm_line" ]; then
+	pass
+else
+	fail "schedule_delayed_work() does not precede both hardware-apply calls in nebulaos_bl_diag_cmd_probe() - arm-before-apply ordering is violated"
+fi
+
+# --- Test 13: hardening pass - if pwm_apply_state() fails after the
+# watchdog was already armed (per Test 12's ordering), the failure branch
+# must unwind by canceling that timer. It must use the NON-blocking
+# cancel_delayed_work() (not cancel_delayed_work_sync()) while diag->lock
+# is still held - calling the blocking _sync() variant under the lock
+# risks deadlocking against a concurrently-running watchdog callback
+# blocked on the same lock, and calling it AFTER unlocking (an earlier
+# revision's approach) reopened a TOCTOU race where a second thread's
+# freshly-scheduled probe on the same delayed_work object could be wiped
+# out by this cancel instead. Both the correct call and the two
+# documented rationales must be present. ---
+if echo "$probe_cmd_body" | grep -A2 'dev_err(diag->dev, "probe pwm %d%% failed to apply' | grep -q 'return ret;' && \
+   echo "$probe_cmd_body" | grep -B40 'dev_err(diag->dev, "probe pwm %d%% failed to apply' | grep -q '^[[:space:]]*cancel_delayed_work(&diag->restore_work);$' && \
+   echo "$probe_cmd_body" | grep -B40 'dev_err(diag->dev, "probe pwm %d%% failed to apply' | grep -qi 'TOCTOU'; then
+	pass
+else
+	fail "the pwm_apply_state() failure path does not correctly unwind the already-armed watchdog timer with the documented non-blocking cancel + TOCTOU rationale"
+fi
+# The failure path's actual CODE (not the comments explaining why the
+# blocking variant was rejected) must not call cancel_delayed_work_sync().
+failure_unwind_code_only=$(echo "$probe_cmd_body" | grep -B40 'dev_err(diag->dev, "probe pwm %d%% failed to apply' | \
+	grep -v '^[[:space:]]*\*' | grep -v '^[[:space:]]*/\*')
+if echo "$failure_unwind_code_only" | grep -q 'cancel_delayed_work_sync'; then
+	fail "the pwm_apply_state() failure path uses the blocking cancel_delayed_work_sync() under the lock - reintroduces a deadlock/TOCTOU risk"
+else
+	pass
+fi
+
+# --- Test 14: hardening pass - no arbitrary PWM channel or GPIO number
+# can ever be requested through the debugfs interface. The two hardware
+# handles (diag->pwm, diag->enable_gpio) must be acquired exactly once
+# each, both inside nebulaos_bl_diag_probe() (module bind), and never
+# from the command-write path. ---
+driver_code_only=$(grep -v '^[[:space:]]*\*' "$DRIVER" | grep -v '^[[:space:]]*/\*')
+pwm_get_count=$(echo "$driver_code_only" | grep -c 'devm_pwm_get(')
+gpio_get_count=$(echo "$driver_code_only" | grep -c 'devm_gpiod_get_optional(')
+probe_fn_body=$(awk '/^static int nebulaos_bl_diag_probe\(struct platform_device/,/^}/' "$DRIVER")
+if [ "$pwm_get_count" = "1" ] && [ "$gpio_get_count" = "1" ] && \
+   echo "$probe_fn_body" | grep -q 'devm_pwm_get(' && \
+   echo "$probe_fn_body" | grep -q 'devm_gpiod_get_optional('; then
+	pass
+else
+	fail "the candidate PWM/GPIO handles are not acquired exactly once, at module bind time only"
+fi
+if echo "$probe_cmd_body" | grep -Eq 'devm_pwm_get|devm_gpiod_get|gpio_to_desc|pwm_request'; then
+	fail "nebulaos_bl_diag_cmd_probe() itself acquires a PWM/GPIO handle - this would allow requesting an arbitrary channel/GPIO"
+else
+	pass
+fi
+
+# --- Test 15: hardening pass - honest restoration-exactness reporting.
+# The debugfs status output must expose both pwm_restore_is_exact (always
+# 0 on this board - see Test 16) and gpio_restore_is_exact, and the file
+# header must document the RESTORATION EXACTNESS limitation explicitly
+# rather than silently relying on a reader noticing it. ---
+if grep -q '"pwm_restore_is_exact: 0' "$DRIVER" && \
+   grep -q 'gpio_restore_is_exact' "$DRIVER" && \
+   grep -q 'RESTORATION EXACTNESS' "$DRIVER"; then
+	pass
+else
+	fail "the driver does not expose honest pwm_restore_is_exact/gpio_restore_is_exact status fields with a documented rationale"
+fi
+
+# --- Test 16: hardening pass - the file must NOT claim the PWM restore
+# path reads real hardware state. The known-dishonest phrase from an
+# earlier revision ("reads the descriptor's cached/hardware state",
+# implying a genuine register read for PWM) must not reappear, and the
+# header must instead explain that pwm-ingenic-v2.c has no .get_state
+# callback so pwm_get_state() cannot return real hardware content here. ---
+if grep -q 'reads the descriptor.s cached/hardware state' "$DRIVER"; then
+	fail "the driver still contains the overclaiming 'cached/hardware state' phrasing for the PWM restore path"
+else
+	pass
+fi
+if grep -q 'implements only the .apply callback' "$DRIVER" || grep -q 'implements no .get_state' "$DRIVER"; then
+	pass
+else
+	fail "the driver does not explain why pwm-ingenic-v2.c cannot supply a real hardware readback for restoration"
+fi
+
+# --- Test 17: re-applying DIAG1 twice is idempotent. ---
 if sh "$VARIANT_SCRIPT" DIAG1 >/dev/null 2>&1; then
 	node_count=$(grep -c 'nebulaos_backlight_diag: nebulaos_backlight_diag' "$DTS")
 	frag_count=$(grep -c '^CONFIG_NEBULAOS_BACKLIGHT_PROBE_DIAG=y$' "$FRAGMENT")
@@ -213,7 +335,7 @@ else
 	fail "re-applying DIAG1 a second time failed - not idempotent"
 fi
 
-# --- Test 11: switching from DIAG1 back to DIAG0 restores clean affected
+# --- Test 18: switching from DIAG1 back to DIAG0 restores clean affected
 # files, removes the driver file, and empties the fragment block. ---
 sh "$VARIANT_SCRIPT" DIAG0 >/dev/null
 if [ -z "$(git -C "$KERNEL_DIR" status --porcelain -- $AFFECTED_FILES)" ]; then
@@ -232,7 +354,7 @@ else
 	pass
 fi
 
-# --- Test 12: an unknown variant name is rejected, not silently applied. ---
+# --- Test 19: an unknown variant name is rejected, not silently applied. ---
 if sh "$VARIANT_SCRIPT" DIAG9 >/dev/null 2>&1; then
 	fail "an unknown variant name 'DIAG9' was accepted instead of rejected"
 else

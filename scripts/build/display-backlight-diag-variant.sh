@@ -33,13 +33,30 @@
 #       display-backlight-variant.sh/wifi-sdio-variant.sh already make.
 #
 #       The diagnostic driver itself never touches PWM/GPIO state at
-#       module bind time - it only records whatever the bootloader
-#       already established. Every probe is opt-in via a bounded debugfs
-#       command interface, applies exactly one temporary state, and
-#       auto-restores via a kernel-owned workqueue timer regardless of
-#       whether an explicit "restore" command ever arrives. See the
-#       driver's own file header comment for the full safety-property
-#       list.
+#       module bind time - it only records whatever state it can read at
+#       that point (see the hardening-pass caveat below). Every probe is
+#       opt-in via a bounded debugfs command interface (default 2s/max
+#       3s timeout, longer rejected), arms the kernel-owned restore
+#       watchdog BEFORE applying the one candidate hardware state, and
+#       auto-restores via that workqueue timer regardless of whether an
+#       explicit "restore" command ever arrives or the calling process
+#       is still alive. See the driver's own file header comment for the
+#       full safety-property list.
+#
+#       Hardening-pass honesty note (do not weaken/remove this): the
+#       candidate enable-GPIO's recorded state IS a genuine hardware
+#       readback (this board's gpio_chip .get callback reads the live
+#       PxPIN register every time) and its restore is exact. The
+#       candidate PWM channel's recorded "state" is NOT a hardware
+#       readback - this board's bound PWM driver (pwm-ingenic-v2.c)
+#       implements no .get_state callback, so the kernel's cached
+#       pwm_device state for a channel nothing has ever requested before
+#       is a synthetic disabled/zero value, not whatever the bootloader
+#       actually left running. Its "restore" is a deliberate, documented
+#       SAFE DEFAULT (disable the PWM), never claimed as an exact
+#       reconstruction. See nebulaos_backlight_probe_diag.c's
+#       "RESTORATION EXACTNESS" section and its debugfs
+#       .../status pwm_restore_is_exact / gpio_restore_is_exact fields.
 #
 # Same "always reset to the real git-committed baseline first" pattern as
 # the sibling variant scripts (display-vsync-variant.sh/

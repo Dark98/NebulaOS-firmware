@@ -78,18 +78,27 @@ else
 	fail "IRQDIAG1 produced $count CONFIG_TOUCHSCREEN_NS2009_IRQ_DIAG=y lines, expected exactly 1"
 fi
 
-# --- Test 3: IRQDIAG1 adds the threaded IRQ handler, requests a
-# both-edges trigger, and leaves the existing poll path structurally
-# intact (input_setup_polling call still present, unmodified). ---
+# --- Test 3: IRQDIAG1 adds the threaded IRQ handler, requests the
+# evidence-based FALLING-only trigger (finalized 2026-08-01 from real
+# TOUCH-D0-DIAG live evidence classifying GPIO79 as IDLE_HIGH_ACTIVE_LOW -
+# see docs/NEBULAOS_TOUCH_IRQ_TRIGGER_FINDINGS.md - superseding the
+# earlier both-edges placeholder), and leaves the existing poll path
+# structurally intact (input_setup_polling call still present,
+# unmodified). ---
 if grep -q 'ns2009_irq_diag_thread' "$NS2009"; then
 	pass
 else
 	fail "IRQDIAG1 did not add the threaded IRQ-diagnostic handler"
 fi
-if grep -q 'IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING' "$NS2009"; then
+if grep -q 'diag_irq_trigger_type = IRQF_TRIGGER_FALLING;' "$NS2009"; then
 	pass
 else
-	fail "IRQDIAG1 did not request a both-edges trigger"
+	fail "IRQDIAG1 did not request the evidence-based FALLING-only trigger"
+fi
+if grep -q 'IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING' "$NS2009"; then
+	fail "IRQDIAG1 still requests the superseded both-edges trigger"
+else
+	pass
 fi
 if grep -q 'input_setup_polling(data->input, ns2009_ts_poll)' "$NS2009"; then
 	pass

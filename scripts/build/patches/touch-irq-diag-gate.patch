@@ -1,8 +1,8 @@
 diff --git a/kernel/kernel-6.6/drivers/input/touchscreen/Kconfig b/kernel/kernel-6.6/drivers/input/touchscreen/Kconfig
-index d6a9b95cb..74557dfed 100644
+index d6a9b95cb..e93fcc075 100644
 --- a/kernel/kernel-6.6/drivers/input/touchscreen/Kconfig
 +++ b/kernel/kernel-6.6/drivers/input/touchscreen/Kconfig
-@@ -1155,6 +1155,31 @@ config TOUCHSCREEN_NS2009
+@@ -1155,6 +1155,33 @@ config TOUCHSCREEN_NS2009
  	  To compile this driver as a module, choose M here: the
  	  module will be called ns2009.
  
@@ -21,10 +21,12 @@ index d6a9b95cb..74557dfed 100644
 +	  30ms poll remains the sole touch-reporting path, permanently and
 +	  unconditionally.
 +
-+	  Requests a temporary both-edges trigger purely to observe whether
-+	  IRQs arrive at all - this is NOT to be assumed as the final
-+	  production trigger polarity, which remains genuinely unproven (see
-+	  build-work/display-analysis/touch-path-analysis.txt). Includes the
++	  Requests a FALLING-edge trigger (touch-down only) - finalized from
++	  real live evidence (a full TOUCH-D0-DIAG hardware qualification run
++	  classified GPIO79 as IDLE_HIGH_ACTIVE_LOW with moderate-high
++	  confidence, zero invariant violations across 78 real touch events;
++	  see docs/NEBULAOS_TOUCH_IRQ_TRIGGER_FINDINGS.md), superseding this
++	  option's earlier both-edges design. Includes the
 +	  same storm protection shape as TOUCHSCREEN_NS2009_PENDOWN_IRQ:
 +	  once tripped, the diagnostic IRQ is disabled permanently until
 +	  reboot; polling is never affected.
@@ -35,10 +37,10 @@ index d6a9b95cb..74557dfed 100644
  	tristate "TSC2007 based touchscreens"
  	depends on I2C
 diff --git a/kernel/kernel-6.6/drivers/input/touchscreen/ns2009.c b/kernel/kernel-6.6/drivers/input/touchscreen/ns2009.c
-index 99a2a7ee1..50b07d5e4 100644
+index 99a2a7ee1..b8e012a40 100644
 --- a/kernel/kernel-6.6/drivers/input/touchscreen/ns2009.c
 +++ b/kernel/kernel-6.6/drivers/input/touchscreen/ns2009.c
-@@ -23,10 +23,40 @@
+@@ -23,10 +23,44 @@
  #include <linux/input/touchscreen.h>
  #include <linux/i2c.h>
  #include <linux/gpio/consumer.h>
@@ -67,11 +69,15 @@ index 99a2a7ee1..50b07d5e4 100644
 + * not, so it can characterize IRQ behavior in complete isolation from the
 + * touch-reporting path).
 + *
-+ * Requests a temporary both-edges trigger purely to observe whether IRQs
-+ * arrive at all - the true active-high/low and edge-direction semantics
-+ * were never established from source/disassembly alone (see
-+ * touch-path-analysis.txt), and this diagnostic's whole purpose is to
-+ * help resolve that open question live, not to assume an answer. */
++ * Requests a FALLING-edge trigger (touch-down only) - finalized 2026-08-01
++ * from real TOUCH-D0-DIAG live evidence classifying GPIO79 as
++ * IDLE_HIGH_ACTIVE_LOW (see docs/NEBULAOS_TOUCH_IRQ_TRIGGER_FINDINGS.md),
++ * superseding this file's earlier both-edges design (which existed only
++ * because the true active-high/low and edge-direction semantics were not
++ * yet established from source/disassembly alone - see
++ * touch-path-analysis.txt for that now-resolved history). Release is still
++ * detected by the poll path alone, unchanged - this diagnostic never
++ * reports release, only touch-down IRQ timing. */
 +#define NS2009_IRQ_DIAG_STORM_WINDOW_MS		1000
 +#define NS2009_IRQ_DIAG_STORM_THRESHOLD	50
 +#endif
@@ -79,7 +85,7 @@ index 99a2a7ee1..50b07d5e4 100644
  /* this driver uses 12-bit readout */
  #define MAX_12BIT	0xfff
  
-@@ -62,6 +92,30 @@ struct ns2009_data {
+@@ -62,6 +96,30 @@ struct ns2009_data {
  	 * generic upstream Z1-threshold-only behavior unchanged for any other
  	 * board using this driver. */
  	struct gpio_desc		*pendown_gpio;
@@ -110,7 +116,7 @@ index 99a2a7ee1..50b07d5e4 100644
  };
  
  static int ns2009_ts_read_data(struct ns2009_data *data, u8 cmd, u16 *val)
-@@ -147,6 +201,87 @@ static void ns2009_ts_poll(struct input_dev *input_dev)
+@@ -147,6 +205,87 @@ static void ns2009_ts_poll(struct input_dev *input_dev)
  		dev_err(&input_dev->dev, "Poll touch data failed: %d\n", ret);
  }
  
@@ -198,7 +204,7 @@ index 99a2a7ee1..50b07d5e4 100644
  static void ns2009_ts_config_input_dev(struct ns2009_data *data)
  {
  	struct input_dev *input = data->input;
-@@ -191,6 +326,89 @@ static int ns2009_ts_request_polled_input_dev(struct ns2009_data *data)
+@@ -191,6 +330,108 @@ static int ns2009_ts_request_polled_input_dev(struct ns2009_data *data)
  	return 0;
  }
  
@@ -259,7 +265,26 @@ index 99a2a7ee1..50b07d5e4 100644
 +	}
 +
 +	data->diag_irq = irq;
-+	data->diag_irq_trigger_type = IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING;
++	/* TOUCH-I0-DIAG finalization (2026-08-01): live evidence from
++	 * TOUCH-D0-DIAG's real qualification run (see
++	 * docs/NEBULAOS_TOUCH_IRQ_TRIGGER_FINDINGS.md) classifies GPIO79 as
++	 * IDLE_HIGH_ACTIVE_LOW with moderate-high confidence - zero invariant
++	 * violations across 78 real touch events on real hardware, across
++	 * two boots. Touch-down is therefore a HIGH-to-LOW transition: a
++	 * falling edge. Per the mission's own guidance ("prefer a
++	 * touch-down-only trigger when it can be safely re-armed after
++	 * release"), this now requests FALLING only, not both edges - the
++	 * IRQ naturally re-arms for the next falling edge once the threaded
++	 * handler completes (IRQF_ONESHOT unmasks the line again after the
++	 * handler returns), so no explicit re-arm-after-release logic is
++	 * needed. Release detection itself remains the poll path's job,
++	 * unchanged - this diagnostic only observes touch-down IRQ timing,
++	 * it never reports release. The specific active-LOW polarity is
++	 * SUPPORTED_INFERENCE (by elimination, not a raw-level sample taken
++	 * synchronized to an in-progress touch) - if a future run's evidence
++	 * ever contradicts this, this trigger selection must be revisited,
++	 * not assumed permanent. */
++	data->diag_irq_trigger_type = IRQF_TRIGGER_FALLING;
 +	data->diag_storm_window_start = jiffies;
 +	data->diag_storm_window_count = 0;
 +
@@ -288,7 +313,7 @@ index 99a2a7ee1..50b07d5e4 100644
  static int ns2009_ts_probe(struct i2c_client *client)
  {
  	struct ns2009_data *data;
-@@ -227,6 +445,13 @@ static int ns2009_ts_probe(struct i2c_client *client)
+@@ -227,6 +468,13 @@ static int ns2009_ts_probe(struct i2c_client *client)
  	if (error)
  		return error;
  

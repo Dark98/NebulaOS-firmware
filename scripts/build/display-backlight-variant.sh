@@ -1,10 +1,10 @@
 #!/bin/sh
-# Applies the DISPLAY-P1 compile-only backlight-class prototype (display
+# Applies the DISPLAY-B1 compile-only backlight-class prototype (display
 # hardware analysis mission, 2026-08-01 - see
 # docs/NEBULAOS_DISPLAY_OS_HARDWARE_ANALYSIS.md and
-# build-work/display-analysis/backlight-path-analysis.txt) to the tracked
-# vendor DTS, for a compile test only. NEVER apply this to a build destined
-# for the active/production slot - see the live qualification plan
+# build-work/display-analysis/backlight-path-analysis.txt) to the vendor
+# kernel's tracked DTS, for a compile test only. NEVER apply this to a build
+# destined for the active/production slot - see the live qualification plan
 # (docs/NEBULAOS_DISPLAY_LIVE_QUALIFICATION_PLAN.md, test HT-01/HT-09) for
 # why the real electrical behavior of GPC-0/GPC-22 must be confirmed on a
 # spare slot first.
@@ -27,9 +27,20 @@
 #       HARDWARE per backlight-path-analysis.txt, so S1 intentionally only
 #       adds the PWM brightness path, not an assumed enable-line.
 #
-# Idempotent, same pattern as preempt-variant.sh/wifi-sdio-variant.sh: always
-# strips any previously-applied S1 block first, then re-adds it only if S1
-# was requested.
+# Follow-up correction (powered-on investigation mission, 2026-08-01): the
+# original version of this script used a sed marker-strip-then-append
+# approach and had two real bugs - unescaped "/* */" BRE metacharacters
+# breaking idempotency, and a residual trailing blank line left behind after
+# reverting to S0 (invisible to this script's own git-clean check, because
+# that check ran `git status` in the OUTER repo, which ignores the whole
+# vendor/ tree entirely via .gitignore - a second real bug, since it made
+# the "clean revert" test vacuously pass regardless of actual file content).
+# Rewritten to match the established, more robust pattern already proven in
+# the sibling scripts/build/wifi-sdio-variant.sh: always reset to the real
+# git-committed baseline first (`git checkout` inside the vendor tree, not a
+# sed-based revert), then apply the requested variant fresh. This eliminates
+# the whole class of escaping/residue bugs, since every invocation starts
+# from a known-clean state instead of trying to undo a previous edit.
 #
 # Usage: sh scripts/build/display-backlight-variant.sh <S0|S1>
 
@@ -38,25 +49,10 @@ set -eu
 VARIANT="${1:?usage: $0 <S0|S1>}"
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
-DTS="$REPO_ROOT/vendor/x2000_kernel_6.6/kernel/kernel-6.6/module_drivers/dts/x2000/halley5_v30.dts"
+KERNEL_DIR="$REPO_ROOT/vendor/x2000_kernel_6.6"
+DTS_REL="kernel/kernel-6.6/module_drivers/dts/x2000/halley5_v30.dts"
+DTS="$KERNEL_DIR/$DTS_REL"
 MARKER="$REPO_ROOT/build-work/display-backlight-variant-applied.txt"
-
-BEGIN_MARK="/* --- NEBULAOS_DISPLAY_BACKLIGHT_VARIANT_BEGIN --- */"
-END_MARK="/* --- NEBULAOS_DISPLAY_BACKLIGHT_VARIANT_END --- */"
-# BEGIN_MARK/END_MARK contain "*" and "/" (C-comment syntax), both BRE
-# metacharacters - used verbatim as a sed address they would not match the
-# literal text (an unescaped "*" means "zero or more of the preceding atom",
-# not a literal star), so the strip-previous-block step below would silently
-# match nothing and every re-application would append a duplicate block.
-# Escape every BRE-special character before using either string as a sed
-# address pattern; grep -qF (used only for cheap presence detection) is
-# unaffected either way since -F already treats its argument as a fixed
-# string.
-escape_for_sed() {
-	printf '%s' "$1" | sed 's/[.[\*^$/]/\\&/g'
-}
-BEGIN_MARK_RE=$(escape_for_sed "$BEGIN_MARK")
-END_MARK_RE=$(escape_for_sed "$END_MARK")
 
 case "$VARIANT" in
 	S0|S1) ;;
@@ -67,30 +63,31 @@ case "$VARIANT" in
 esac
 
 [ -f "$DTS" ] || {
-	echo "FATAL: $DTS not found" >&2
+	echo "FATAL: $DTS not found - run 00-fetch-vendor-sources.sh first" >&2
 	exit 1
 }
 
-# Strip any previously-applied S1 block first, unconditionally - the one
-# safe way to guarantee idempotence regardless of which variant was applied
-# last. Markers are plain text with no regex-special characters, so a direct
-# /pattern/,/pattern/d range delete is safe as-is.
-if grep -qF "$BEGIN_MARK" "$DTS"; then
-	sed -i "\@^${BEGIN_MARK_RE}\$@,\@^${END_MARK_RE}\$@d" "$DTS"
+# Always reset to the real, git-committed baseline first - never trust that
+# a previous invocation's edits (or another variant script's edits, e.g.
+# wifi-sdio-variant.sh) were cleanly undone. This does discard any other
+# uncommitted change to this file - that is the same tradeoff
+# wifi-sdio-variant.sh already makes, and is why these variant scripts are
+# meant to be the only thing editing this file outside of a reviewed commit.
+git -C "$KERNEL_DIR" checkout -- "$DTS_REL"
+
+if ! grep -q '^&pwm {' "$DTS"; then
+	echo "FATAL: could not find the &pwm node in $DTS - has the board DTS changed?" >&2
+	exit 1
 fi
-# Also revert any previously-applied pwm1_pc->pwm0_pc repoint, unconditionally,
-# before deciding what S1 needs - so re-running S0 after S1 is a clean revert.
-sed -i 's/pinctrl-0 = <&pwm0_pc>; \/\* NEBULAOS_DISPLAY_BACKLIGHT_VARIANT pwm repoint \*\//pinctrl-0 = <\&pwm1_pc>;/' "$DTS"
 
 if [ "$VARIANT" = "S1" ]; then
-	# Repoint the existing &pwm node from the unused channel1 pin to the
-	# real backlight channel0 pin.
-	sed -i 's/pinctrl-0 = <&pwm1_pc>;/pinctrl-0 = <\&pwm0_pc>; \/* NEBULAOS_DISPLAY_BACKLIGHT_VARIANT pwm repoint *\//' "$DTS"
+	# Repoint the existing &pwm node from the unused channel-1 pin to the
+	# real backlight channel-0 pin.
+	sed -i 's/pinctrl-0 = <&pwm1_pc>;/pinctrl-0 = <\&pwm0_pc>;/' "$DTS"
 
 	{
 		echo ""
-		echo "$BEGIN_MARK"
-		echo "/* Display hardware analysis mission (2026-08-01) - DISPLAY-P1"
+		echo "/* Display hardware analysis mission (2026-08-01) - DISPLAY-B1"
 		echo " * compile-only backlight-class prototype. Period 20000ns (50kHz,"
 		echo " * matching stock's pwm_backlight.sh pwm_freq=50000). Brightness"
 		echo " * table is a starting point ONLY - real dimming curve is"
@@ -105,7 +102,6 @@ if [ "$VARIANT" = "S1" ]; then
 		echo "		default-brightness-level = <8>;"
 		echo "	};"
 		echo "};"
-		echo "$END_MARK"
 	} >> "$DTS"
 fi
 

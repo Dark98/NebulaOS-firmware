@@ -353,3 +353,76 @@ See `docs/NEBULAOS_DISPLAY_OFFLINE_IMPLEMENTATION_PLAN.md` and
 `docs/NEBULAOS_DISPLAY_LIVE_QUALIFICATION_PLAN.md` for next steps, and
 `build-work/display-analysis/hardware-test-matrix.tsv` for the exact read-only-first test
 sequence required before any powered-on work begins.
+
+---
+
+## 11. Powered-on follow-on mission (2026-08-01) - live confirmation + genuine compile tests
+
+A follow-on mission performed the read-only live investigation this document's §10 called for,
+plus prepared and genuinely compile-tested two additional prototypes (DISPLAY-V1, TOUCH-I1)
+beyond DISPLAY-B1 (renamed from DISPLAY-P1 for consistency with that mission's naming). Full
+detail: `docs/NEBULAOS_DISPLAY_LIVE_READ_ONLY_REPORT.md`,
+`docs/NEBULAOS_DISPLAY_PROTOTYPE_READINESS.md`, and the updated
+`docs/NEBULAOS_DISPLAY_OFFLINE_IMPLEMENTATION_PLAN.md`.
+
+**Live confirmation of every key §6/§7/§8 finding**: identity confirmed on the real printer
+(`192.168.0.243`, CID-derived MAC exact match, custom `rootfs2` slot). No backlight DT node or
+class device exists live (`/sys/class/backlight/` empty), independently corroborated by a boot-
+log line neither prior pass had quoted: `openke_panel: invalid gpio vdd_en: -2`. Touch has zero
+IRQ lines anywhere in the live `/proc/interrupts` table (poll-only, confirmed system-wide, not
+just via the pendown GPIO). The DPU/vsync IRQ measured ~60.3Hz over a live 10-second sample,
+matching the ~59.98Hz offline baseline. `/sys/kernel/realtime=1` confirms PREEMPT_RT is genuinely
+active on the currently-running image (the NEBULAOS-ALPHA-MAX-RT deployment from the
+pre-qualification mission, left running).
+
+**A real correction to this document's own §4/§8**: re-reading `ingenicfb_set_vsync_value()`
+directly while designing DISPLAY-V1 shows `wake_up_interruptible(&fbdev->vsync_wq)` fires
+unconditionally in both branches of its skip-map decision - the skip-map only throttles which
+events get a precise timestamp recorded for `FBIO_WAITFORVSYNC`, not which ones wake waiters.
+The "roughly 1-in-10 vsync events delivered to the waitqueue" characterization in this document's
+earlier text was **incorrect** and should be read as corrected by this section.
+
+**All three prototypes now have genuine `PROVEN_BY_COMPILE_TEST` status** (upgraded from
+`SUPPORTED_INFERENCE`), each verified via a real `docker run --user root ... make` invocation
+against the actual vendor kernel build system with real generated headers - not a syntax-only
+check:
+- **DISPLAY-B1**: a real `make dtbs` produced `halley5_v30.dtb`; decompiling it back confirms
+  `nebulaos_backlight { compatible="pwm-backlight"; pwms=<&pwm 0 20000>; ... }` is present
+  exactly as designed.
+- **DISPLAY-V1**: `module_drivers/drivers/video/fbdev/ingenic/fb_stage/ingenicfb.o` compiled
+  cleanly with the new Kconfig option selected - zero errors, zero warnings.
+- **TOUCH-I1**: `drivers/input/touchscreen/ns2009.o` compiled cleanly with its new Kconfig
+  option selected - zero errors, zero warnings.
+
+**Readiness classifications** (full rationale in `NEBULAOS_DISPLAY_PROTOTYPE_READINESS.md`):
+- **DISPLAY-B1: BLOCKED_PENDING_HARDWARE_PROOF.** Compile now proven, but the real electrical
+  backlight-circuit behavior downstream of GPC-0/GPC-22 remains UNKNOWN_UNTIL_HARDWARE (this
+  kernel's debugfs GPIO/pinctrl interfaces are absent, so even live investigation could not read
+  the raw pin state) - the mission's own "real hardware path proven" bar is not yet met.
+- **DISPLAY-V1: READY_FOR_ISOLATED_DEPLOYMENT.** Every stated criterion is met: vsync IRQ
+  semantics proven (live + source), locking reviewed, bounded timeout, safe fallback, compile
+  succeeds, 10/10 tests pass, only the pan-display path changes. A full authoritative
+  W3+R1+DISPLAY-V1 build was produced and packaged (see the prototype readiness doc for the
+  package location and SHA256SUMS).
+- **TOUCH-I1: BLOCKED_PENDING_HARDWARE_PROOF.** Per the mission's own explicit rule ("when
+  wiring remains ambiguous, mark it blocked") - the exact GPIO79 IRQ trigger polarity was never
+  proven (deliberately worked around via a both-edges request, not confirmed), and this kernel's
+  debugfs gap prevented a live pinctrl/GPIO read. The design's graceful, self-limiting fallback
+  makes it safe to test regardless, but formal readiness requires the hardware proof step first.
+
+**A real process mistake, disclosed in full**: while preparing DISPLAY-V1/TOUCH-I1, the vendor
+kernel checkout was edited directly while a background build against that same checkout was in
+flight, twice. `05-final-build.sh`'s own source-tree fingerprint check correctly detected this
+both times and refused to trust the resulting artifacts - both times the already-copied tracked
+`artifacts/buildroot-halley5-v30-image/*` snapshot files were reverted via `git checkout`
+immediately upon discovery, and the build was re-run against a stable, untouched tree
+afterward. See the offline implementation plan for the full account.
+
+**PRINTER_CONTACTED (this follow-on mission)**: YES (read-only SSH only - no writes, no flash,
+no reboot, no register writes; see the live read-only report for the full command list and
+safety-check gate). **PRINTER_MODIFIED**: NO. **ALPHA_BASELINE_CHANGED**: NO (the tag remains
+untouched; a fresh W3+R1 build was produced for validation purposes and its tracked
+`kernel.config`/`halley5_v30.dts`/fragment snapshots now more accurately reflect that
+composition than the possibly-stale copies checked in previously - left as an uncommitted,
+disclosed local change for the user to decide whether to commit separately, since refreshing
+the alpha-baseline's own artifact snapshot is outside this display mission's own scope).

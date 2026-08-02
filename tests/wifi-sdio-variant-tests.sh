@@ -164,6 +164,48 @@ else
 	pass
 fi
 
+# --- Test 9: composes correctly with display-backlight-diag-variant.sh
+# in EITHER order - both touch this same shared DTS file (&msc1 vs &pwm +
+# a new top-level node). A real bug (found 2026-08-02): both scripts used
+# to do a blanket `git checkout -- "$DTS_REL"` as their own "reset to
+# pristine" step, so whichever ran LAST silently discarded the other's
+# uncommitted changes - a composed qualification build had a fully
+# correct Kconfig selection but a silently-missing backlight DT node
+# because of this. Both scripts were fixed to use scoped reverts instead
+# (touch only their own owned lines/marked blocks) so they compose safely
+# regardless of order - this test proves that directly rather than
+# trusting it stays fixed. ---
+BACKLIGHT_SCRIPT="$REPO_ROOT/scripts/build/display-backlight-diag-variant.sh"
+if [ -f "$BACKLIGHT_SCRIPT" ]; then
+	sh "$BACKLIGHT_SCRIPT" DIAG0 >/dev/null 2>&1
+
+	# Order A: W3 then DIAG1 - both must be present afterward.
+	sh "$VARIANT_SCRIPT" W3 >/dev/null
+	sh "$BACKLIGHT_SCRIPT" DIAG1 >/dev/null
+	if msc1_props | grep -q 'cap-sd-highspeed;' && msc1_props | grep -q 'cap-sdio-irq;' \
+		&& grep -q 'backlight-probe-diag' "$DTS"; then
+		pass
+	else
+		fail "W3 then DIAG1 did not compose - msc1 props: $(msc1_props | tr '\n' ' '); backlight node present: $(grep -c 'backlight-probe-diag' "$DTS")"
+	fi
+	sh "$BACKLIGHT_SCRIPT" DIAG0 >/dev/null 2>&1
+	sh "$VARIANT_SCRIPT" W0 >/dev/null
+
+	# Order B: DIAG1 then W3 - same requirement, reversed order.
+	sh "$BACKLIGHT_SCRIPT" DIAG1 >/dev/null
+	sh "$VARIANT_SCRIPT" W3 >/dev/null
+	if msc1_props | grep -q 'cap-sd-highspeed;' && msc1_props | grep -q 'cap-sdio-irq;' \
+		&& grep -q 'backlight-probe-diag' "$DTS"; then
+		pass
+	else
+		fail "DIAG1 then W3 did not compose - msc1 props: $(msc1_props | tr '\n' ' '); backlight node present: $(grep -c 'backlight-probe-diag' "$DTS")"
+	fi
+	sh "$VARIANT_SCRIPT" W0 >/dev/null
+	sh "$BACKLIGHT_SCRIPT" DIAG0 >/dev/null 2>&1
+else
+	echo "SKIP: $BACKLIGHT_SCRIPT not present, skipping cross-script composability test"
+fi
+
 echo ""
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

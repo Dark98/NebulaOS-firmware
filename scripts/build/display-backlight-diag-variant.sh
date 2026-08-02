@@ -94,6 +94,16 @@ $DTS_REL
 
 BEGIN_MARK="#--- NEBULAOS_BACKLIGHT_PROBE_DIAG_VARIANT_BEGIN ---"
 END_MARK="#--- NEBULAOS_BACKLIGHT_PROBE_DIAG_VARIANT_END ---"
+# Plain alphanumeric+underscore only (no /, *, or other BRE metacharacters)
+# - these get used directly as sed address patterns below, and a DTS
+# comment needs C-style /* */ delimiters (not the # this project's other
+# markers use), which would otherwise need regex-escaping every time they
+# appear in a pattern. Keeping the marker text itself metacharacter-free
+# sidesteps that entirely - sed's unanchored /pattern/ already matches
+# these as a substring wherever they appear on a line, /* */ wrapper and
+# all, so no escaping is needed at any use site.
+DTS_MARK_BEGIN="NEBULAOS_BACKLIGHT_PROBE_DIAG_VARIANT_DTS_BEGIN"
+DTS_MARK_END="NEBULAOS_BACKLIGHT_PROBE_DIAG_VARIANT_DTS_END"
 
 case "$VARIANT" in
 	DIAG0|DIAG1) ;;
@@ -116,17 +126,32 @@ esac
 	exit 1
 }
 
-# Always reset the affected files to their real, git-committed baseline
-# first - never trust that a previous invocation (or another variant
-# script's edits to the same shared DTS) was cleanly undone. The new
-# driver file is untracked when absent, so `git checkout --` on it alone
-# would fail with "did not match any files" - remove it directly instead,
-# then let a fresh `git apply` recreate it if DIAG1 was requested.
+# Always reset the misc driver files to their real, git-committed
+# baseline first - these are wholly owned by this script, no sharing
+# concern. The new driver file is untracked when absent, so
+# `git checkout --` on it alone would fail with "did not match any
+# files" - remove it directly instead, then let a fresh `git apply`
+# recreate it if DIAG1 was requested.
 git -C "$KERNEL_DIR" checkout -- \
 	kernel/kernel-6.6/module_drivers/drivers/misc/Kconfig \
-	kernel/kernel-6.6/module_drivers/drivers/misc/Makefile \
-	"$DTS_REL"
+	kernel/kernel-6.6/module_drivers/drivers/misc/Makefile
 rm -f "$KERNEL_DIR/$NEW_DRIVER_REL"
+
+# The DTS is different - it's ALSO touched by wifi-sdio-variant.sh (an
+# unrelated &msc1 node). Deliberately NOT a blanket
+# `git checkout -- "$DTS_REL"` here - that would silently discard
+# whichever of the two scripts ran first, regardless of order. A real,
+# confirmed bug (found 2026-08-02: a composed qualification build had
+# a fully correct Kconfig selection but a silently-missing backlight DT
+# node because this exact checkout wiped it after the fact, since it ran
+# after wifi-sdio-variant.sh in that build). Scoped instead: reset only
+# the &pwm pinctrl-0 line this script owns, and strip only the marked
+# node block this script appends - both regardless of what
+# wifi-sdio-variant.sh has done elsewhere in the same file.
+sed -i 's/pinctrl-0 = <&pwm0_pc>;/pinctrl-0 = <\&pwm1_pc>;/;s/pinctrl-0 = <&pwm0_pc &pwm1_pc>;/pinctrl-0 = <\&pwm1_pc>;/' "$DTS"
+if grep -qF "$DTS_MARK_BEGIN" "$DTS"; then
+	sed -i "/${DTS_MARK_BEGIN}/,/${DTS_MARK_END}/d" "$DTS"
+fi
 
 if ! grep -q '^&pwm {' "$DTS"; then
 	echo "FATAL: could not find the &pwm node in $DTS - has the board DTS changed?" >&2
@@ -151,7 +176,7 @@ if [ "$VARIANT" = "DIAG1" ]; then
 	sed -i 's/pinctrl-0 = <&pwm1_pc>;/pinctrl-0 = <\&pwm0_pc>;/' "$DTS"
 
 	{
-		echo ""
+		echo "/* $DTS_MARK_BEGIN */"
 		echo "/* Display hardware analysis mission follow-on (2026-08-01+) -"
 		echo " * DISPLAY-B0-DIAG bounded backlight probe diagnostic. Candidate"
 		echo " * PWM channel 0 (pwm0_pc, 20000ns/50kHz) and candidate enable-gpios"
@@ -170,6 +195,7 @@ if [ "$VARIANT" = "DIAG1" ]; then
 		echo "		status = \"okay\";"
 		echo "	};"
 		echo "};"
+		echo "/* $DTS_MARK_END */"
 	} >> "$DTS"
 
 	{

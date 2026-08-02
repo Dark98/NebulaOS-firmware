@@ -63,9 +63,21 @@ esac
 	exit 1
 }
 
-# Always reset to the real, git-committed baseline first - never trust
-# that a previous invocation's edits were cleanly undone.
-git -C "$KERNEL_DIR" checkout -- "$DTS_REL"
+# Reset ONLY this script's own two msc1 cap- lines to their pristine
+# state, scoped to the &msc1 block. Deliberately NOT a blanket
+# `git checkout -- "$DTS_REL"` - this file is also touched by
+# display-backlight-diag-variant.sh (an unrelated &pwm node + a new
+# top-level node), and a whole-file checkout here would silently discard
+# whichever of the two scripts ran first, regardless of order - a real,
+# confirmed bug (found 2026-08-02: a composed qualification build had
+# fully correct Kconfig selections but a silently-missing backlight DT
+# node because this exact checkout wiped it after the fact). A scoped
+# revert of just the lines this script owns lets both scripts compose in
+# either order.
+sed -i '/^&msc1 {/,/^};/{
+	s/^\tcap-sd-highspeed;$/\tcap-mmc-highspeed;/
+	/^\tcap-sdio-irq;$/d
+}' "$DTS"
 
 if ! grep -q '^&msc1 {' "$DTS"; then
 	echo "FATAL: could not find the &msc1 node in $DTS - has the board DTS changed?" >&2

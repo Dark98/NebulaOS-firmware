@@ -62,10 +62,10 @@ index fef6e16fb..1caba910a 100644
 +obj-$(CONFIG_NEBULAOS_BACKLIGHT_FINAL_CONTROLLER) += nebulaos_backlight_final_controller.o
 diff --git a/kernel/kernel-6.6/module_drivers/drivers/misc/nebulaos_backlight_final_controller.c b/kernel/kernel-6.6/module_drivers/drivers/misc/nebulaos_backlight_final_controller.c
 new file mode 100644
-index 000000000..b394b3cfc
+index 000000000..b663b4605
 --- /dev/null
 +++ b/kernel/kernel-6.6/module_drivers/drivers/misc/nebulaos_backlight_final_controller.c
-@@ -0,0 +1,1229 @@
+@@ -0,0 +1,1400 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * NebulaOS backlight final controller - kernel-owned, exclusive owner of
@@ -266,6 +266,20 @@ index 000000000..b394b3cfc
 + *                     pinctrl claim (remuxing GPC0 back to GPIO function
 + *                     per (c) above), and converges to safe-on - always,
 + *                     never "restore to whatever it was before".
++ *   pwm-committed   - only reachable FROM an in-flight pwm-active bounded
++ *                     test (never directly from safe-on or any other
++ *                     state - enforced by nblc_cmd_commit_pwm()'s state
++ *                     AND active_op check), via the explicit "commit-pwm"
++ *                     debugfs command. Every commit is therefore forced
++ *                     through the exact same acquire/apply/verify sequence
++ *                     (nblc_enter_pwm_active_locked()) the bounded
++ *                     pwm-active path already uses - there is no, and will
++ *                     never be, a direct safe-on -> pwm-committed
++ *                     shortcut. Touches no hardware itself: n->pwm and
++ *                     n->pwm_pinctrl are left exactly as the in-flight
++ *                     pwm-active test left them, so committing causes no
++ *                     visible flicker. See "PWM COMMITTED (Phase 13)"
++ *                     below for the full design.
 + *
 + * PC22 (Phase 10): accessed only through this same driver, same lazy/
 + * deferred acquisition discipline, only via pc22-test-low/pc22-test-high
@@ -328,6 +342,84 @@ index 000000000..b394b3cfc
 + * "restore to" for a channel this driver only ever drives forward from
 + * safe-on, per (g) above).
 + *
++ * PWM COMMITTED (Phase 13): the bounded pwm-active test above proves
++ * whether a given duty cycle is safe to drive at all - it is deliberately
++ * incapable of holding that duty cycle indefinitely, always converging back
++ * to safe-on within NBLC_PWM_TEST_MS. Day-to-day operation, once a duty has
++ * been proven safe, needs the opposite: a SUSTAINED hold with no automatic
++ * timeout. NBLC_STATE_PWM_COMMITTED provides exactly that, gated behind one
++ * new rule and nothing else:
++ *
++ *   - reachable ONLY via the "commit-pwm" debugfs command, and ONLY while
++ *     n->state == NBLC_STATE_PWM_ACTIVE *and* n->active_op ==
++ *     NBLC_OP_PWM_ACTIVE - i.e. only while a pwm-active bounded test is
++ *     genuinely still in flight (nblc_cmd_commit_pwm()). There is no path
++ *     from safe-on, boot-preserve, safe-off-test, or a PC22 test directly
++ *     into pwm-committed.
++ *
++ *   - on commit: cancel_delayed_work() disarms the in-flight test's fixed
++ *     ~2s auto-revert timer (same in-lock, non-sync cancellation already
++ *     used by every other command's own error/transition path in this
++ *     file - see the n->lock comment on cancel_delayed_work_sync()), then
++ *     n->active_op is cleared to NBLC_OP_NONE and n->state becomes
++ *     NBLC_STATE_PWM_COMMITTED. No hardware is touched - n->pwm and
++ *     n->pwm_pinctrl are left exactly as nblc_enter_pwm_active_locked()
++ *     left them.
++ *
++ *   - DELIBERATELY no second, periodic watchdog is armed for the committed
++ *     state. This is a considered choice, not an oversight: every
++ *     convergence path already in this file - nblc_force_restore_now()
++ *     (used by both "restore" and, via nblc_cmd_enter_safe_on(), by
++ *     "enter-safe-on"/"disarm"), and nblc_remove() - forces a full
++ *     nblc_converge_gpc0_safe_on_locked() convergence whenever
++ *     n->active_op == NBLC_OP_NONE and n->state is anything other than
++ *     NBLC_STATE_SAFE_ON/NBLC_STATE_BOOT_PRESERVE. NBLC_STATE_PWM_COMMITTED
++ *     satisfies that condition unconditionally, so those already-tested
++ *     generic paths converge it correctly with ZERO changes to their own
++ *     code. That existing invariant guard - "active_op idle and state not
++ *     already safe/boot-preserve means something must be converged" - IS
++ *     this state's safety net; there is no way to leave this driver idle
++ *     while pwm-committed without passing through one of those four
++ *     convergence entry points (explicit "restore", explicit
++ *     "enter-safe-on", explicit "disarm", or remove()) first. Adding a
++ *     second, parallel periodic re-affirmation timer on top would duplicate
++ *     a guarantee that already unconditionally holds, while introducing new
++ *     ordering/interaction risk against the same lock/cancel discipline
++ *     this driver's entire safety case rests on - not a trade worth making
++ *     for a printer with a single remaining flash budget. If a future need
++ *     for genuine periodic hardware re-verification (e.g. a get_state
++ *     cross-check, matching the non-gating readback already described in
++ *     "PWM (Phase 12)") arises, it should be added as its own diagnostic,
++ *     non-gating log line, never as something the safety guarantee itself
++ *     depends on.
++ *
++ *   - status (both debugfs status file and the dev_info command log)
++ *     reports state as "pwm-committed" (nblc_state_name()), distinct from
++ *     "pwm-active", plus pwm_committed / pwm_committed_duration_ms fields
++ *     so a caller can tell a bounded, will-auto-revert test apart from a
++ *     sustained, operator-confirmed hold, and see how long the current
++ *     commitment has been held (jiffies delta against n->committed_since,
++ *     a simple monotonic counter, no persistence needed).
++ *
++ *   - serialization is unchanged: since pwm-committed is not
++ *     NBLC_STATE_SAFE_ON, the existing "only valid from safe-on" checks in
++ *     nblc_cmd_safe_off_test()/nblc_cmd_pwm_active() already reject a new
++ *     safe-off-test or a new pwm-active test while committed, with no
++ *     changes to those functions. commit-pwm itself requires
++ *     NBLC_STATE_PWM_ACTIVE exactly, so a second "commit-pwm" issued while
++ *     already committed is likewise rejected (-EPERM) by the same check -
++ *     no separate "already committed" branch needed.
++ *
++ *   - committing to a DIFFERENT duty cycle without first returning to
++ *     safe-on is deliberately NOT supported. Doing so cleanly would require
++ *     either a second concurrent PWM-apply path, or reusing
++ *     nblc_enter_pwm_active_locked() from pwm-committed with new
++ *     "currently committed, not currently in a bounded test" bookkeeping -
++ *     both add real state-machine surface area for a convenience feature.
++ *     The safe, already-tested way to change duty is: "restore" or
++ *     "enter-safe-on" (converges cleanly to safe-on, releasing the PWM
++ *     claim), then a fresh "pwm-active-25/50/75", then "commit-pwm" again.
++ *
 + * Bounded debugfs command interface (write to .../command, zero arguments,
 + * any trailing token rejected outright - same whitelist-enforcement
 + * discipline as nebulaos_backlight_probe_diag.c):
@@ -341,6 +433,10 @@ index 000000000..b394b3cfc
 + *   pwm-active-25       enter pwm-active at 25% duty, only from safe-on
 + *   pwm-active-50       enter pwm-active at 50% duty, only from safe-on
 + *   pwm-active-75       enter pwm-active at 75% duty, only from safe-on
++ *   commit-pwm          promote an in-flight pwm-active test to
++ *                       pwm-committed (sustained, no auto-revert), only
++ *                       while that test is still active - see "PWM
++ *                       COMMITTED (Phase 13)" above
 + *   disarm              force safe-on convergence, then release the GPIO
 + *                       claim and return to boot-preserve
 + *   restore             cancel any active bounded operation and restore
@@ -432,7 +528,17 @@ index 000000000..b394b3cfc
 +	NBLC_STATE_SAFE_ON,
 +	NBLC_STATE_SAFE_OFF_TEST,
 +	NBLC_STATE_PWM_ACTIVE,
-+	/* Not one of the mission's four named states - an internal safety
++	/* Sustained hold of an already-proven-safe PWM duty cycle - see the
++	 * file header "PWM COMMITTED (Phase 13)" section. Reachable ONLY via
++	 * "commit-pwm" issued while NBLC_STATE_PWM_ACTIVE is genuinely still
++	 * in flight (nblc_cmd_commit_pwm()) - never directly from safe-on or
++	 * any other state. No automatic timeout; every existing convergence
++	 * path (nblc_force_restore_now(), and therefore both "restore" and
++	 * "enter-safe-on"/"disarm", plus nblc_remove()) already forces
++	 * convergence to safe-on for this state with zero changes to those
++	 * functions - see the Phase 13 section for why. */
++	NBLC_STATE_PWM_COMMITTED,
++	/* Not one of the mission's named states - an internal safety
 +	 * rail. Entered ONLY if nblc_converge_gpc0_safe_on_locked() itself
 +	 * fails to re-establish and verify GPC0=GPIO-high (a genuine kernel
 +	 * API failure - gpiod_get()/gpiod_direction_output() returning an
@@ -483,6 +589,11 @@ index 000000000..b394b3cfc
 +	struct pwm_device	*pwm;		/* non-NULL only while PWM channel 0 is claimed */
 +	unsigned int		pwm_duty_pct;	/* valid only while pwm != NULL */
 +
++	/* Valid only while state == NBLC_STATE_PWM_COMMITTED - the jiffies
++	 * timestamp commit-pwm was accepted at. A simple monotonic counter,
++	 * not persisted - see file header "PWM COMMITTED (Phase 13)". */
++	unsigned long		committed_since;
++
 +	bool			safe_on_verified;
 +
 +	/* PC22 resources - only ever non-NULL while a pc22-test-* operation
@@ -509,6 +620,7 @@ index 000000000..b394b3cfc
 +	case NBLC_STATE_SAFE_ON: return "safe-on";
 +	case NBLC_STATE_SAFE_OFF_TEST: return "safe-off-test";
 +	case NBLC_STATE_PWM_ACTIVE: return "pwm-active";
++	case NBLC_STATE_PWM_COMMITTED: return "pwm-committed";
 +	case NBLC_STATE_FAULT: return "fault-unclaimed-hardware";
 +	default: return "unknown";
 +	}
@@ -979,6 +1091,54 @@ index 000000000..b394b3cfc
 +	return 0;
 +}
 +
++/* commit-pwm: promote an in-flight, still-active pwm-active bounded test
++ * into NBLC_STATE_PWM_COMMITTED - see the file header "PWM COMMITTED
++ * (Phase 13)" section for the full design and reasoning. Reachable ONLY
++ * while a pwm-active test is genuinely still in flight (state ==
++ * NBLC_STATE_PWM_ACTIVE *and* active_op == NBLC_OP_PWM_ACTIVE) - this
++ * forces every commit through the exact same acquire/apply/verify sequence
++ * (nblc_enter_pwm_active_locked()) already exercised by the pwm-active
++ * regression tests; there is no, and will never be, a direct safe-on ->
++ * pwm-committed path. Also naturally rejects a second "commit-pwm" issued
++ * while already committed, since state is then NBLC_STATE_PWM_COMMITTED,
++ * not NBLC_STATE_PWM_ACTIVE - no separate "already committed" check
++ * needed.
++ *
++ * Disarms the in-flight test's fixed ~2s auto-revert timer
++ * (cancel_delayed_work(), same in-lock/non-sync pattern every other
++ * command's own error/transition path in this file already uses - see the
++ * n->lock comment on cancel_delayed_work_sync() for why the _sync variant
++ * must never be called while holding the lock) and clears active_op to
++ * NBLC_OP_NONE - from this point on, no watchdog callback will ever fire
++ * for this operation again. No hardware is touched: n->pwm/n->pwm_pinctrl
++ * are left exactly as they were, so committing causes no visible flicker.
++ */
++static int nblc_cmd_commit_pwm(struct nblc *n)
++{
++	unsigned int duty;
++
++	mutex_lock(&n->lock);
++	if (n->state != NBLC_STATE_PWM_ACTIVE || n->active_op != NBLC_OP_PWM_ACTIVE) {
++		n->op_failure_count++;
++		mutex_unlock(&n->lock);
++		dev_warn(n->dev, "rejected commit-pwm: only valid from an in-flight "
++			 "pwm-active test (current: state=%s active_op=%s)\n",
++			 nblc_state_name(n->state), nblc_op_name(n->active_op));
++		return -EPERM;
++	}
++
++	cancel_delayed_work(&n->restore_work);
++	n->active_op = NBLC_OP_NONE;
++	n->state = NBLC_STATE_PWM_COMMITTED;
++	n->committed_since = jiffies;
++	duty = n->pwm_duty_pct;
++	mutex_unlock(&n->lock);
++
++	dev_info(n->dev, "pwm committed: %u%% duty held indefinitely (no auto-revert) - "
++		 "write \"enter-safe-on\" or \"restore\" to release\n", duty);
++	return 0;
++}
++
 +static int nblc_pc22_test_locked(struct nblc *n, int level)
 +{
 +	struct gpio_desc *desc;
@@ -1059,12 +1219,17 @@ index 000000000..b394b3cfc
 +	unsigned long remaining_ms = 0;
 +	const char *gpc0_mode;
 +	int gpc0_level = -1;
++	bool pwm_committed = (n->state == NBLC_STATE_PWM_COMMITTED);
++	unsigned long committed_ms = 0;
 +
 +	if (n->active_op != NBLC_OP_NONE) {
 +		long delta = (long)(n->deadline - jiffies);
 +
 +		remaining_ms = delta > 0 ? jiffies_to_msecs(delta) : 0;
 +	}
++
++	if (pwm_committed)
++		committed_ms = jiffies_to_msecs((unsigned long)(jiffies - n->committed_since));
 +
 +	if (n->gpc0_gpio) {
 +		gpc0_mode = "gpio";
@@ -1087,6 +1252,8 @@ index 000000000..b394b3cfc
 +		P("pwm_enabled: %d", n->pwm != NULL);
 +		P("pwm_period_ns: %u", n->pwm ? NBLC_PWM_PERIOD_NS : 0);
 +		P("pwm_duty_pct: %u", n->pwm ? n->pwm_duty_pct : 0);
++		P("pwm_committed: %d", pwm_committed);
++		P("pwm_committed_duration_ms: %lu", committed_ms);
 +		P("pc22_active: %d", n->pc22_gpio != NULL);
 +		P("pc22_initial_level_known: %d", n->pc22_initial_level_known);
 +		P("pc22_initial_level: %d", n->pc22_initial_level_known ? n->pc22_initial_level : -1);
@@ -1101,12 +1268,14 @@ index 000000000..b394b3cfc
 +	} else {
 +		dev_info(n->dev,
 +			 "status: armed=%d state=%s active_op=%s timeout_remaining=%lums "
-+			 "gpc0_mode=%s gpc0_level=%d pwm_owned=%d pwm_duty=%u%% pc22_active=%d "
++			 "gpc0_mode=%s gpc0_level=%d pwm_owned=%d pwm_duty=%u%% "
++			 "pwm_committed=%d pwm_committed_duration=%lums pc22_active=%d "
 +			 "restore_count=%u watchdog_restore_count=%u restore_failure_count=%u "
 +			 "safe_on_verified=%d last_restore_reason=%s\n",
 +			 n->state != NBLC_STATE_BOOT_PRESERVE, nblc_state_name(n->state),
 +			 nblc_op_name(n->active_op), remaining_ms, gpc0_mode, gpc0_level,
-+			 n->pwm != NULL, n->pwm ? n->pwm_duty_pct : 0, n->pc22_gpio != NULL,
++			 n->pwm != NULL, n->pwm ? n->pwm_duty_pct : 0,
++			 pwm_committed, committed_ms, n->pc22_gpio != NULL,
 +			 n->restore_count, n->watchdog_restore_count, n->restore_failure_count,
 +			 n->safe_on_verified, n->last_restore_reason);
 +	}
@@ -1167,6 +1336,8 @@ index 000000000..b394b3cfc
 +		ret = nblc_cmd_pwm_active(n, 50);
 +	else if (!strcmp(cmd, "pwm-active-75"))
 +		ret = nblc_cmd_pwm_active(n, 75);
++	else if (!strcmp(cmd, "commit-pwm"))
++		ret = nblc_cmd_commit_pwm(n);
 +	else if (!strcmp(cmd, "disarm"))
 +		ret = nblc_cmd_disarm(n);
 +	else if (!strcmp(cmd, "restore"))

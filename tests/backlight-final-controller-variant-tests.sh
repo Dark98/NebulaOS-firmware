@@ -726,6 +726,299 @@ else
 	fail "the file header's command-interface list does not document commit-pwm"
 fi
 
+# --- sleep/wake tests (Phase 14: backlight-only sleep extension). Same
+# source-inspection style as the pwm-committed tests above - $DRIVER/
+# $driver_no_comments are still the FINAL1-applied copies from that block. ---
+
+# --- Test 31: NBLC_STATE_ASLEEP is a real, distinctly-named state, and
+# "sleep" is reachable ONLY from safe-on or pwm-committed - never directly
+# from boot-preserve, safe-off-test, or a bare in-flight pwm-active test. ---
+if grep -q 'NBLC_STATE_ASLEEP,' "$DRIVER"; then
+	pass
+else
+	fail "the driver does not define an NBLC_STATE_ASLEEP enum value"
+fi
+if grep -q 'case NBLC_STATE_ASLEEP: return "asleep";' "$DRIVER"; then
+	pass
+else
+	fail "nblc_state_name() does not report \"asleep\" for NBLC_STATE_ASLEEP"
+fi
+sleep_cmd_body=$(echo "$driver_no_comments" | awk '/^static int nblc_cmd_sleep\(/,/^}/')
+if [ -n "$sleep_cmd_body" ]; then
+	pass
+else
+	fail "could not find nblc_cmd_sleep() in the driver"
+fi
+if echo "$sleep_cmd_body" | grep -q 'n->state != NBLC_STATE_SAFE_ON && n->state != NBLC_STATE_PWM_COMMITTED' && \
+   echo "$sleep_cmd_body" | grep -q -- '-EPERM'; then
+	pass
+else
+	fail "nblc_cmd_sleep() does not gate entry to exactly safe-on or pwm-committed " \
+		"(boot-preserve/safe-off-test/bare pwm-active would then be reachable, or " \
+		"the rejection is missing)"
+fi
+
+# --- Test 32: a second "sleep" while already asleep is rejected - since the
+# gate above allows exactly {safe-on, pwm-committed} and NBLC_STATE_ASLEEP is
+# neither, this is the same check as Test 31, confirmed here explicitly as
+# its own serialization test per the mission's own required-coverage list. ---
+if echo "$sleep_cmd_body" | grep -Eq 'n->state != NBLC_STATE_SAFE_ON && n->state != NBLC_STATE_PWM_COMMITTED && n->state != NBLC_STATE_ASLEEP'; then
+	fail "nblc_cmd_sleep()'s gate appears to special-case NBLC_STATE_ASLEEP as an " \
+		"additional allowed source state - it must remain excluded"
+else
+	pass
+fi
+if echo "$sleep_cmd_body" | grep -q -- '-EBUSY'; then
+	pass
+else
+	fail "nblc_cmd_sleep() does not reject a second concurrent operation with -EBUSY"
+fi
+
+# --- Test 33: sleep captures the wake target BEFORE any hardware mutation,
+# and is watchdog-armed before mutating - same arm-before-apply discipline as
+# every other operation (see check_arm_before, already defined above). ---
+capture_line=$(echo "$sleep_cmd_body" | grep -n 'from_pwm = (n->state == NBLC_STATE_PWM_COMMITTED);' | head -1 | cut -d: -f1)
+arm_line=$(echo "$sleep_cmd_body" | grep -n 'schedule_delayed_work(&n->restore_work' | head -1 | cut -d: -f1)
+if [ -n "$capture_line" ] && [ -n "$arm_line" ] && [ "$capture_line" -lt "$arm_line" ]; then
+	pass
+else
+	fail "nblc_cmd_sleep() does not capture the wake target before arming/mutating " \
+		"(capture=$capture_line arm=$arm_line)"
+fi
+check_arm_before "$sleep_cmd_body" 'nblc_drive_gpc0_low_locked(n)' "nblc_cmd_sleep"
+
+# --- Test 34: sleep saves the correct wake target fields only AFTER the
+# GPC0-low mutation genuinely succeeds, immediately before transitioning to
+# NBLC_STATE_ASLEEP - never speculatively before the mutation is known to
+# have worked. ---
+mutate_line=$(echo "$sleep_cmd_body" | grep -n 'ret = nblc_drive_gpc0_low_locked(n);' | head -1 | cut -d: -f1)
+save_line=$(echo "$sleep_cmd_body" | grep -n 'n->sleep_wake_target_is_pwm = from_pwm;' | head -1 | cut -d: -f1)
+state_line=$(echo "$sleep_cmd_body" | grep -n 'n->state = NBLC_STATE_ASLEEP;' | head -1 | cut -d: -f1)
+if [ -n "$mutate_line" ] && [ -n "$save_line" ] && [ -n "$state_line" ] && \
+   [ "$mutate_line" -lt "$save_line" ] && [ "$save_line" -lt "$state_line" ]; then
+	pass
+else
+	fail "nblc_cmd_sleep() does not save the wake target after a successful GPC0-low " \
+		"mutation and before transitioning to asleep, in that order " \
+		"(mutate=$mutate_line save=$save_line state=$state_line)"
+fi
+if echo "$sleep_cmd_body" | grep -q 'n->sleep_wake_target_duty_pct = duty;'; then
+	pass
+else
+	fail "nblc_cmd_sleep() does not save the duty percentage as part of the wake target"
+fi
+
+# --- Test 35: sleeping from pwm-committed releases the PWM claim and remuxes
+# GPC0 back to GPIO via the SAME nblc_converge_gpc0_safe_on_locked() routine
+# every other exit from an active PWM state already uses - never a second,
+# parallel "release PWM, remux to GPIO" implementation. ---
+if echo "$sleep_cmd_body" | grep -q 'nblc_converge_gpc0_safe_on_locked(n, "sleep-from-pwm-committed");'; then
+	pass
+else
+	fail "nblc_cmd_sleep() does not reuse nblc_converge_gpc0_safe_on_locked() to leave " \
+		"pwm-committed - it must not reimplement PWM release/pinctrl remux itself"
+fi
+if echo "$sleep_cmd_body" | grep -Eq 'pwm_apply_state\(|pwm_put\(|pinctrl_put\(|pinctrl_get_select\(|gpiod_get\('; then
+	fail "nblc_cmd_sleep() touches PWM/pinctrl/GPIO-acquisition hardware APIs directly - " \
+		"it must only reach hardware through the shared converge routine and " \
+		"nblc_drive_gpc0_low_locked()"
+else
+	pass
+fi
+# And no direct duplicate of the GPIO-low mechanic either - only through the
+# shared helper.
+if echo "$sleep_cmd_body" | grep -q 'gpiod_direction_output(n->gpc0_gpio, 0)'; then
+	fail "nblc_cmd_sleep() duplicates the GPIO-low mechanic inline instead of calling " \
+		"the shared nblc_drive_gpc0_low_locked() helper"
+else
+	pass
+fi
+
+# --- Test 36: "wake" is reachable ONLY from asleep. ---
+wake_cmd_body=$(echo "$driver_no_comments" | awk '/^static int nblc_cmd_wake\(/,/^}/')
+if [ -n "$wake_cmd_body" ]; then
+	pass
+else
+	fail "could not find nblc_cmd_wake() in the driver"
+fi
+if echo "$wake_cmd_body" | grep -q 'n->state != NBLC_STATE_ASLEEP' && \
+   echo "$wake_cmd_body" | grep -q -- '-EPERM'; then
+	pass
+else
+	fail "nblc_cmd_wake() does not gate entry to exactly asleep"
+fi
+if echo "$wake_cmd_body" | grep -q -- '-EBUSY'; then
+	pass
+else
+	fail "nblc_cmd_wake() does not reject a second concurrent operation with -EBUSY"
+fi
+check_arm_before "$wake_cmd_body" 'nblc_converge_gpc0_safe_on_locked(n, "wake")' "nblc_cmd_wake"
+
+# --- Test 37: waking to a plain safe-on target drives GPC0 high (verified)
+# and stops there - it must return before ever calling
+# nblc_enter_pwm_active_locked(). ---
+plain_return_line=$(echo "$wake_cmd_body" | grep -n 'if (!from_pwm) {' | head -1 | cut -d: -f1)
+enter_pwm_call_line=$(echo "$wake_cmd_body" | grep -n 'ret = nblc_enter_pwm_active_locked(n, duty);' | head -1 | cut -d: -f1)
+if [ -n "$plain_return_line" ] && [ -n "$enter_pwm_call_line" ] && [ "$plain_return_line" -lt "$enter_pwm_call_line" ]; then
+	pass
+else
+	fail "nblc_cmd_wake() does not short-circuit to a plain safe-on restore before " \
+		"reaching the pwm-active re-entry step (plain=$plain_return_line " \
+		"enter_pwm=$enter_pwm_call_line)"
+fi
+
+# --- Test 38: waking to a pwm-committed target goes GPC0-high-verify ->
+# re-enter pwm-active (the SAME acquire/apply/verify function pwm-active-X
+# itself uses) -> re-commit (the same bookkeeping-only transition
+# commit-pwm itself performs), in that order - and never shortcuts by
+# calling pwm_apply_state()/gpiod_direction_output()/pinctrl_get_select()
+# itself (those must only ever be reached through the shared, already-tested
+# functions). ---
+converge_call_line=$(echo "$wake_cmd_body" | grep -n 'nblc_converge_gpc0_safe_on_locked(n, "wake");' | head -1 | cut -d: -f1)
+commit_state_line=$(echo "$wake_cmd_body" | grep -n 'n->state = NBLC_STATE_PWM_COMMITTED;' | head -1 | cut -d: -f1)
+if [ -n "$converge_call_line" ] && [ -n "$enter_pwm_call_line" ] && [ -n "$commit_state_line" ] && \
+   [ "$converge_call_line" -lt "$enter_pwm_call_line" ] && [ "$enter_pwm_call_line" -lt "$commit_state_line" ]; then
+	pass
+else
+	fail "nblc_cmd_wake() does not sequence GPC0-high-verify -> re-enter-pwm-active -> " \
+		"re-commit in order (converge=$converge_call_line enter_pwm=$enter_pwm_call_line " \
+		"commit=$commit_state_line)"
+fi
+if echo "$wake_cmd_body" | grep -Eq 'pwm_apply_state\(|gpiod_direction_output\(|pinctrl_get_select\(|pwm_get\('; then
+	fail "nblc_cmd_wake() calls a hardware-apply API directly - it must go through " \
+		"nblc_converge_gpc0_safe_on_locked()/nblc_enter_pwm_active_locked() only, " \
+		"never a shortcut around pwm_apply_state()/readback"
+else
+	pass
+fi
+if echo "$wake_cmd_body" | grep -q 'n->committed_since = jiffies;'; then
+	pass
+else
+	fail "nblc_cmd_wake() does not record committed_since when re-committing, the same " \
+		"as nblc_cmd_commit_pwm() itself does"
+fi
+
+# --- Test 39: every existing convergence/shutdown/disarm/remove path that
+# already handles NBLC_STATE_PWM_COMMITTED (Test 27) also handles
+# NBLC_STATE_ASLEEP - either via the SAME generic non-safe-on/boot-preserve
+# fallback (settled asleep state, active_op idle, exactly like
+# pwm-committed), or via explicit NBLC_OP_SLEEP_TRANSITION/
+# NBLC_OP_WAKE_TRANSITION cases in every active_op switch (the transition
+# itself, which pwm-committed has no equivalent of since committing touches
+# no hardware). ---
+restore_work_body=$(echo "$driver_no_comments" | awk '/^static void nblc_restore_work/,/^}/')
+force_restore_body=$(echo "$driver_no_comments" | awk '/^static void nblc_force_restore_now/,/^}/')
+remove_body=$(echo "$driver_no_comments" | awk '/^static int nblc_remove/,/^}/')
+for site_name in "nblc_restore_work:$restore_work_body" "nblc_force_restore_now:$force_restore_body" "nblc_remove:$remove_body"; do
+	name=${site_name%%:*}
+	body=${site_name#*:}
+	if echo "$body" | grep -q 'NBLC_OP_SLEEP_TRANSITION' && echo "$body" | grep -q 'NBLC_OP_WAKE_TRANSITION'; then
+		pass
+	else
+		fail "$name()'s active_op switch does not handle NBLC_OP_SLEEP_TRANSITION/" \
+			"NBLC_OP_WAKE_TRANSITION - a crash mid sleep/wake transition would not " \
+			"be converged"
+	fi
+done
+# The SETTLED NBLC_STATE_ASLEEP itself must rely on the same generic
+# fallback pwm-committed already relies on - no special-casing.
+if echo "$force_restore_body" | grep -q 'NBLC_STATE_ASLEEP'; then
+	fail "nblc_force_restore_now() explicitly mentions NBLC_STATE_ASLEEP - it should " \
+		"rely on the existing generic state!=safe-on/boot-preserve check instead of " \
+		"a special case, same design choice already made for pwm-committed"
+else
+	pass
+fi
+enter_safe_on_body=$(echo "$driver_no_comments" | awk '/^static int nblc_cmd_enter_safe_on/,/^}/')
+if echo "$enter_safe_on_body" | grep -q 'NBLC_STATE_ASLEEP'; then
+	fail "nblc_cmd_enter_safe_on() explicitly mentions NBLC_STATE_ASLEEP - it should " \
+		"converge unconditionally regardless of active_op, same as for pwm-committed, " \
+		"with no special case"
+else
+	pass
+fi
+if echo "$remove_body" | grep -q 'NBLC_STATE_ASLEEP'; then
+	fail "nblc_remove() explicitly mentions NBLC_STATE_ASLEEP - it should rely on the " \
+		"existing generic state!=boot-preserve check instead of a special case"
+else
+	pass
+fi
+
+# --- Test 40: NBLC_STATE_ASLEEP structurally never holds n->pwm/
+# n->pwm_pinctrl - neither nblc_cmd_sleep() nor nblc_cmd_wake() ever assigns
+# to those fields directly; only the shared converge/enter-pwm-active
+# routines do, and both are always called (and always leave the driver
+# either fully safe-on or fully back in pwm-active/pwm-committed) before
+# NBLC_STATE_ASLEEP is ever set or left. ---
+if echo "$sleep_cmd_body" | grep -Eq 'n->pwm[[:space:]]*=|n->pwm_pinctrl[[:space:]]*=' ; then
+	fail "nblc_cmd_sleep() assigns n->pwm/n->pwm_pinctrl directly instead of leaving " \
+		"that to the shared converge routine"
+else
+	pass
+fi
+if echo "$wake_cmd_body" | grep -Eq 'n->pwm[[:space:]]*=|n->pwm_pinctrl[[:space:]]*=' ; then
+	fail "nblc_cmd_wake() assigns n->pwm/n->pwm_pinctrl directly instead of leaving " \
+		"that to the shared converge/enter-pwm-active routines"
+else
+	pass
+fi
+
+# --- Test 41: status exposes every field the mission's sleep/wake runtime
+# interface requires: asleep, wake_target, asleep duration, sleep/wake/
+# wake-failure counts. ---
+status_dump_body=$(echo "$driver_no_comments" | awk '/^static void nblc_status_dump/,/^}/')
+for field in 'asleep:' 'wake_target:' 'asleep_duration_ms:' 'sleep_count:' 'wake_count:' 'wake_failure_count:'; do
+	if echo "$status_dump_body" | grep -q "\"$field"; then
+		pass
+	else
+		fail "nblc_status_dump() does not expose the required \"$field\" status field"
+	fi
+done
+if grep -q 'unsigned long[[:space:]]*asleep_since;' "$DRIVER"; then
+	pass
+else
+	fail "struct nblc does not track an asleep_since timestamp for the sleep duration"
+fi
+
+# --- Test 42: the debugfs command whitelist dispatches "sleep" and "wake"
+# (same whitelist-enforcement discipline verified for every other command by
+# Test 16), and both are documented in the file header's command list. ---
+command_write_body=$(echo "$driver_no_comments" | awk '/^static ssize_t nblc_command_write/,/^}/')
+if echo "$command_write_body" | grep -q '!strcmp(cmd, "sleep")' && \
+   echo "$command_write_body" | grep -q '!strcmp(cmd, "wake")'; then
+	pass
+else
+	fail "nblc_command_write() does not dispatch both \"sleep\" and \"wake\" commands"
+fi
+if grep -q '\*   sleep' "$DRIVER" && grep -q '\*   wake' "$DRIVER"; then
+	pass
+else
+	fail "the file header's command-interface list does not document sleep/wake"
+fi
+
+# --- Test 43: sleep/wake never touch framebuffer blanking, panel reset, or
+# PC22 in any way - explicit exclusions from the mission spec. ---
+if echo "$sleep_cmd_body$wake_cmd_body" | grep -Eiq 'pc22|fbioblank|fb_blank|panel_reset|framebuffer'; then
+	fail "nblc_cmd_sleep()/nblc_cmd_wake() reference PC22, framebuffer blanking, or " \
+		"panel reset - these are explicitly out of scope for backlight-only sleep"
+else
+	pass
+fi
+
+# --- Test 44: the shared &pwm controller node's own pinctrl-0 remains
+# byte-identical to pristine after the sleep/wake extension to this same
+# patch - the same dedicated regression check as Test 4/21/22, re-run here
+# explicitly per the mission's own required-coverage list. ---
+POSTSLEEP_PWM_BLOCK=$(sed -n '/^&pwm {/,/^};/p' "$DTS")
+if [ "$PRETEST_PWM_BLOCK" = "$POSTSLEEP_PWM_BLOCK" ]; then
+	pass
+else
+	fail "the &pwm node's own block changed after the sleep/wake extension - before:
+$PRETEST_PWM_BLOCK
+after:
+$POSTSLEEP_PWM_BLOCK"
+fi
+
 # Leave the suite in the same FINAL0/clean end-state the rest of the file
 # already establishes.
 sh "$VARIANT_SCRIPT" FINAL0 >/dev/null

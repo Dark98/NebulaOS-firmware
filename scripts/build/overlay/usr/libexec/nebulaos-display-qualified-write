@@ -12,11 +12,15 @@
 # Any field from /etc/nebulaos-display-qualified.sh's NDQ_FIELDS list not
 # given a KEY=VALUE here falls back to its documented default - UNQUALIFIED
 # for anything that would otherwise gate a hardware apply step, or the
-# specific inert default for the three not-yet-implemented sleep/touch-wake
-# fields (sleep_enabled=0, touch_wake_enabled=0,
+# specific inert default for the sleep/touch-wake fields (sleep_enabled=0,
+# touch_wake_enabled=0, touch_wake_mode=disabled,
 # first_touch_policy=not-implemented) - see ndq_default_for_field(). This
 # is what makes "never persist a value that wasn't actually live-qualified"
 # automatic rather than something the operator has to remember every time.
+#
+# touch_wake_mode must always agree with touch_wake_enabled
+# (polling<->1, disabled<->0) - ndq_validate() rejects a rendered config
+# where they disagree, so this helper will refuse to write one.
 #
 # Example - a full qualification session that tested irq-assist touch and
 # a 50% PWM backlight:
@@ -40,6 +44,19 @@
 #     touch_mode=poll-only touch_trigger=poll \
 #     release_stable_samples=3 idle_safety_poll_ms=250 touch_fallback_enabled=1 \
 #     backlight_mode=fixed-safe-on \
+#     qualified_at_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+#
+# Example - sleep capability qualified (backlight-only sleep + polling
+# touch-wake), fixed-safe-on backlight, no PWM tested. off_value is
+# correctly left UNQUALIFIED - sleep here is GPC0-GPIO-off, not a PWM duty,
+# so there is nothing to record there even though sleep_enabled=1:
+#
+#   nebulaos-display-qualified-write \
+#     qualification_complete=1 \
+#     touch_mode=poll-only touch_trigger=poll \
+#     release_stable_samples=3 idle_safety_poll_ms=250 touch_fallback_enabled=1 \
+#     backlight_mode=fixed-safe-on \
+#     sleep_enabled=1 touch_wake_enabled=1 touch_wake_mode=polling \
 #     qualified_at_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 #
 # To withdraw a qualification (revert to "nothing has been tested" without

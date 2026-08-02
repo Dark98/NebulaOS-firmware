@@ -53,6 +53,16 @@ NDQ_FORMAT_VERSION=1
 : "${NDQ_BACKLIGHT_CMD_FILE:=/sys/kernel/debug/nebulaos_backlight_final_controller/command}"
 : "${NDQ_BACKLIGHT_STATUS_FILE:=/sys/kernel/debug/nebulaos_backlight_final_controller/status}"
 
+# The touch-wake watcher's own init.d script, invoked (not sourced) by
+# ndq_apply_deferred_fields() below when sleep_enabled=1 and
+# touch_wake_mode=polling. Overridable so the offline test suite can point
+# this at a fake stand-in script instead of a real init.d entry - same
+# reasoning as every other overridable path in this file. Its own start()
+# is idempotent (start-stop-daemon's pidfile check), so invoking it here in
+# addition to it also running in the normal S* boot sequence is always
+# safe, never a double-start.
+: "${NDQ_SLEEP_WAKE_INITD:=/etc/init.d/S98nebulaos-display-sleep-wake-controller}"
+
 # Sentinel for "this field was never live-qualified." Never treated as a
 # valid value for any field that gates an actual apply step - see
 # ndq_validate(). Deliberately not "0", "none", or an empty string: those
@@ -69,7 +79,8 @@ NDQ_FIELDS="format_version qualification_complete touch_mode touch_trigger \
 release_stable_samples idle_safety_poll_ms touch_fallback_enabled \
 backlight_mode pwm_channel pwm_period_ns pwm_polarity pc22_usage \
 pc22_active_level safe_brightness minimum_brightness off_value \
-sleep_enabled touch_wake_enabled first_touch_policy qualified_at_utc"
+sleep_enabled touch_wake_enabled touch_wake_mode first_touch_policy \
+qualified_at_utc"
 
 ndq_log() {
 	echo "nebulaos-display-qualified: $1"
@@ -231,6 +242,7 @@ ndq_default_for_field() {
 		qualification_complete) echo "0" ;;
 		sleep_enabled) echo "0" ;;
 		touch_wake_enabled) echo "0" ;;
+		touch_wake_mode) echo "disabled" ;;
 		first_touch_policy) echo "not-implemented" ;;
 		qualified_at_utc) echo "never" ;;
 		*) echo "$NDQ_UNQUALIFIED" ;;
@@ -355,6 +367,29 @@ ndq_validate() {
 		ndq_log "validate: touch_wake_enabled='$touch_wake_enabled' in $file is neither 0 nor 1"
 		return 1
 	fi
+	# touch_wake_mode is the mission-spec-verbatim field (touch_wake_mode=
+	# polling). touch_wake_enabled predates it (a plain boolean, kept for
+	# backward compatibility with any config already written against the
+	# original field list) - rather than letting the two fields silently
+	# disagree about the same underlying capability, they are required to
+	# always agree: touch_wake_mode=polling <-> touch_wake_enabled=1, and
+	# touch_wake_mode=disabled <-> touch_wake_enabled=0. A config that sets
+	# one without the consistent other is malformed and rejected, same as
+	# any other field here - see ndq_apply_deferred_fields() for how
+	# touch_wake_mode actually gates starting the sleep/wake watcher.
+	touch_wake_mode=$(ndq_get_field "$file" touch_wake_mode)
+	if ! ndq_in_set "$touch_wake_mode" polling disabled; then
+		ndq_log "validate: touch_wake_mode='$touch_wake_mode' in $file is not polling/disabled"
+		return 1
+	fi
+	if [ "$touch_wake_mode" = "polling" ] && [ "$touch_wake_enabled" != "1" ]; then
+		ndq_log "validate: touch_wake_mode=polling but touch_wake_enabled='$touch_wake_enabled' (expected 1) - the two fields disagree about whether touch-wake is enabled"
+		return 1
+	fi
+	if [ "$touch_wake_mode" = "disabled" ] && [ "$touch_wake_enabled" != "0" ]; then
+		ndq_log "validate: touch_wake_mode=disabled but touch_wake_enabled='$touch_wake_enabled' (expected 0) - the two fields disagree about whether touch-wake is enabled"
+		return 1
+	fi
 	first_touch_policy=$(ndq_get_field "$file" first_touch_policy)
 	if ! ndq_in_set "$first_touch_policy" not-implemented wake-only wake-and-pass-through ignore; then
 		ndq_log "validate: first_touch_policy='$first_touch_policy' in $file is not a recognized value"
@@ -458,6 +493,17 @@ ndq_validate() {
 			return 1
 		fi
 	fi
+	# off_value is deliberately allowed to remain UNQUALIFIED even when
+	# sleep_enabled=1 - this project never proved a 0% PWM duty value (see
+	# docs/NEBULAOS_ONE_FLASH_DISPLAY_FINAL_REPORT.md's own account of why
+	# that was never tested), and "never persist a value that wasn't
+	# actually live-qualified" means this validator must not require one.
+	# Sleep in this system is defined as GPC0-GPIO-off (see the same
+	# report), a hardware mechanism entirely independent of PWM duty - the
+	# sleep/wake watcher (nebulaos-display-sleep-wake-controller.sh) never
+	# reads or needs off_value at all. This field stays purely an
+	# informational/audit record of a PWM off-duty IF one is ever actually
+	# qualified in the future.
 	off_value=$(ndq_get_field "$file" off_value)
 	if [ "$off_value" != "$NDQ_UNQUALIFIED" ]; then
 		if ! ndq_is_uint "$off_value" || [ "$off_value" -gt 100 ]; then
@@ -592,14 +638,55 @@ ndq_apply_backlight() {
 }
 
 # ============================================================
-# Deferred fields (sleep / touch-wake) - validated, never applied.
+# Deferred fields (sleep / touch-wake)
 # ============================================================
+#
+# ndq_apply_deferred_fields SLEEP_ENABLED TOUCH_WAKE_ENABLED TOUCH_WAKE_MODE
+#                            FIRST_TOUCH_POLICY
+#
+# sleep_enabled=1 does NOT put the display to sleep here - that would be a
+# strange thing for a boot-time apply step to do unprompted (a human or
+# GuppyScreen's own idle timer decides WHEN to sleep; that mechanism is out
+# of scope for this mission - see this file's own header and the mission
+# spec). What sleep_enabled=1 actually gates is starting the touch-wake
+# watcher daemon (nebulaos-display-sleep-wake-controller.sh via its
+# S98 init.d script) so that IF the display is later put to sleep by
+# whatever future mechanism triggers it, the watcher is already running
+# and ready to wake it on the next real touch. If sleep_enabled=0 (or, in
+# principle, anything other than the validated "1"), the watcher is never
+# started - no persistent process is left running for a capability the
+# config says is not available.
+#
+# first_touch_policy is read/validated but still has no real consumer -
+# genuinely not yet implemented, same as before this change.
 ndq_apply_deferred_fields() {
 	sleep_enabled="$1"
 	touch_wake_enabled="$2"
-	first_touch_policy="$3"
-	ndq_log "sleep_enabled=$sleep_enabled touch_wake_enabled=$touch_wake_enabled first_touch_policy=$first_touch_policy read and validated, but sleep/touch-wake has no real mechanism built yet in this mission - deliberately a no-op, not yet implemented"
-	return 0
+	touch_wake_mode="$3"
+	first_touch_policy="$4"
+
+	if [ "$sleep_enabled" != "1" ]; then
+		ndq_log "apply-deferred: sleep_enabled=$sleep_enabled - sleep capability not available, not starting the touch-wake watcher"
+		return 0
+	fi
+
+	if [ "$touch_wake_mode" != "polling" ]; then
+		ndq_log "apply-deferred: sleep_enabled=1 but touch_wake_mode=$touch_wake_mode (not polling) - sleep is available but touch-wake is not, not starting the watcher"
+		return 0
+	fi
+
+	if [ ! -x "$NDQ_SLEEP_WAKE_INITD" ]; then
+		ndq_log "apply-deferred: sleep_enabled=1 touch_wake_mode=polling but $NDQ_SLEEP_WAKE_INITD is not present/executable - cannot start the touch-wake watcher"
+		return 1
+	fi
+
+	if "$NDQ_SLEEP_WAKE_INITD" start; then
+		ndq_log "apply-deferred: sleep_enabled=1 touch_wake_mode=polling - touch-wake watcher start requested via $NDQ_SLEEP_WAKE_INITD (first_touch_policy=$first_touch_policy)"
+		return 0
+	fi
+
+	ndq_log "apply-deferred: $NDQ_SLEEP_WAKE_INITD start failed"
+	return 1
 }
 
 # ============================================================
@@ -625,6 +712,7 @@ ndq_apply_all() {
 	safe_brightness=$(ndq_get_field "$file" safe_brightness)
 	sleep_enabled=$(ndq_get_field "$file" sleep_enabled)
 	touch_wake_enabled=$(ndq_get_field "$file" touch_wake_enabled)
+	touch_wake_mode=$(ndq_get_field "$file" touch_wake_mode)
 	first_touch_policy=$(ndq_get_field "$file" first_touch_policy)
 
 	if ! ndq_apply_touch "$touch_mode"; then
@@ -637,7 +725,15 @@ ndq_apply_all() {
 		return 1
 	fi
 
-	ndq_apply_deferred_fields "$sleep_enabled" "$touch_wake_enabled" "$first_touch_policy"
+	# Deliberately NOT gating ndq_apply_all's own return value on this
+	# call's result: by this point touch and backlight - the two things
+	# that actually matter for "is the screen safely lit right now" - have
+	# already succeeded. A failure to start the touch-wake watcher is a
+	# degraded-capability condition (sleep/wake just won't be available
+	# this boot), not a display-safety failure, and must never be conflated
+	# with the "nothing was applied, defaults stand" meaning ndq_apply_all
+	# returning non-zero has everywhere else in this file.
+	ndq_apply_deferred_fields "$sleep_enabled" "$touch_wake_enabled" "$touch_wake_mode" "$first_touch_policy"
 
 	ndq_log "apply-all: qualified display configuration applied successfully"
 	return 0

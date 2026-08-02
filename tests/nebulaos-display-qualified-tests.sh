@@ -2,11 +2,21 @@
 #
 # Offline, repeatable tests for:
 #   - scripts/build/overlay/etc/nebulaos-display-qualified.sh (the config
-#     format, atomic writer, validator, and debugfs-apply logic)
+#     format, atomic writer, validator, and debugfs-apply logic, including
+#     the touch_wake_mode field and the sleep/touch-wake watcher-starting
+#     logic in ndq_apply_deferred_fields())
 #   - scripts/build/overlay/etc/init.d/S97nebulaos-display-qualified-apply
-#     (the health-gated boot-time wrapper around it)
+#     (the health-gated boot-time wrapper around it, including the display-
+#     itself health gate)
 #   - scripts/build/overlay/usr/libexec/nebulaos-display-qualified-write
 #     (the human-operator manual-write helper)
+#
+# The touch-wake watcher daemon's OWN tick/loop logic (nebulaos-display-
+# sleep-wake-controller.sh / S98nebulaos-display-sleep-wake-controller) has
+# its own, separate test file:
+# tests/nebulaos-display-sleep-wake-controller-tests.sh - kept apart the
+# same way tests/nebulaos-camera-idle-controller-tests.sh is kept apart
+# from this file, rather than growing this already-large suite further.
 #
 # HONESTY NOTE (read before trusting a green run here as more than it is):
 # there is no running kernel and no live BusyBox init system available
@@ -240,6 +250,158 @@ if ndq_validate "$WORK/bad-brightness.conf" 2>/dev/null; then
 else
 	pass
 fi
+
+echo "============================================================"
+echo "touch_wake_mode field validation"
+echo "============================================================"
+
+# --- default-rendered file: touch_wake_mode=disabled, touch_wake_enabled=0
+# - consistent, structurally valid (even though qualification_complete=0
+# means "nothing to apply" is still the overall verdict). ---
+ndq_render_config > "$WORK/twm-default.conf"
+twm=$(ndq_get_field "$WORK/twm-default.conf" touch_wake_mode)
+[ "$twm" = "disabled" ] && pass || fail "default-rendered touch_wake_mode was '$twm', expected disabled"
+
+# --- touch_wake_mode=polling with the consistent touch_wake_enabled=1,
+# folded into an otherwise-fully-qualified config, is accepted end to end
+# (proves the consistency check doesn't block a genuinely valid file). ---
+ndq_render_config \
+	qualification_complete=1 \
+	touch_mode=poll-only touch_trigger=poll \
+	release_stable_samples=3 idle_safety_poll_ms=250 touch_fallback_enabled=1 \
+	backlight_mode=fixed-safe-on \
+	touch_wake_mode=polling touch_wake_enabled=1 sleep_enabled=1 \
+	> "$WORK/twm-polling-consistent.conf"
+if ndq_validate "$WORK/twm-polling-consistent.conf"; then
+	pass
+else
+	fail "a fully valid, qualified file with touch_wake_mode=polling/touch_wake_enabled=1 was rejected"
+fi
+
+# --- touch_wake_mode=disabled with touch_wake_enabled=0 (the default
+# pairing), likewise folded into a fully-qualified config, is accepted. ---
+ndq_render_config \
+	qualification_complete=1 \
+	touch_mode=poll-only touch_trigger=poll \
+	release_stable_samples=3 idle_safety_poll_ms=250 touch_fallback_enabled=1 \
+	backlight_mode=fixed-safe-on \
+	touch_wake_mode=disabled touch_wake_enabled=0 \
+	> "$WORK/twm-disabled-consistent.conf"
+if ndq_validate "$WORK/twm-disabled-consistent.conf"; then
+	pass
+else
+	fail "a fully valid, qualified file with touch_wake_mode=disabled/touch_wake_enabled=0 was rejected"
+fi
+
+# --- an unrecognized touch_wake_mode value is rejected outright. ---
+ndq_render_config touch_wake_mode=always-on touch_wake_enabled=1 \
+	> "$WORK/twm-garbage.conf"
+if ndq_validate "$WORK/twm-garbage.conf" 2>/dev/null; then
+	fail "touch_wake_mode=always-on (not polling/disabled) was accepted"
+else
+	pass
+fi
+
+# --- touch_wake_mode=polling but touch_wake_enabled left at its default
+# (0) - the two fields disagree, must be rejected. ---
+ndq_render_config touch_wake_mode=polling > "$WORK/twm-polling-inconsistent.conf"
+if ndq_validate "$WORK/twm-polling-inconsistent.conf" 2>/dev/null; then
+	fail "touch_wake_mode=polling with touch_wake_enabled=0 (disagreeing fields) was accepted"
+else
+	pass
+fi
+
+# --- touch_wake_mode=disabled but touch_wake_enabled=1 - also disagreeing,
+# also rejected. ---
+ndq_render_config touch_wake_mode=disabled touch_wake_enabled=1 \
+	> "$WORK/twm-disabled-inconsistent.conf"
+if ndq_validate "$WORK/twm-disabled-inconsistent.conf" 2>/dev/null; then
+	fail "touch_wake_mode=disabled with touch_wake_enabled=1 (disagreeing fields) was accepted"
+else
+	pass
+fi
+
+echo "============================================================"
+echo "off_value stays legitimately UNQUALIFIED even with sleep_enabled=1"
+echo "============================================================"
+
+# Sleep in this system is GPC0-GPIO-off, not a PWM duty (see
+# docs/NEBULAOS_ONE_FLASH_DISPLAY_FINAL_REPORT.md) - a fully valid,
+# qualified config with sleep_enabled=1 and off_value left at its
+# UNQUALIFIED default must validate successfully; off_value must never be
+# required just because sleep_enabled=1.
+ndq_render_config \
+	qualification_complete=1 \
+	touch_mode=poll-only touch_trigger=poll \
+	release_stable_samples=3 idle_safety_poll_ms=250 touch_fallback_enabled=1 \
+	backlight_mode=fixed-safe-on \
+	sleep_enabled=1 touch_wake_enabled=1 touch_wake_mode=polling \
+	qualified_at_utc=2026-08-02T00:00:00Z \
+	> "$WORK/sleep-enabled-off-value-unqualified.conf"
+if ndq_validate "$WORK/sleep-enabled-off-value-unqualified.conf"; then
+	pass
+else
+	fail "a fully valid config with sleep_enabled=1 and off_value left UNQUALIFIED was rejected"
+fi
+ov=$(ndq_get_field "$WORK/sleep-enabled-off-value-unqualified.conf" off_value)
+[ "$ov" = "UNQUALIFIED" ] && pass || fail "off_value was '$ov', expected UNQUALIFIED to have round-tripped unchanged"
+
+echo "============================================================"
+echo "ndq_apply_deferred_fields - starts the sleep/wake watcher"
+echo "============================================================"
+
+FAKE_INITD_LOG="$WORK/sleep-wake-initd-invocations.log"
+FAKE_INITD="$WORK/fake-s98"
+cat > "$FAKE_INITD" <<EOF
+#!/bin/sh
+echo "\$*" >> "$FAKE_INITD_LOG"
+exit 0
+EOF
+chmod +x "$FAKE_INITD"
+
+# --- sleep_enabled=1 + touch_wake_mode=polling -> the watcher's init.d
+# script IS invoked with "start". ---
+: > "$FAKE_INITD_LOG"
+NDQ_SLEEP_WAKE_INITD="$FAKE_INITD" ndq_apply_deferred_fields 1 1 polling not-implemented >/dev/null 2>&1
+if [ -s "$FAKE_INITD_LOG" ] && grep -q '^start$' "$FAKE_INITD_LOG"; then
+	pass
+else
+	fail "sleep_enabled=1/touch_wake_mode=polling did not invoke the watcher's init.d script with 'start' (log: $(cat "$FAKE_INITD_LOG" 2>/dev/null))"
+fi
+
+# --- sleep_enabled=0 -> the watcher must NOT be started, regardless of
+# touch_wake_mode. ---
+: > "$FAKE_INITD_LOG"
+NDQ_SLEEP_WAKE_INITD="$FAKE_INITD" ndq_apply_deferred_fields 0 1 polling not-implemented >/dev/null 2>&1
+[ ! -s "$FAKE_INITD_LOG" ] && pass \
+	|| fail "sleep_enabled=0 still invoked the watcher's init.d script (log: $(cat "$FAKE_INITD_LOG" 2>/dev/null))"
+
+# --- sleep_enabled=1 but touch_wake_mode=disabled -> also must NOT start
+# (sleep available, but touch-wake specifically is not). ---
+: > "$FAKE_INITD_LOG"
+NDQ_SLEEP_WAKE_INITD="$FAKE_INITD" ndq_apply_deferred_fields 1 0 disabled not-implemented >/dev/null 2>&1
+[ ! -s "$FAKE_INITD_LOG" ] && pass \
+	|| fail "sleep_enabled=1/touch_wake_mode=disabled still invoked the watcher's init.d script (log: $(cat "$FAKE_INITD_LOG" 2>/dev/null))"
+
+# --- ndq_apply_all end-to-end: a fully valid, fully qualified config with
+# sleep_enabled=1/touch_wake_mode=polling actually starts the watcher as
+# part of a real apply_all run, without affecting apply_all's own success. ---
+reset_fake_kernel
+fake_touch_confirm_irq_assist
+fake_backlight_confirm_safe_on
+: > "$FAKE_INITD_LOG"
+ndq_render_config qualification_complete=1 touch_mode=irq-assist touch_trigger=pendown-gpio-edge \
+	release_stable_samples=3 idle_safety_poll_ms=250 touch_fallback_enabled=1 \
+	backlight_mode=fixed-safe-on \
+	sleep_enabled=1 touch_wake_enabled=1 touch_wake_mode=polling \
+	> "$NDQ_CONFIG_FILE"
+if NDQ_SLEEP_WAKE_INITD="$FAKE_INITD" ndq_apply_all "$NDQ_CONFIG_FILE"; then
+	pass
+else
+	fail "apply_all failed against a valid sleep-enabled config with a working fake watcher starter"
+fi
+grep -q '^start$' "$FAKE_INITD_LOG" 2>/dev/null && pass \
+	|| fail "apply_all (via apply_deferred_fields) did not start the watcher end-to-end (log: $(cat "$FAKE_INITD_LOG" 2>/dev/null))"
 
 echo "============================================================"
 echo "Atomic write - normal case"
@@ -513,10 +675,11 @@ i_moonraker=$(index_of S56moonraker)
 i_guppy=$(index_of S58guppyscreen)
 i_mcurecovery=$(index_of S95mcu-boot-recovery)
 i_ours=$(index_of S97nebulaos-display-qualified-apply)
+i_sleepwake=$(index_of S98nebulaos-display-sleep-wake-controller)
 i_confirmgood=$(index_of S99confirm-good)
 
 for name_idx in "i_klipper:$i_klipper" "i_moonraker:$i_moonraker" "i_guppy:$i_guppy" \
-	"i_mcurecovery:$i_mcurecovery" "i_ours:$i_ours" "i_confirmgood:$i_confirmgood"; do
+	"i_mcurecovery:$i_mcurecovery" "i_ours:$i_ours" "i_sleepwake:$i_sleepwake" "i_confirmgood:$i_confirmgood"; do
 	val=${name_idx#*:}
 	if [ -z "$val" ]; then
 		fail "could not find expected init.d script for $name_idx - has the tree changed?"
@@ -538,6 +701,19 @@ if [ -n "$i_klipper" ] && [ -n "$i_moonraker" ] && [ -n "$i_guppy" ] && [ -n "$i
 		pass
 	else
 		fail "S97nebulaos-display-qualified-apply does not sort strictly before S99confirm-good"
+	fi
+fi
+
+if [ -n "$i_ours" ] && [ -n "$i_sleepwake" ] && [ -n "$i_confirmgood" ]; then
+	if [ "$i_sleepwake" -gt "$i_ours" ]; then
+		pass
+	else
+		fail "S98nebulaos-display-sleep-wake-controller does not sort strictly after S97nebulaos-display-qualified-apply"
+	fi
+	if [ "$i_sleepwake" -lt "$i_confirmgood" ]; then
+		pass
+	else
+		fail "S98nebulaos-display-sleep-wake-controller does not sort strictly before S99confirm-good"
 	fi
 fi
 
@@ -651,6 +827,31 @@ rc=$?
 [ "$rc" -eq 0 ] && pass || fail "S97 start (unhealthy GuppyScreen) exited $rc, expected 0 (fail-safe, not a boot-halting error)"
 [ ! -s "$NDQ_TOUCH_MODE_FILE" ] && [ ! -s "$NDQ_BACKLIGHT_CMD_FILE" ] && pass \
 	|| fail "S97 mutated a debugfs file even though GuppyScreen was never confirmed running"
+
+# --- unhealthy path: the display itself never confirms healthy (backlight
+# status debugfs file missing entirely, e.g. a kernel build without the
+# driver) - S97 must exit 0 and must NOT touch either debugfs file, even
+# though Klipper/Moonraker/GuppyScreen/networking are all otherwise fully
+# healthy. ---
+reset_fake_kernel
+echo $$ > "$GUPPY_PIDFILE"
+rm -f "$NDQ_BACKLIGHT_STATUS_FILE"
+MARKER_NODISPLAY="$WORK/marker-nodisplay"
+(
+	PATH="$FAKE_ETC:$PATH"
+	export PATH
+	NDQ_LIB="$LIB" NDQ_HEALTHCHECK_LIB="$HEALTHCHECK_LIB" \
+	MARKER="$MARKER_NODISPLAY" GUPPYSCREEN_PIDFILE="$GUPPY_PIDFILE" \
+	HEALTH_RETRIES=1 HEALTH_DELAY=0 \
+	NDQ_CONFIG_FILE="$NDQ_CONFIG_FILE" \
+	NDQ_TOUCH_MODE_FILE="$NDQ_TOUCH_MODE_FILE" NDQ_TOUCH_STATUS_FILE="$NDQ_TOUCH_STATUS_FILE" \
+	NDQ_BACKLIGHT_CMD_FILE="$NDQ_BACKLIGHT_CMD_FILE" NDQ_BACKLIGHT_STATUS_FILE="$NDQ_BACKLIGHT_STATUS_FILE" \
+	sh "$APPLY_SCRIPT" start
+)
+rc=$?
+[ "$rc" -eq 0 ] && pass || fail "S97 start (missing display status file) exited $rc, expected 0 (fail-safe, not a boot-halting error)"
+[ ! -s "$NDQ_TOUCH_MODE_FILE" ] && [ ! -s "$NDQ_BACKLIGHT_CMD_FILE" ] && pass \
+	|| fail "S97 mutated a debugfs file even though the display's own backlight status file was never confirmed readable"
 
 echo ""
 echo "$PASS passed, $FAIL failed"

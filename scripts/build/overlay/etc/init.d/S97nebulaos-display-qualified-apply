@@ -48,6 +48,12 @@
 #     (/var/run/guppyscreen.pid), checked the same way S58 itself manages
 #     it (start-stop-daemon's pidfile convention) - `kill -0` against the
 #     recorded PID.
+#   - the display itself: the backlight-final-controller driver's own
+#     debugfs status file exists and a read of it actually succeeds (see
+#     display_healthy() below) - proves the kernel driver this script is
+#     about to issue commands to is really loaded and responding, without
+#     attempting to interpret display CONTENT (out of scope, and not
+#     meaningful from here anyway).
 #   - networking up: a non-loopback interface holding an IPv4 address,
 #     via the real iproute2 `ip` binary this image ships (BR2_PACKAGE_IPROUTE2 -
 #     see halley5-nebulaos-fragment.config's own comment on why BusyBox's
@@ -108,10 +114,25 @@ networking_up() {
 	ip -4 -o addr show scope global 2>/dev/null | grep -qv '^$'
 }
 
+# "The display" itself, as its own explicit health gate (the mission spec
+# lists it alongside Klipper/Moonraker/GuppyScreen/networking) - a cheap,
+# meaningful "is the backlight-final-controller driver actually loaded and
+# responding" check: the debugfs status file must exist and a read of it
+# must actually succeed. Deliberately does NOT try to interpret display
+# CONTENT (there is no way to do that from here, and it is not what this
+# gate is for) - it only proves the kernel driver this script is about to
+# issue commands to is really there, the same spirit as
+# ndq_apply_backlight()'s own "not present or not writable" refusal, just
+# checked earlier, before any apply is attempted at all.
+display_healthy() {
+	[ -r "$NDQ_BACKLIGHT_STATUS_FILE" ] || return 1
+	cat "$NDQ_BACKLIGHT_STATUS_FILE" >/dev/null 2>&1
+}
+
 wait_for_health() {
 	i=0
 	while [ "$i" -lt "$HEALTH_RETRIES" ]; do
-		if ndq_stage2_stack >/dev/null 2>&1 && guppyscreen_running && networking_up; then
+		if ndq_stage2_stack >/dev/null 2>&1 && guppyscreen_running && networking_up && display_healthy; then
 			return 0
 		fi
 		i=$((i + 1))
@@ -128,10 +149,10 @@ start() {
 	touch "$MARKER"
 
 	if ! wait_for_health; then
-		log "printer stack (Klipper/Moonraker), GuppyScreen, or networking never confirmed healthy after $((HEALTH_RETRIES * HEALTH_DELAY))s - doing nothing, both drivers remain at their own safe boot defaults"
+		log "printer stack (Klipper/Moonraker), GuppyScreen, networking, or the display itself never confirmed healthy after $((HEALTH_RETRIES * HEALTH_DELAY))s - doing nothing, both drivers remain at their own safe boot defaults"
 		exit 0
 	fi
-	log "health gates passed (Klipper/Moonraker ready, GuppyScreen running, networking up)"
+	log "health gates passed (Klipper/Moonraker ready, GuppyScreen running, networking up, display driver responding)"
 
 	if ndq_apply_all "$NDQ_CONFIG_FILE"; then
 		log "qualified display configuration applied"

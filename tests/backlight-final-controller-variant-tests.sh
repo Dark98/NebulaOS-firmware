@@ -531,6 +531,205 @@ fi
 sed -i 's/pinctrl-0 = <&pwm0_pc>;/pinctrl-0 = <\&pwm1_pc>;/' "$DTS"
 sh "$VARIANT_SCRIPT" FINAL0 >/dev/null
 
+# --- pwm-committed tests (Phase 13: sustained-hold extension). Re-apply
+# FINAL1 for source inspection - these tests read the driver like Tests
+# 5-21 above, they do not need a build. ---
+sh "$VARIANT_SCRIPT" FINAL1 >/dev/null
+driver_no_comments=$(grep -v '^[[:space:]]*\*' "$DRIVER" | grep -v '^[[:space:]]*/\*')
+
+# --- Test 25: pwm-committed is a real, distinctly-named state, and the
+# commit-pwm command is only reachable while an in-flight pwm-active test
+# is genuinely active - state == NBLC_STATE_PWM_ACTIVE *and*
+# active_op == NBLC_OP_PWM_ACTIVE - never directly from safe-on or any
+# other state. ---
+if grep -q 'NBLC_STATE_PWM_COMMITTED,' "$DRIVER"; then
+	pass
+else
+	fail "the driver does not define an NBLC_STATE_PWM_COMMITTED enum value"
+fi
+if grep -q 'case NBLC_STATE_PWM_COMMITTED: return "pwm-committed";' "$DRIVER"; then
+	pass
+else
+	fail "nblc_state_name() does not report \"pwm-committed\" for NBLC_STATE_PWM_COMMITTED"
+fi
+commit_pwm_cmd_body=$(echo "$driver_no_comments" | awk '/^static int nblc_cmd_commit_pwm/,/^}/')
+if [ -n "$commit_pwm_cmd_body" ]; then
+	pass
+else
+	fail "could not find nblc_cmd_commit_pwm() in the driver"
+fi
+if echo "$commit_pwm_cmd_body" | grep -q 'n->state != NBLC_STATE_PWM_ACTIVE' && \
+   echo "$commit_pwm_cmd_body" | grep -q 'n->active_op != NBLC_OP_PWM_ACTIVE' && \
+   echo "$commit_pwm_cmd_body" | grep -q -- '-EPERM'; then
+	pass
+else
+	fail "nblc_cmd_commit_pwm() does not require BOTH state==pwm-active AND " \
+		"active_op==pwm-active (i.e. a currently in-flight bounded test) before " \
+		"committing - this is what forces every commit through the already-tested " \
+		"bounded pwm-active entry path"
+fi
+# Never directly reachable from safe-on: the state check above is
+# `!= NBLC_STATE_PWM_ACTIVE`, not `!= NBLC_STATE_SAFE_ON` - confirm the
+# safe-on state name literal does not appear as the gating check in this
+# function (a copy-paste of the pwm-active/safe-off-test guard would be the
+# exact bug this test catches).
+if echo "$commit_pwm_cmd_body" | grep -q 'n->state != NBLC_STATE_SAFE_ON'; then
+	fail "nblc_cmd_commit_pwm() gates on safe-on instead of pwm-active - this would " \
+		"allow committing directly from safe-on, bypassing the bounded pwm-active " \
+		"acquire/apply/verify path entirely"
+else
+	pass
+fi
+
+# --- Test 26: the in-flight bounded test's fixed ~2s auto-revert timer is
+# genuinely disarmed on commit - cancel_delayed_work() is called, and it
+# precedes both the active_op clear and the state transition to
+# pwm-committed (so no window exists where the timer could still be
+# considered live against the new state). No hardware is touched (no
+# gpiod_*/pwm_*/pinctrl_* call anywhere in this function) - committing must
+# never itself cause a visible flicker. ---
+cancel_line=$(echo "$commit_pwm_cmd_body" | grep -n 'cancel_delayed_work(&n->restore_work);' | head -1 | cut -d: -f1)
+op_clear_line=$(echo "$commit_pwm_cmd_body" | grep -n 'n->active_op = NBLC_OP_NONE;' | head -1 | cut -d: -f1)
+state_line=$(echo "$commit_pwm_cmd_body" | grep -n 'n->state = NBLC_STATE_PWM_COMMITTED;' | head -1 | cut -d: -f1)
+if [ -n "$cancel_line" ] && [ -n "$op_clear_line" ] && [ -n "$state_line" ] && \
+   [ "$cancel_line" -lt "$op_clear_line" ] && [ "$op_clear_line" -lt "$state_line" ]; then
+	pass
+else
+	fail "nblc_cmd_commit_pwm() does not cancel the pending watchdog work before " \
+		"clearing active_op and transitioning to pwm-committed, in that order " \
+		"(cancel=$cancel_line active_op_clear=$op_clear_line state=$state_line)"
+fi
+# Must NOT be the _sync variant while n->lock is held (see the file
+# header's own documented deadlock rule for this exact pattern).
+if echo "$commit_pwm_cmd_body" | grep -q 'cancel_delayed_work_sync'; then
+	fail "nblc_cmd_commit_pwm() calls cancel_delayed_work_sync() while holding n->lock - " \
+		"this can deadlock against a concurrently-running watchdog callback that " \
+		"itself takes n->lock, per this file's own documented ordering rule"
+else
+	pass
+fi
+if echo "$commit_pwm_cmd_body" | grep -Eq 'gpiod_get\(|gpiod_put\(|gpiod_direction_output\(|pwm_get\(|pwm_put\(|pwm_apply_state\(|pinctrl_get_select\(|pinctrl_put\('; then
+	fail "nblc_cmd_commit_pwm() touches hardware directly - committing must be a pure " \
+		"bookkeeping transition (no visible flicker), reusing whatever " \
+		"nblc_enter_pwm_active_locked() already applied"
+else
+	pass
+fi
+
+# --- Test 27: every existing convergence/shutdown/error path still
+# converges NBLC_STATE_PWM_COMMITTED to safe-on, via the SAME generic
+# conditions already exercised for every other non-safe-on state - none of
+# them special-case pwm-committed away. commit-pwm clears active_op to
+# NBLC_OP_NONE (Test 26), so the generic "active_op idle but state isn't
+# safe-on/boot-preserve yet" fallback in nblc_force_restore_now() is what
+# must catch it; nblc_cmd_enter_safe_on() must converge unconditionally
+# regardless of active_op; nblc_remove() must converge on any non-boot-
+# preserve state. ---
+force_restore_body=$(echo "$driver_no_comments" | awk '/^static void nblc_force_restore_now/,/^}/')
+if echo "$force_restore_body" | grep -q 'n->state != NBLC_STATE_SAFE_ON && n->state != NBLC_STATE_BOOT_PRESERVE' && \
+   echo "$force_restore_body" | grep -A2 'n->state != NBLC_STATE_SAFE_ON && n->state != NBLC_STATE_BOOT_PRESERVE' | \
+       grep -q 'nblc_converge_gpc0_safe_on_locked('; then
+	pass
+else
+	fail "nblc_force_restore_now()'s generic 'something is active but active_op says " \
+		"none' fallback (the path pwm-committed relies on, since commit-pwm clears " \
+		"active_op) is missing or no longer calls the shared converge routine"
+fi
+if echo "$force_restore_body" | grep -q 'NBLC_STATE_PWM_COMMITTED'; then
+	fail "nblc_force_restore_now() explicitly mentions NBLC_STATE_PWM_COMMITTED - it " \
+		"should rely on the existing generic state!=safe-on/boot-preserve check " \
+		"instead of a special case, per this driver's own documented design choice"
+else
+	pass
+fi
+enter_safe_on_body=$(echo "$driver_no_comments" | awk '/^static int nblc_cmd_enter_safe_on/,/^}/')
+# The unconditional converge call must appear AFTER the shared
+# "n->active_op = NBLC_OP_NONE;" line that closes out the active_op-only
+# switch block (that assignment is common to every case, sitting just
+# inside the closing brace of the `if (active_op != NONE)` block, so a
+# converge call after it is provably outside/unconditional on any specific
+# case) - so it always runs regardless of active_op, in particular
+# regardless of active_op already being NBLC_OP_NONE, which is exactly the
+# state commit-pwm leaves things in.
+op_clear_line=$(echo "$enter_safe_on_body" | grep -n 'n->active_op = NBLC_OP_NONE;' | head -1 | cut -d: -f1)
+converge_call_line=$(echo "$enter_safe_on_body" | grep -n 'nblc_converge_gpc0_safe_on_locked(n, "enter-safe-on");' | head -1 | cut -d: -f1)
+if [ -n "$op_clear_line" ] && [ -n "$converge_call_line" ] && [ "$converge_call_line" -gt "$op_clear_line" ]; then
+	pass
+else
+	fail "nblc_cmd_enter_safe_on() does not call nblc_converge_gpc0_safe_on_locked() " \
+		"unconditionally after its active_op switch - a pwm-committed caller (whose " \
+		"active_op is already NBLC_OP_NONE) could then fail to converge " \
+		"(op_clear=$op_clear_line converge_call=$converge_call_line)"
+fi
+remove_body=$(echo "$driver_no_comments" | awk '/^static int nblc_remove/,/^}/')
+if echo "$remove_body" | grep -q 'if (n->state != NBLC_STATE_BOOT_PRESERVE)' && \
+   echo "$remove_body" | grep -A1 'if (n->state != NBLC_STATE_BOOT_PRESERVE)' | \
+       grep -q 'nblc_converge_gpc0_safe_on_locked('; then
+	pass
+else
+	fail "nblc_remove() no longer unconditionally converges any non-boot-preserve " \
+		"state (which pwm-committed is) to safe-on before releasing the GPIO claim"
+fi
+if echo "$remove_body" | grep -q 'NBLC_STATE_PWM_COMMITTED'; then
+	fail "nblc_remove() explicitly mentions NBLC_STATE_PWM_COMMITTED - it should rely " \
+		"on the existing generic state!=boot-preserve check instead of a special case"
+else
+	pass
+fi
+
+# --- Test 28: serialization still holds while committed - a second
+# commit-pwm, a new safe-off-test, or a new pwm-active test are all
+# rejected while state == pwm-committed. safe-off-test/pwm-active already
+# gate on state==safe-on (proven generically by Test 7 for "any state other
+# than safe-on", which pwm-committed is one of); this test confirms
+# commit-pwm's OWN gate is state==pwm-active specifically, so re-issuing it
+# from pwm-committed (state is then pwm-committed, not pwm-active) is
+# rejected by that same check - no separate "already committed" branch
+# exists or is needed. ---
+if echo "$commit_pwm_cmd_body" | grep -q 'n->state != NBLC_STATE_PWM_ACTIVE'; then
+	pass
+else
+	fail "nblc_cmd_commit_pwm()'s state gate is not NBLC_STATE_PWM_ACTIVE - a second " \
+		"commit-pwm issued while already in pwm-committed would not be correctly " \
+		"rejected"
+fi
+
+# --- Test 29: status reporting distinguishes pwm-active (bounded, will
+# auto-revert) from pwm-committed (sustained, operator-confirmed), and
+# exposes how long the current commitment has been held. ---
+status_dump_body=$(echo "$driver_no_comments" | awk '/^static void nblc_status_dump/,/^}/')
+for field in 'pwm_committed:' 'pwm_committed_duration_ms:'; do
+	if echo "$status_dump_body" | grep -q "\"$field"; then
+		pass
+	else
+		fail "nblc_status_dump() does not expose the required \"$field\" status field"
+	fi
+done
+if grep -q 'unsigned long[[:space:]]*committed_since;' "$DRIVER"; then
+	pass
+else
+	fail "struct nblc does not track a committed_since timestamp for the sustained hold"
+fi
+
+# --- Test 30: the debugfs command whitelist dispatches "commit-pwm" (same
+# whitelist-enforcement discipline verified for every other command by Test
+# 16), and it is documented in the file header's command list. ---
+command_write_body=$(echo "$driver_no_comments" | awk '/^static ssize_t nblc_command_write/,/^}/')
+if echo "$command_write_body" | grep -q '!strcmp(cmd, "commit-pwm")'; then
+	pass
+else
+	fail "nblc_command_write() does not dispatch a \"commit-pwm\" command"
+fi
+if grep -q '\*   commit-pwm' "$DRIVER"; then
+	pass
+else
+	fail "the file header's command-interface list does not document commit-pwm"
+fi
+
+# Leave the suite in the same FINAL0/clean end-state the rest of the file
+# already establishes.
+sh "$VARIANT_SCRIPT" FINAL0 >/dev/null
+
 echo ""
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

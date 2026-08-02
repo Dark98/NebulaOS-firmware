@@ -764,7 +764,7 @@
 &pwm {
 	status = "okay";
 	pinctrl-names = "default";
-	pinctrl-0 = <&pwm1_pc>;
+	pinctrl-0 = <&pwm0_pc>;
 };
 
 &otg {
@@ -989,4 +989,23 @@
 
 &mscaler1 {
 	status = "disabled";
+};
+
+/* Display hardware analysis mission follow-on (2026-08-01+) -
+ * DISPLAY-B0-DIAG bounded backlight probe diagnostic. Candidate
+ * PWM channel 0 (pwm0_pc, 20000ns/50kHz) and candidate enable-gpios
+ * PC22 (stock's own pwm_backlight.sh power_gpio) - neither is
+ * proven correct, both are documented hypotheses only, see
+ * backlight-path-analysis.txt. This diagnostic exists specifically
+ * to let a human resolve that question safely, through a bounded,
+ * self-restoring debugfs command interface. NEVER enable this on a
+ * production/active-slot build - see
+ * scripts/build/display-backlight-diag-variant.sh. */
+/ {
+	nebulaos_backlight_diag: nebulaos_backlight_diag {
+		compatible = "nebulaos,backlight-probe-diag";
+		pwms = <&pwm 0 20000>;
+		enable-gpios = <&gpc 22 GPIO_ACTIVE_HIGH INGENIC_GPIO_NOBIAS>;
+		status = "okay";
+	};
 };

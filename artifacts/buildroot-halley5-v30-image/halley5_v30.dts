@@ -764,7 +764,7 @@
 &pwm {
 	status = "okay";
 	pinctrl-names = "default";
-	pinctrl-0 = <&pwm0_pc>;
+	pinctrl-0 = <&pwm1_pc>;
 };
 
 &otg {
@@ -990,22 +990,27 @@
 &mscaler1 {
 	status = "disabled";
 };
-
-/* Display hardware analysis mission follow-on (2026-08-01+) -
- * DISPLAY-B0-DIAG bounded backlight probe diagnostic. Candidate
- * PWM channel 0 (pwm0_pc, 20000ns/50kHz) and candidate enable-gpios
- * PC22 (stock's own pwm_backlight.sh power_gpio) - neither is
- * proven correct, both are documented hypotheses only, see
- * backlight-path-analysis.txt. This diagnostic exists specifically
- * to let a human resolve that question safely, through a bounded,
- * self-restoring debugfs command interface. NEVER enable this on a
- * production/active-slot build - see
- * scripts/build/display-backlight-diag-variant.sh. */
+/* NEBULAOS_BACKLIGHT_FINAL_CONTROLLER_VARIANT_DTS_BEGIN */
+/* Post-incident backlight controller redesign (2026-08-02+) -
+ * DISPLAY-B-FINAL kernel-owned exclusive owner of GPC0 (as GPIO
+ * and as PWM channel 0's peripheral function) and the candidate
+ * enable-GPIO PC22. Deliberately does NOT touch the &pwm node's
+ * own pinctrl-0 above (that edit is what caused a real incident -
+ * see nebulaos_backlight_final_controller.c's file header). GPC0's
+ * PWM-function pinmux is instead selected dynamically, only by
+ * this driver's own code, only at the moment pwm-active is
+ * actually entered - the pinctrl-0 group below is named
+ * "pwm-active", deliberately not "default"/"init", so the
+ * device core's automatic pinctrl_bind_pins() never selects it. */
 / {
-	nebulaos_backlight_diag: nebulaos_backlight_diag {
-		compatible = "nebulaos,backlight-probe-diag";
+	nebulaos_backlight_final: nebulaos_backlight_final {
+		compatible = "nebulaos,backlight-final-controller";
 		pwms = <&pwm 0 20000>;
+		backlight-gpios = <&gpc 0 GPIO_ACTIVE_HIGH INGENIC_GPIO_NOBIAS>;
 		enable-gpios = <&gpc 22 GPIO_ACTIVE_HIGH INGENIC_GPIO_NOBIAS>;
+		pinctrl-names = "pwm-active";
+		pinctrl-0 = <&pwm0_pc>;
 		status = "okay";
 	};
 };
+/* NEBULAOS_BACKLIGHT_FINAL_CONTROLLER_VARIANT_DTS_END */

@@ -62,10 +62,10 @@ index fef6e16fb..1caba910a 100644
 +obj-$(CONFIG_NEBULAOS_BACKLIGHT_FINAL_CONTROLLER) += nebulaos_backlight_final_controller.o
 diff --git a/kernel/kernel-6.6/module_drivers/drivers/misc/nebulaos_backlight_final_controller.c b/kernel/kernel-6.6/module_drivers/drivers/misc/nebulaos_backlight_final_controller.c
 new file mode 100644
-index 000000000..b663b4605
+index 000000000..6a97fcadc
 --- /dev/null
 +++ b/kernel/kernel-6.6/module_drivers/drivers/misc/nebulaos_backlight_final_controller.c
-@@ -0,0 +1,1400 @@
+@@ -0,0 +1,1799 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * NebulaOS backlight final controller - kernel-owned, exclusive owner of
@@ -280,6 +280,13 @@ index 000000000..b663b4605
 + *                     pwm-active test left them, so committing causes no
 + *                     visible flicker. See "PWM COMMITTED (Phase 13)"
 + *                     below for the full design.
++ *   asleep          - only reachable FROM safe-on or pwm-committed, via the
++ *                     explicit "sleep" debugfs command (nblc_cmd_sleep()).
++ *                     GPC0 held low (the proven safe-off-test mechanism,
++ *                     just without the auto-revert) - never a PWM-duty-
++ *                     based off. No automatic timeout; persists until an
++ *                     explicit "wake". See "SLEEP (Phase 14)" below for the
++ *                     full design.
 + *
 + * PC22 (Phase 10): accessed only through this same driver, same lazy/
 + * deferred acquisition discipline, only via pc22-test-low/pc22-test-high
@@ -341,6 +348,103 @@ index 000000000..b663b4605
 + * terminate at safe-on regardless (there is no meaningful prior state to
 + * "restore to" for a channel this driver only ever drives forward from
 + * safe-on, per (g) above).
++ *
++ * SLEEP (Phase 14): backlight-only sleep/wake, added on top of the Phase 13
++ * design above. A live investigation this project ran found NO proven PWM
++ * "off" duty value (0% duty was deliberately never tested, per this
++ * project's own "don't guess unproven values, don't test extremes first"
++ * convention - see "PWM (Phase 12)" above) - but DID prove GPC0-GPIO-low as
++ * a genuine, live-tested "screen off" mechanism (safe-off-test, tested
++ * twice, both clean). So "sleep" here means: hold GPC0 low indefinitely -
++ * the same physical action safe-off-test already performs, just without the
++ * auto-revert - never a PWM-duty-based off. This is a deliberate
++ * substitution for an unproven value, not a guess.
++ *
++ *   - NBLC_STATE_ASLEEP is reachable ONLY via the "sleep" debugfs command,
++ *     and ONLY from NBLC_STATE_SAFE_ON or NBLC_STATE_PWM_COMMITTED
++ *     (nblc_cmd_sleep()) - both represent "the backlight is genuinely on
++ *     and stable", so sleeping from either is meaningful. There is no path
++ *     from boot-preserve, safe-off-test, or a bare in-flight pwm-active
++ *     bounded test - none of those are stable "on" states to begin with.
++ *
++ *   - "sleep" first captures the wake target BEFORE touching any hardware:
++ *     plain safe-on, or pwm-committed at the exact duty percentage
++ *     currently held (n->pwm_duty_pct) - see n->sleep_wake_target_is_pwm/
++ *     n->sleep_wake_target_duty_pct. If entering from pwm-committed, it
++ *     then releases the PWM claim and remuxes GPC0 back to GPIO via
++ *     nblc_converge_gpc0_safe_on_locked() - the EXACT SAME routine every
++ *     other exit from an active PWM state already uses (file header item
++ *     (c)) - never a second, parallel "release PWM, remux to GPIO"
++ *     implementation. Only once GPC0 is genuinely safe-on (verified) does
++ *     it drive GPC0 low, via nblc_drive_gpc0_low_locked() - the same
++ *     GPIO-low mechanic safe-off-test itself uses, factored out into a
++ *     single shared helper rather than duplicated.
++ *
++ *   - unlike every other bounded operation in this file, sleep's own
++ *     hardware transition is watchdog-armed (schedule_delayed_work() before
++ *     the mutation, same ordering principle as everywhere else) but the
++ *     RESULTING state has no auto-revert: once the transition into
++ *     NBLC_STATE_ASLEEP completes successfully, the transition-bounding
++ *     work is cancelled (cancel_delayed_work(), same non-sync in-lock
++ *     pattern commit-pwm already uses to disarm its own bounding timer) -
++ *     asleep persists until an explicit "wake", exactly like pwm-committed
++ *     persists until an explicit "restore"/"enter-safe-on". If the
++ *     transition itself hangs or crashes before completing, the armed
++ *     watchdog still converges to safe-on on timeout, same as any other
++ *     operation.
++ *
++ *   - "wake" (nblc_cmd_wake()) is reachable ONLY from NBLC_STATE_ASLEEP. It
++ *     first drives GPC0 high and verifies, via nblc_converge_gpc0_safe_on_locked()
++ *     - the identical universal convergence-to-safe-on routine every other
++ *     transition into safe-on already uses (GPC0's GPIO claim was never
++ *     released by sleep, only driven low, so this takes the "already held"
++ *     branch and re-drives it). If the saved wake target was plain safe-on,
++ *     wake is complete at this point. If the saved target was
++ *     pwm-committed at duty X%, wake then calls
++ *     nblc_enter_pwm_active_locked(n, X) - the SAME acquire/apply/verify
++ *     sequence "pwm-active-X" itself uses, never a shortcut around
++ *     pwm_apply_state()/readback - followed immediately by
++ *     nblc_commit_pwm_locked(), the same bookkeeping-only commit transition
++ *     "commit-pwm" itself performs (no hardware touched a second time).
++ *     The end result is indistinguishable from having issued
++ *     "pwm-active-X" then "commit-pwm" fresh, just automated as one atomic
++ *     operation - it goes through the SAME real hardware-apply function
++ *     calls those two commands use individually, not a shortcut that pokes
++ *     state directly.
++ *
++ *   - failure anywhere in either direction (GPIO write fails, PWM apply
++ *     fails, a readback mismatch) converges through the SAME
++ *     nblc_converge_gpc0_safe_on_locked()/NBLC_STATE_FAULT discipline every
++ *     other failure path in this file already uses - not a new, parallel
++ *     error-handling path. Sleep/wake failures increment
++ *     n->op_failure_count/n->wake_failure_count and record
++ *     n->last_restore_reason exactly like every other convergence failure.
++ *
++ *   - NBLC_STATE_ASLEEP never holds n->pwm/n->pwm_pinctrl (both are always
++ *     released, via nblc_converge_gpc0_safe_on_locked(), before the state
++ *     becomes NBLC_STATE_ASLEEP - regardless of whether sleep was entered
++ *     from safe-on, which never held them, or pwm-committed, which had them
++ *     released as part of the sleep transition itself). Only n->gpc0_gpio
++ *     remains held (driven low). This means every existing convergence/
++ *     shutdown/disarm path that already handles "GPC0 held as GPIO, state
++ *     is something other than safe-on/boot-preserve" - nblc_force_restore_now()'s
++ *     generic active_op-idle fallback, nblc_cmd_enter_safe_on()'s
++ *     unconditional converge call, and nblc_remove()'s unconditional
++ *     non-boot-preserve converge - already handle NBLC_STATE_ASLEEP
++ *     correctly with ZERO special-casing, the exact same way they already
++ *     handle NBLC_STATE_PWM_COMMITTED (see "PWM COMMITTED (Phase 13)"
++ *     above for why that generic invariant holds).
++ *
++ *   - status exposes: asleep (bool, via state), wake_target ("safe-on" or
++ *     "pwm-committed-X"), asleep_duration_ms (a simple monotonic counter
++ *     against n->asleep_since, same style as pwm_committed_duration_ms),
++ *     sleep_count, wake_count, wake_failure_count.
++ *
++ *   - explicitly does NOT touch: framebuffer blanking, panel reset, DPU/
++ *     panel powerdown, or PC22 in any way - sleep/wake only ever drive
++ *     GPC0/PWM0, nothing else. Touch-wake (the userspace-polling half of
++ *     this feature) is a separate piece of work built on top of this
++ *     debugfs interface, not part of this driver.
 + *
 + * PWM COMMITTED (Phase 13): the bounded pwm-active test above proves
 + * whether a given duty cycle is safe to drive at all - it is deliberately
@@ -437,6 +541,12 @@ index 000000000..b663b4605
 + *                       pwm-committed (sustained, no auto-revert), only
 + *                       while that test is still active - see "PWM
 + *                       COMMITTED (Phase 13)" above
++ *   sleep               hold GPC0 low indefinitely (no auto-revert), only
++ *                       from safe-on or pwm-committed - see "SLEEP
++ *                       (Phase 14)" above
++ *   wake                restore whatever "sleep" saved as the wake target
++ *                       (safe-on, or pwm-committed at the saved duty),
++ *                       only from asleep - see "SLEEP (Phase 14)" above
 + *   disarm              force safe-on convergence, then release the GPIO
 + *                       claim and return to boot-preserve
 + *   restore             cancel any active bounded operation and restore
@@ -494,6 +604,17 @@ index 000000000..b663b4605
 + * circuit. */
 +#define NBLC_PWM_PERIOD_NS			20000U
 +
++/* sleep/wake transition-bounding windows - see file header "SLEEP
++ * (Phase 14)". These bound only the transition itself (arm-before-mutate,
++ * same as every other operation); the RESULTING NBLC_STATE_ASLEEP has no
++ * auto-revert - the bounding work is cancelled once the transition
++ * completes successfully. Use the full watchdog ceiling since the
++ * pwm-committed side of both directions chains a full
++ * nblc_converge_gpc0_safe_on_locked() and/or nblc_enter_pwm_active_locked()
++ * call on top of the plain GPIO mutation. */
++#define NBLC_SLEEP_TRANSITION_MS		NBLC_WATCHDOG_MAX_MS
++#define NBLC_WAKE_TRANSITION_MS		NBLC_WATCHDOG_MAX_MS
++
 +static_assert(NBLC_SAFE_OFF_TEST_DEFAULT_MS >= NBLC_SAFE_OFF_TEST_MIN_MS &&
 +	      NBLC_SAFE_OFF_TEST_DEFAULT_MS <= NBLC_WATCHDOG_MAX_MS,
 +	      "NBLC_SAFE_OFF_TEST_DEFAULT_MS must stay within [MIN,WATCHDOG_MAX]");
@@ -501,6 +622,10 @@ index 000000000..b663b4605
 +	      "NBLC_PC22_TEST_MS must not exceed NBLC_WATCHDOG_MAX_MS");
 +static_assert(NBLC_PWM_TEST_MS <= NBLC_WATCHDOG_MAX_MS,
 +	      "NBLC_PWM_TEST_MS must not exceed NBLC_WATCHDOG_MAX_MS");
++static_assert(NBLC_SLEEP_TRANSITION_MS <= NBLC_WATCHDOG_MAX_MS,
++	      "NBLC_SLEEP_TRANSITION_MS must not exceed NBLC_WATCHDOG_MAX_MS");
++static_assert(NBLC_WAKE_TRANSITION_MS <= NBLC_WATCHDOG_MAX_MS,
++	      "NBLC_WAKE_TRANSITION_MS must not exceed NBLC_WATCHDOG_MAX_MS");
 +
 +static unsigned int safe_off_test_ms = NBLC_SAFE_OFF_TEST_DEFAULT_MS;
 +module_param(safe_off_test_ms, uint, 0644);
@@ -538,6 +663,18 @@ index 000000000..b663b4605
 +	 * convergence to safe-on for this state with zero changes to those
 +	 * functions - see the Phase 13 section for why. */
 +	NBLC_STATE_PWM_COMMITTED,
++	/* Backlight-only sleep - see the file header "SLEEP (Phase 14)"
++	 * section. Reachable ONLY via the "sleep" command
++	 * (nblc_cmd_sleep()), and ONLY from NBLC_STATE_SAFE_ON or
++	 * NBLC_STATE_PWM_COMMITTED - both represent a genuinely on, stable
++	 * backlight. GPC0 held low (never PWM-duty-based); no automatic
++	 * timeout. Like NBLC_STATE_PWM_COMMITTED, every existing
++	 * convergence path (nblc_force_restore_now(), nblc_cmd_enter_safe_on(),
++	 * nblc_remove()) already converges this state to safe-on with ZERO
++	 * changes to those functions, because it never holds n->pwm/
++	 * n->pwm_pinctrl - only n->gpc0_gpio (driven low) - see the Phase 14
++	 * section for why. */
++	NBLC_STATE_ASLEEP,
 +	/* Not one of the mission's named states - an internal safety
 +	 * rail. Entered ONLY if nblc_converge_gpc0_safe_on_locked() itself
 +	 * fails to re-establish and verify GPC0=GPIO-high (a genuine kernel
@@ -561,6 +698,12 @@ index 000000000..b663b4605
 +	NBLC_OP_PC22_TEST_LOW,
 +	NBLC_OP_PC22_TEST_HIGH,
 +	NBLC_OP_PWM_ACTIVE,
++	/* Transition-bounding only - see file header "SLEEP (Phase 14)".
++	 * Cleared to NBLC_OP_NONE as soon as the transition into/out of
++	 * NBLC_STATE_ASLEEP completes (success or failure); never left
++	 * armed for the resulting settled state itself. */
++	NBLC_OP_SLEEP_TRANSITION,
++	NBLC_OP_WAKE_TRANSITION,
 +};
 +
 +struct nblc {
@@ -594,6 +737,19 @@ index 000000000..b663b4605
 +	 * not persisted - see file header "PWM COMMITTED (Phase 13)". */
 +	unsigned long		committed_since;
 +
++	/* Sleep/wake bookkeeping - see file header "SLEEP (Phase 14)".
++	 * sleep_wake_target_is_pwm/_duty_pct are captured at "sleep" time and
++	 * consumed at "wake" time; valid whenever state == NBLC_STATE_ASLEEP
++	 * (and briefly still valid immediately after waking, harmlessly
++	 * stale). asleep_since is a simple monotonic counter, same style as
++	 * committed_since, valid only while state == NBLC_STATE_ASLEEP. */
++	bool			sleep_wake_target_is_pwm;
++	unsigned int		sleep_wake_target_duty_pct;
++	unsigned long		asleep_since;
++	unsigned int		sleep_count;
++	unsigned int		wake_count;
++	unsigned int		wake_failure_count;
++
 +	bool			safe_on_verified;
 +
 +	/* PC22 resources - only ever non-NULL while a pc22-test-* operation
@@ -621,6 +777,7 @@ index 000000000..b663b4605
 +	case NBLC_STATE_SAFE_OFF_TEST: return "safe-off-test";
 +	case NBLC_STATE_PWM_ACTIVE: return "pwm-active";
 +	case NBLC_STATE_PWM_COMMITTED: return "pwm-committed";
++	case NBLC_STATE_ASLEEP: return "asleep";
 +	case NBLC_STATE_FAULT: return "fault-unclaimed-hardware";
 +	default: return "unknown";
 +	}
@@ -634,6 +791,8 @@ index 000000000..b663b4605
 +	case NBLC_OP_PC22_TEST_LOW: return "pc22-test-low";
 +	case NBLC_OP_PC22_TEST_HIGH: return "pc22-test-high";
 +	case NBLC_OP_PWM_ACTIVE: return "pwm-active";
++	case NBLC_OP_SLEEP_TRANSITION: return "sleep-transition";
++	case NBLC_OP_WAKE_TRANSITION: return "wake-transition";
 +	default: return "unknown";
 +	}
 +}
@@ -801,6 +960,8 @@ index 000000000..b663b4605
 +	switch (n->active_op) {
 +	case NBLC_OP_SAFE_OFF_TEST:
 +	case NBLC_OP_PWM_ACTIVE:
++	case NBLC_OP_SLEEP_TRANSITION:
++	case NBLC_OP_WAKE_TRANSITION:
 +		nblc_converge_gpc0_safe_on_locked(n, "watchdog-timeout");
 +		break;
 +	case NBLC_OP_PC22_TEST_LOW:
@@ -829,6 +990,8 @@ index 000000000..b663b4605
 +		switch (n->active_op) {
 +		case NBLC_OP_SAFE_OFF_TEST:
 +		case NBLC_OP_PWM_ACTIVE:
++		case NBLC_OP_SLEEP_TRANSITION:
++		case NBLC_OP_WAKE_TRANSITION:
 +			nblc_converge_gpc0_safe_on_locked(n, reason);
 +			break;
 +		case NBLC_OP_PC22_TEST_LOW:
@@ -920,6 +1083,15 @@ index 000000000..b663b4605
 +	dev_info(n->dev, "disarmed - returned to boot-preserve (GPC0 left at its last-driven "
 +		 "level, no longer claimed by this driver)\n");
 +	return 0;
++}
++
++/* The single "drive GPC0 low" mechanic, shared by safe-off-test and sleep
++ * (entered from safe-on) - see file header "SLEEP (Phase 14)". Always call
++ * with n->lock held and n->gpc0_gpio already valid (i.e. reached from a
++ * genuinely safe-on GPC0 - both callers guarantee this before calling). */
++static int nblc_drive_gpc0_low_locked(struct nblc *n)
++{
++	return gpiod_direction_output(n->gpc0_gpio, 0);
 +}
 +
 +static int nblc_cmd_safe_off_test(struct nblc *n)
@@ -1139,6 +1311,205 @@ index 000000000..b663b4605
 +	return 0;
 +}
 +
++/* sleep: backlight-only sleep - see file header "SLEEP (Phase 14)". Only
++ * reachable from safe-on or pwm-committed (both are a genuinely on, stable
++ * backlight). Captures the wake target BEFORE any hardware mutation, then
++ * (if leaving pwm-committed) releases the PWM claim and remuxes GPC0 back
++ * to GPIO via the SAME nblc_converge_gpc0_safe_on_locked() routine every
++ * other exit from an active PWM state already uses, then drives GPC0 low
++ * via nblc_drive_gpc0_low_locked(). No auto-revert once asleep - the
++ * transition-bounding watchdog work is cancelled on success, same pattern
++ * commit-pwm already uses to disarm its own bounding timer on a successful
++ * transition into an unbounded settled state.
++ */
++static int nblc_cmd_sleep(struct nblc *n)
++{
++	bool from_pwm;
++	unsigned int duty = 0;
++	int ret;
++
++	mutex_lock(&n->lock);
++	if (n->state != NBLC_STATE_SAFE_ON && n->state != NBLC_STATE_PWM_COMMITTED) {
++		n->op_failure_count++;
++		mutex_unlock(&n->lock);
++		dev_warn(n->dev, "rejected sleep: only valid from safe-on or pwm-committed "
++			 "(current: %s)\n", nblc_state_name(n->state));
++		return -EPERM;
++	}
++	if (n->active_op != NBLC_OP_NONE) {
++		n->op_failure_count++;
++		mutex_unlock(&n->lock);
++		dev_warn(n->dev, "rejected sleep: another operation is already active\n");
++		return -EBUSY;
++	}
++
++	/* Capture the wake target BEFORE any mutation. */
++	from_pwm = (n->state == NBLC_STATE_PWM_COMMITTED);
++	if (from_pwm)
++		duty = n->pwm_duty_pct;
++
++	/* Arm BEFORE mutating - same ordering principle as every other
++	 * operation in this file. This window bounds only the transition
++	 * itself; on success the work is cancelled below rather than left to
++	 * fire, since sleep has no auto-revert. */
++	n->active_op = NBLC_OP_SLEEP_TRANSITION;
++	n->active_timeout_ms = NBLC_SLEEP_TRANSITION_MS;
++	n->deadline = jiffies + msecs_to_jiffies(NBLC_SLEEP_TRANSITION_MS);
++	schedule_delayed_work(&n->restore_work, msecs_to_jiffies(NBLC_SLEEP_TRANSITION_MS));
++
++	if (from_pwm) {
++		/* Release the PWM claim and remux GPC0 back to GPIO, driven
++		 * high and verified - the exact same convergence routine
++		 * every other exit from an active PWM state already uses
++		 * (file header item (c)); never a second, parallel "release
++		 * PWM, remux to GPIO" implementation. */
++		nblc_converge_gpc0_safe_on_locked(n, "sleep-from-pwm-committed");
++		if (n->state != NBLC_STATE_SAFE_ON) {
++			/* Convergence already recorded the failure reason/
++			 * counters and moved to NBLC_STATE_FAULT - nothing
++			 * more to do here but stop this operation cleanly. */
++			cancel_delayed_work(&n->restore_work);
++			n->active_op = NBLC_OP_NONE;
++			n->op_failure_count++;
++			mutex_unlock(&n->lock);
++			dev_err(n->dev, "sleep: aborted - could not converge out of "
++				"pwm-committed before sleeping\n");
++			return -EIO;
++		}
++	}
++
++	ret = nblc_drive_gpc0_low_locked(n);
++	if (ret) {
++		cancel_delayed_work(&n->restore_work);
++		n->active_op = NBLC_OP_NONE;
++		n->op_failure_count++;
++		mutex_unlock(&n->lock);
++		dev_err(n->dev, "sleep: failed to drive GPC0 low: %d\n", ret);
++		return ret;
++	}
++
++	n->sleep_wake_target_is_pwm = from_pwm;
++	n->sleep_wake_target_duty_pct = duty;
++	n->asleep_since = jiffies;
++	n->sleep_count++;
++	n->state = NBLC_STATE_ASLEEP;
++
++	/* No auto-revert for sleep - cancel the transition-bounding work now
++	 * that the mutation itself completed successfully. */
++	cancel_delayed_work(&n->restore_work);
++	n->active_op = NBLC_OP_NONE;
++	mutex_unlock(&n->lock);
++
++	if (from_pwm)
++		dev_info(n->dev, "sleep active: GPC0 low, wake target=pwm-committed-%u%% - "
++			 "write \"wake\" to .../command to restore\n", duty);
++	else
++		dev_info(n->dev, "sleep active: GPC0 low, wake target=safe-on - write "
++			 "\"wake\" to .../command to restore\n");
++	return 0;
++}
++
++/* wake: reverse of sleep - see file header "SLEEP (Phase 14)". Only
++ * reachable from asleep. Always drives GPC0 high and verifies first, via
++ * the SAME universal convergence-to-safe-on routine every other transition
++ * into safe-on already uses. If the saved wake target was plain safe-on,
++ * that is the whole operation. If the saved target was pwm-committed at a
++ * saved duty, re-enters pwm-active at that duty via
++ * nblc_enter_pwm_active_locked() - the SAME acquire/apply/verify sequence
++ * "pwm-active-<pct>" itself uses, never a shortcut around
++ * pwm_apply_state()/readback - then immediately performs the identical
++ * bookkeeping-only commit transition nblc_cmd_commit_pwm() itself performs
++ * (see that function - no hardware is touched a second time here; n->pwm/
++ * n->pwm_pinctrl are left exactly as nblc_enter_pwm_active_locked() left
++ * them). The end result is indistinguishable from having issued
++ * "pwm-active-<pct>" then "commit-pwm" fresh.
++ */
++static int nblc_cmd_wake(struct nblc *n)
++{
++	bool from_pwm;
++	unsigned int duty = 0;
++	int ret;
++
++	mutex_lock(&n->lock);
++	if (n->state != NBLC_STATE_ASLEEP) {
++		n->op_failure_count++;
++		mutex_unlock(&n->lock);
++		dev_warn(n->dev, "rejected wake: only valid from asleep (current: %s)\n",
++			 nblc_state_name(n->state));
++		return -EPERM;
++	}
++	if (n->active_op != NBLC_OP_NONE) {
++		n->op_failure_count++;
++		mutex_unlock(&n->lock);
++		dev_warn(n->dev, "rejected wake: another operation is already active\n");
++		return -EBUSY;
++	}
++
++	from_pwm = n->sleep_wake_target_is_pwm;
++	duty = n->sleep_wake_target_duty_pct;
++
++	/* Arm BEFORE mutating - same ordering principle as every other
++	 * operation in this file. */
++	n->active_op = NBLC_OP_WAKE_TRANSITION;
++	n->active_timeout_ms = NBLC_WAKE_TRANSITION_MS;
++	n->deadline = jiffies + msecs_to_jiffies(NBLC_WAKE_TRANSITION_MS);
++	schedule_delayed_work(&n->restore_work, msecs_to_jiffies(NBLC_WAKE_TRANSITION_MS));
++
++	/* Step 1: drive GPC0 high and verify - identical to how every other
++	 * transition into safe-on already does it. GPC0 is still held as a
++	 * GPIO from sleep (only its value was driven low, the claim itself
++	 * was never released), so this takes the "already held" branch. */
++	nblc_converge_gpc0_safe_on_locked(n, "wake");
++	if (n->state != NBLC_STATE_SAFE_ON) {
++		cancel_delayed_work(&n->restore_work);
++		n->active_op = NBLC_OP_NONE;
++		n->wake_failure_count++;
++		mutex_unlock(&n->lock);
++		dev_err(n->dev, "wake: failed to converge GPC0 high\n");
++		return -EIO;
++	}
++
++	if (!from_pwm) {
++		n->wake_count++;
++		cancel_delayed_work(&n->restore_work);
++		n->active_op = NBLC_OP_NONE;
++		mutex_unlock(&n->lock);
++		dev_info(n->dev, "wake complete: restored safe-on\n");
++		return 0;
++	}
++
++	/* Step 2: re-enter pwm-active at the saved duty, via the SAME
++	 * acquire/apply/verify sequence "pwm-active-<pct>" itself uses (see
++	 * nblc_enter_pwm_active_locked() and file header item (b)/(d)). Any
++	 * failure here already converges back to safe-on internally (its
++	 * own "unwind:" path) - never leaves GPC0 muxed-but-undriven. */
++	ret = nblc_enter_pwm_active_locked(n, duty);
++	if (ret) {
++		cancel_delayed_work(&n->restore_work);
++		n->active_op = NBLC_OP_NONE;
++		n->wake_failure_count++;
++		mutex_unlock(&n->lock);
++		dev_err(n->dev, "wake: failed to re-enter pwm-active at %u%% duty: %d\n",
++			duty, ret);
++		return ret;
++	}
++	n->state = NBLC_STATE_PWM_ACTIVE;
++
++	/* Step 3: immediately re-commit - the identical bookkeeping-only
++	 * transition nblc_cmd_commit_pwm() itself performs (see that
++	 * function). No hardware touched a second time: n->pwm/
++	 * n->pwm_pinctrl are left exactly as step 2 left them. */
++	cancel_delayed_work(&n->restore_work);
++	n->state = NBLC_STATE_PWM_COMMITTED;
++	n->committed_since = jiffies;
++	n->active_op = NBLC_OP_NONE;
++	n->wake_count++;
++	mutex_unlock(&n->lock);
++
++	dev_info(n->dev, "wake complete: restored pwm-committed at %u%% duty\n", duty);
++	return 0;
++}
++
 +static int nblc_pc22_test_locked(struct nblc *n, int level)
 +{
 +	struct gpio_desc *desc;
@@ -1221,6 +1592,9 @@ index 000000000..b663b4605
 +	int gpc0_level = -1;
 +	bool pwm_committed = (n->state == NBLC_STATE_PWM_COMMITTED);
 +	unsigned long committed_ms = 0;
++	bool asleep = (n->state == NBLC_STATE_ASLEEP);
++	unsigned long asleep_ms = 0;
++	char wake_target[32] = "n/a";
 +
 +	if (n->active_op != NBLC_OP_NONE) {
 +		long delta = (long)(n->deadline - jiffies);
@@ -1230,6 +1604,15 @@ index 000000000..b663b4605
 +
 +	if (pwm_committed)
 +		committed_ms = jiffies_to_msecs((unsigned long)(jiffies - n->committed_since));
++
++	if (asleep) {
++		asleep_ms = jiffies_to_msecs((unsigned long)(jiffies - n->asleep_since));
++		if (n->sleep_wake_target_is_pwm)
++			snprintf(wake_target, sizeof(wake_target), "pwm-committed-%u",
++				 n->sleep_wake_target_duty_pct);
++		else
++			strscpy(wake_target, "safe-on", sizeof(wake_target));
++	}
 +
 +	if (n->gpc0_gpio) {
 +		gpc0_mode = "gpio";
@@ -1254,6 +1637,12 @@ index 000000000..b663b4605
 +		P("pwm_duty_pct: %u", n->pwm ? n->pwm_duty_pct : 0);
 +		P("pwm_committed: %d", pwm_committed);
 +		P("pwm_committed_duration_ms: %lu", committed_ms);
++		P("asleep: %d", asleep);
++		P("wake_target: %s", wake_target);
++		P("asleep_duration_ms: %lu", asleep_ms);
++		P("sleep_count: %u", n->sleep_count);
++		P("wake_count: %u", n->wake_count);
++		P("wake_failure_count: %u", n->wake_failure_count);
 +		P("pc22_active: %d", n->pc22_gpio != NULL);
 +		P("pc22_initial_level_known: %d", n->pc22_initial_level_known);
 +		P("pc22_initial_level: %d", n->pc22_initial_level_known ? n->pc22_initial_level : -1);
@@ -1269,13 +1658,17 @@ index 000000000..b663b4605
 +		dev_info(n->dev,
 +			 "status: armed=%d state=%s active_op=%s timeout_remaining=%lums "
 +			 "gpc0_mode=%s gpc0_level=%d pwm_owned=%d pwm_duty=%u%% "
-+			 "pwm_committed=%d pwm_committed_duration=%lums pc22_active=%d "
++			 "pwm_committed=%d pwm_committed_duration=%lums asleep=%d "
++			 "wake_target=%s asleep_duration=%lums sleep_count=%u wake_count=%u "
++			 "wake_failure_count=%u pc22_active=%d "
 +			 "restore_count=%u watchdog_restore_count=%u restore_failure_count=%u "
 +			 "safe_on_verified=%d last_restore_reason=%s\n",
 +			 n->state != NBLC_STATE_BOOT_PRESERVE, nblc_state_name(n->state),
 +			 nblc_op_name(n->active_op), remaining_ms, gpc0_mode, gpc0_level,
 +			 n->pwm != NULL, n->pwm ? n->pwm_duty_pct : 0,
-+			 pwm_committed, committed_ms, n->pc22_gpio != NULL,
++			 pwm_committed, committed_ms, asleep, wake_target, asleep_ms,
++			 n->sleep_count, n->wake_count, n->wake_failure_count,
++			 n->pc22_gpio != NULL,
 +			 n->restore_count, n->watchdog_restore_count, n->restore_failure_count,
 +			 n->safe_on_verified, n->last_restore_reason);
 +	}
@@ -1338,6 +1731,10 @@ index 000000000..b663b4605
 +		ret = nblc_cmd_pwm_active(n, 75);
 +	else if (!strcmp(cmd, "commit-pwm"))
 +		ret = nblc_cmd_commit_pwm(n);
++	else if (!strcmp(cmd, "sleep"))
++		ret = nblc_cmd_sleep(n);
++	else if (!strcmp(cmd, "wake"))
++		ret = nblc_cmd_wake(n);
 +	else if (!strcmp(cmd, "disarm"))
 +		ret = nblc_cmd_disarm(n);
 +	else if (!strcmp(cmd, "restore"))
@@ -1424,6 +1821,8 @@ index 000000000..b663b4605
 +		switch (n->active_op) {
 +		case NBLC_OP_SAFE_OFF_TEST:
 +		case NBLC_OP_PWM_ACTIVE:
++		case NBLC_OP_SLEEP_TRANSITION:
++		case NBLC_OP_WAKE_TRANSITION:
 +			nblc_converge_gpc0_safe_on_locked(n, "driver-remove");
 +			break;
 +		case NBLC_OP_PC22_TEST_LOW:

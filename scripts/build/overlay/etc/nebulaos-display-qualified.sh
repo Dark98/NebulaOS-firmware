@@ -9,7 +9,8 @@
 #     debugfs at /sys/kernel/debug/ns2009_final_qualification/ - see
 #     scripts/build/patches/touch-final-qualification.patch.
 #   - CONFIG_NEBULAOS_BACKLIGHT_FINAL_CONTROLLER (commit 3993ca2), debugfs
-#     at /sys/kernel/debug/nebulaos_backlight_final_controller/ - see
+#     at /sys/kernel/debug/nebulaos_backlight_final/ (NBLC_NAME, not the
+#     driver's .c filename) - see
 #     scripts/build/patches/backlight-final-controller.patch.
 #
 # Sourced by three callers: the boot-time apply script
@@ -47,11 +48,20 @@ NDQ_FORMAT_VERSION=1
 # against from this environment at all (see this mission's own test
 # section). Real defaults match the debugfs paths the two patches above
 # actually create (debugfs_create_dir() calls, read directly from each
-# patch - not guessed).
+# patch's NBLC_NAME/touch-dir macro - NOT the driver .c filenames, which
+# do not match: the backlight driver registers
+# debugfs_create_dir(NBLC_NAME, ...) where NBLC_NAME is
+# "nebulaos_backlight_final", not "nebulaos_backlight_final_controller".
+# An earlier version of this file guessed the .c-filename spelling and was
+# wrong - this silently broke the sleep/wake touch-watcher's
+# asleep-detection (ndq_swc_backlight_is_asleep() could never read the
+# real status file, so it always reported "not asleep" and never armed a
+# touch baseline). Found live during the Display Baseline Cleanup
+# Mission's touch-wake acceptance test; fixed here.
 : "${NDQ_TOUCH_MODE_FILE:=/sys/kernel/debug/ns2009_final_qualification/mode}"
 : "${NDQ_TOUCH_STATUS_FILE:=/sys/kernel/debug/ns2009_final_qualification/status}"
-: "${NDQ_BACKLIGHT_CMD_FILE:=/sys/kernel/debug/nebulaos_backlight_final_controller/command}"
-: "${NDQ_BACKLIGHT_STATUS_FILE:=/sys/kernel/debug/nebulaos_backlight_final_controller/status}"
+: "${NDQ_BACKLIGHT_CMD_FILE:=/sys/kernel/debug/nebulaos_backlight_final/command}"
+: "${NDQ_BACKLIGHT_STATUS_FILE:=/sys/kernel/debug/nebulaos_backlight_final/status}"
 
 # The touch-wake watcher's own init.d script, invoked (not sourced) by
 # ndq_apply_deferred_fields() below when sleep_enabled=1 and

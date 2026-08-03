@@ -853,6 +853,66 @@ rc=$?
 [ ! -s "$NDQ_TOUCH_MODE_FILE" ] && [ ! -s "$NDQ_BACKLIGHT_CMD_FILE" ] && pass \
 	|| fail "S97 mutated a debugfs file even though the display's own backlight status file was never confirmed readable"
 
+# --- regression test (Pinctrl/Display Baseline Closeout Mission,
+# 2026-08-03): the REAL default value of NDQ_BACKLIGHT_CMD_FILE/
+# NDQ_BACKLIGHT_STATUS_FILE - with NO override, exactly as a real boot
+# would source this library - must match the backlight driver's actual
+# registered debugfs directory name (NBLC_NAME in the patch), not a
+# guess at the driver's .c filename. This is the exact class of bug that
+# shipped live: every other test in this file overrides these two
+# variables to a fake path, so none of them would ever have caught a
+# wrong DEFAULT - this test deliberately does not override anything. ---
+BACKLIGHT_PATCH="$REPO_ROOT/scripts/build/patches/backlight-final-controller.patch"
+if [ -f "$BACKLIGHT_PATCH" ]; then
+	NBLC_NAME=$(sed -n 's/^+#define NBLC_NAME[[:space:]]*"\([^"]*\)".*/\1/p' "$BACKLIGHT_PATCH" | head -1)
+	if [ -z "$NBLC_NAME" ]; then
+		fail "could not extract NBLC_NAME from $BACKLIGHT_PATCH - test itself is broken, fix the sed pattern"
+	else
+		REAL_DEFAULTS=$(
+			unset NDQ_BACKLIGHT_CMD_FILE NDQ_BACKLIGHT_STATUS_FILE
+			# shellcheck disable=SC1090
+			. "$LIB"
+			printf '%s\n%s\n' "$NDQ_BACKLIGHT_CMD_FILE" "$NDQ_BACKLIGHT_STATUS_FILE"
+		)
+		EXPECTED_CMD="/sys/kernel/debug/$NBLC_NAME/command"
+		EXPECTED_STATUS="/sys/kernel/debug/$NBLC_NAME/status"
+		ACTUAL_CMD=$(echo "$REAL_DEFAULTS" | sed -n '1p')
+		ACTUAL_STATUS=$(echo "$REAL_DEFAULTS" | sed -n '2p')
+		if [ "$ACTUAL_CMD" = "$EXPECTED_CMD" ] && [ "$ACTUAL_STATUS" = "$EXPECTED_STATUS" ]; then
+			pass
+		else
+			fail "NDQ_BACKLIGHT_CMD_FILE/STATUS_FILE default(s) do not match the real driver's NBLC_NAME ('$NBLC_NAME'): got cmd='$ACTUAL_CMD' status='$ACTUAL_STATUS', expected cmd='$EXPECTED_CMD' status='$EXPECTED_STATUS'"
+		fi
+	fi
+else
+	echo "SKIP: $BACKLIGHT_PATCH not present"
+fi
+
+# --- regression test: the touch-wake watcher's own asleep-detection,
+# exercised through the SAME real, unoverridden NDQ_BACKLIGHT_STATUS_FILE
+# default this mission's live bug broke - proves ndq_swc_backlight_is_asleep()
+# reads the exact path a real boot would use, and that a real "state: asleep"
+# line at that path is correctly detected. ---
+SWC_LIB="$REPO_ROOT/scripts/build/overlay/etc/nebulaos-display-sleep-wake-controller.sh"
+if [ -f "$SWC_LIB" ] && [ -n "${NBLC_NAME:-}" ]; then
+	REAL_STATUS_PATH="/sys/kernel/debug/$NBLC_NAME/status"
+	FAKE_REAL_STATUS_DIR="$WORK/real-path-sim/sys/kernel/debug/$NBLC_NAME"
+	mkdir -p "$FAKE_REAL_STATUS_DIR"
+	printf 'state: asleep\n' > "$FAKE_REAL_STATUS_DIR/status"
+	DETECTED=$(
+		unset NDQ_BACKLIGHT_STATUS_FILE
+		NDQ_BACKLIGHT_STATUS_FILE="$FAKE_REAL_STATUS_DIR/status"
+		export NDQ_BACKLIGHT_STATUS_FILE
+		# shellcheck disable=SC1090
+		. "$SWC_LIB"
+		ndq_swc_backlight_is_asleep && echo yes || echo no
+	)
+	[ "$DETECTED" = "yes" ] && pass \
+		|| fail "ndq_swc_backlight_is_asleep() did not detect 'state: asleep' at the real default-shaped path $REAL_STATUS_PATH"
+else
+	echo "SKIP: $SWC_LIB or NBLC_NAME not available"
+fi
+
 echo ""
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

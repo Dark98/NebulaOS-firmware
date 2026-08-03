@@ -64,10 +64,23 @@ is_running() {
 }
 
 print_process_status() {
+  # NebulaOS fix (Display Baseline Cleanup mission, 2026-08-03): the
+  # original %-33s field width silently produced NO separator at all for
+  # any service name >= 33 chars (printf doesn't truncate/pad a string
+  # already longer than the field width) - moonraker's own
+  # _get_process_info() then split()s "<name>RUNNING" as a single token
+  # and crashed with IndexError on parts[1], which broke Moonraker's
+  # machine component (and, transitively, the whole klippy_connection
+  # ready-registration flow - see the real live incident this mission
+  # traced this back to) the first time a service name this long
+  # (nebulaos-display-sleep-wake-controller, 39 chars) was ever added.
+  # Printing the name and state as two explicitly space-separated printf
+  # calls guarantees a real separator regardless of name length, so no
+  # future service name can silently reintroduce this exact bug.
   if is_running "$service"; then
-    printf "%-33s$GREEN""RUNNING$ENDCOLOR\n" "$service"
+    printf "%s " "$service"; printf "$GREEN""RUNNING$ENDCOLOR\n"
   else
-    printf "%-33s$RED""STOPPED$ENDCOLOR\n" "$service"
+    printf "%s " "$service"; printf "$RED""STOPPED$ENDCOLOR\n"
   fi
 }
 

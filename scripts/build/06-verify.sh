@@ -652,6 +652,21 @@ if debugfs -R "stat /opt/nebulaos-seeds/printer_data-config/frontend-controls.cf
 else
 	echo "MISS /opt/nebulaos-seeds/printer_data-config/frontend-controls.cfg is missing from the packaged seed"
 fi
+# Camera quality presets mission (2026-08-04): same class of check as
+# frontend-controls.cfg above - confirms the two new files a fresh factory
+# seed depends on (the macro/shell-command config, and the script the shell
+# command actually invokes) really landed in the packaged image, not just
+# the tracked overlay source.
+if debugfs -R "stat /opt/nebulaos-seeds/printer_data-config/camera-quality.cfg" /img/rootfs.ext2 2>&1 | grep -q "Inode:"; then
+	echo "OK   /opt/nebulaos-seeds/printer_data-config/camera-quality.cfg is present"
+else
+	echo "MISS /opt/nebulaos-seeds/printer_data-config/camera-quality.cfg is missing from the packaged seed"
+fi
+if debugfs -R "stat /opt/nebulaos-seeds/printer_data-config/GuppyScreen/scripts/set_camera_quality.py" /img/rootfs.ext2 2>&1 | grep -q "Inode:"; then
+	echo "OK   /opt/nebulaos-seeds/printer_data-config/GuppyScreen/scripts/set_camera_quality.py is present"
+else
+	echo "MISS /opt/nebulaos-seeds/printer_data-config/GuppyScreen/scripts/set_camera_quality.py is missing from the packaged seed"
+fi
 rm -rf /tmp/printerdata-check
 mkdir -p /tmp/printerdata-check/GuppyScreen /tmp/printerdata-check/simpleaf
 debugfs -R "dump /opt/nebulaos-seeds/printer_data-config/printer.cfg /tmp/printerdata-check/printer.cfg" /img/rootfs.ext2 >/dev/null 2>&1
@@ -670,6 +685,11 @@ if [ -s /tmp/printerdata-check/printer.cfg ] && grep -q "^#\*# <----------------
 	echo "MISS packaged printer.cfg seed contains a real SAVE_CONFIG calibration block"
 else
 	echo "OK   packaged printer.cfg seed contains no SAVE_CONFIG calibration block"
+fi
+if [ -s /tmp/printerdata-check/printer.cfg ] && grep -q "^\[include camera-quality.cfg\]$" /tmp/printerdata-check/printer.cfg 2>/dev/null; then
+	echo "OK   packaged printer.cfg seed includes camera-quality.cfg"
+else
+	echo "MISS packaged printer.cfg seed does not include camera-quality.cfg"
 fi
 # A bare "key:" is only actually blank if nothing indented follows on the
 # next line - moonraker.confs own trusted_clients/cors_domains use this

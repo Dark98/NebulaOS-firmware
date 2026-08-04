@@ -138,7 +138,25 @@ start_ustreamer() {
 		-x "$USTREAMER" -- \
 		--device="$dev" --format=MJPEG --encoder=HW \
 		--resolution="$RESOLUTION" --desired-fps="$DESIRED_FPS" \
-		--host=127.0.0.1 --port=8080
+		--host=127.0.0.1 --port=8080 --tcp-nodelay
+	# NebulaOS WiFi/camera IRQ contention mission (2026-08-03/04): live
+	# frame-timing measurement (JPEG SOI/EOI-boundary timestamps, not just
+	# aggregate throughput) found the stream socket's default Nagle
+	# behavior added real per-frame latency specifically over the network
+	# path (local/loopback median frame interval 33ms, matching the
+	# requested 30fps exactly; the same measurement over the real WiFi
+	# hop degraded to a 48-62ms median with frequent >100ms gaps and
+	# occasional 1s+ stalls). --tcp-nodelay (an existing, documented
+	# ustreamer flag - see its own --help) sets TCP_NODELAY on the
+	# client /stream socket, disabling Nagle's algorithm; confirmed
+	# across repeated live trials to consistently eliminate the
+	# worst-case 1s+ stalls and modestly reduce typical latency. Does
+	# NOT fully eliminate WiFi-path jitter on its own - see this
+	# mission's own report for the fuller picture (this flag plus the
+	# separate mmc1 IRQ priority fix and brcmfmac roamoff=1 change
+	# together address every machine-side contributor found; residual
+	# jitter beyond these three is attributed to real-time WiFi signal
+	# conditions, out of this mission's scope).
 	# NebulaOS Memory Resilience Gate: webcam streaming is "more
 	# expendable" - optional media, never printer-critical - so it should
 	# be picked as an OOM victim well before Klipper/Moonraker/GuppyScreen

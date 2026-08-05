@@ -139,7 +139,20 @@ boots, before even considering whether it measurably helped.
 No rebuild needed - purely runtime marker switches:
 
 ```
-# C1 (1080p15)
+# C1 (1080p15) - SUPERSEDED (camera quality presets mission, 2026-08-04):
+# S50webcam no longer reads camera-fps-mode/C1 at all - the commands below
+# are dead, kept only as a historical record of what this qualification
+# pass actually ran. The fps-only marker was replaced by
+# camera-quality-mode (LOW/MED/HIGH - see camera-quality.cfg's
+# SET_CAMERA_QUALITY_LOW/MED/HIGH macros, the current end-user-facing
+# interface). None of the three presets reproduce "1080p @ 15fps" exactly
+# (LOW/MED are uncapped-fps at 640x480/1280x720, HIGH is the qualified
+# 1920x1080 @ 30fps default) - see S50webcam's own header comment for why
+# LOW/MED deliberately don't request a capped fps. A real C1-equivalent
+# retest, if ever needed, should write "HIGH" to
+# /usr/data/nebulaos/maintenance/camera-quality-mode after confirming
+# whether a capped-1080p15 preset is still wanted, not resurrect this
+# marker.
 ssh root@<printer-ip> 'mkdir -p /usr/data/nebulaos/maintenance && echo C1 > /usr/data/nebulaos/maintenance/camera-fps-mode && /etc/init.d/S50webcam restart'
 # measure, then revert:
 ssh root@<printer-ip> 'rm -f /usr/data/nebulaos/maintenance/camera-fps-mode && /etc/init.d/S50webcam restart'

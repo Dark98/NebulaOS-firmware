@@ -214,13 +214,28 @@ WIFI_DMESG_ERRORS=$(dmesg 2>/dev/null | grep -iE 'brcmf.*(error|bus.?down|reset|
 
 # --- camera metrics (Phase A9, sec 18.16) --------------------------------
 
-CAMERA_FPS_MARKER=/usr/data/nebulaos/maintenance/camera-fps-mode
-if [ -f "$CAMERA_FPS_MARKER" ] && [ "$(cat "$CAMERA_FPS_MARKER" 2>/dev/null)" = "C1" ]; then
-	CAMERA_CONFIGURED_FPS=15
-else
-	CAMERA_CONFIGURED_FPS=30
-fi
-CAMERA_RESOLUTION="1920x1080"
+# Camera quality presets mission (2026-08-04): the old fps-only
+# camera-fps-mode/C1 marker was replaced by camera-quality-mode
+# (LOW/MED/HIGH - see S50webcam's own header comment and
+# camera-quality.cfg's SET_CAMERA_QUALITY_LOW/MED/HIGH macros). Mirrors
+# that script's exact resolution/fps mapping so this benchmark reports
+# what's actually configured rather than always assuming the old default.
+CAMERA_QUALITY_MARKER=/usr/data/nebulaos/maintenance/camera-quality-mode
+case "$(cat "$CAMERA_QUALITY_MARKER" 2>/dev/null)" in
+	LOW)
+		CAMERA_RESOLUTION="640x480"
+		CAMERA_CONFIGURED_FPS="uncapped"
+		;;
+	MED)
+		CAMERA_RESOLUTION="1280x720"
+		CAMERA_CONFIGURED_FPS="uncapped"
+		;;
+	*)
+		# HIGH, or marker missing/unrecognized - the qualified default.
+		CAMERA_RESOLUTION="1920x1080"
+		CAMERA_CONFIGURED_FPS=30
+		;;
+esac
 CAMERA_IDLE_STATE_FILE=/var/run/nebulaos-camera-idle-state
 if [ -f "$CAMERA_IDLE_STATE_FILE" ]; then
 	CAMERA_STATE=$(cat "$CAMERA_IDLE_STATE_FILE" 2>/dev/null)

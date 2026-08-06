@@ -1,0 +1,32 @@
+{
+  "command": "Z_OFFSET_CALIBRATION",
+  "steps": [
+    {
+      "label": "before_command",
+      "status": {
+        "calibration_error": null,
+        "calibration_id": 0,
+        "calibration_state": "idle",
+        "calibration_z_offset": null
+      }
+    },
+    {
+      "label": "mid_probe",
+      "status": {
+        "calibration_error": null,
+        "calibration_id": 1,
+        "calibration_state": "running",
+        "calibration_z_offset": null
+      }
+    },
+    {
+      "label": "after_terminal",
+      "status": {
+        "calibration_error": null,
+        "calibration_id": 1,
+        "calibration_state": "complete",
+        "calibration_z_offset": -0.12734
+      }
+    }
+  ]
+}

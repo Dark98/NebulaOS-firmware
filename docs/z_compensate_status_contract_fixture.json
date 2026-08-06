@@ -1,0 +1,26 @@
+{
+  "complete": {
+    "calibration_error": null,
+    "calibration_id": 1,
+    "calibration_state": "complete",
+    "calibration_z_offset": -0.12734
+  },
+  "error": {
+    "calibration_error": "Load-cell trigger not detected",
+    "calibration_id": 1,
+    "calibration_state": "error",
+    "calibration_z_offset": null
+  },
+  "idle": {
+    "calibration_error": null,
+    "calibration_id": 0,
+    "calibration_state": "idle",
+    "calibration_z_offset": null
+  },
+  "running": {
+    "calibration_error": null,
+    "calibration_id": 1,
+    "calibration_state": "running",
+    "calibration_z_offset": null
+  }
+}

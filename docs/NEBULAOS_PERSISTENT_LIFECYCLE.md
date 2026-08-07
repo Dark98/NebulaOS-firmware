@@ -120,12 +120,57 @@ compare installed vs. expected generation, update only IMAGE OWNED files
 while USER OWNED files are architecturally untouched, and a fully recoverable
 failure path that never advances the generation record on partial success.
 
+## Fresh-boot ordering: no redundant reseed
+
+`S04nebulaos-factory-seed` and `S04nebulaos-migrate` share the same `S04`
+init slot, factory-seed running first (filename ordering). Without care,
+this creates a real gap: on a genuinely fresh boot, factory-seed seeds
+`$APPS/klipper` for the first time, then migrate runs immediately after,
+sees no recorded generation yet, and (before this fix) treated that as a
+real mismatch - backing up and re-seeding the exact content factory-seed
+had just installed. Harmless (identical source) but wasteful, and it left
+a spurious backup directory on every single first boot.
+
+Fixed by having `S04nebulaos-factory-seed` itself call a new
+`record_initial_generation()` right after a successful fresh seed - it
+reads `migration_version` from the same `seed-manifest.json` and writes
+`$SYSTEM/app-generation.json` at the moment it knows the installed content
+matches the image exactly. `S04nebulaos-migrate`'s own top-of-`start()`
+generation comparison then short-circuits to a clean no-op on the very
+next boot-slot entry, with zero special-casing needed in migrate itself.
+Covered by `tests/app-migration-tests.sh`'s
+`test_no_redundant_reseed_after_fresh_factory_seed`.
+
+## Factory-clean provisioning
+
+`scripts/build/overlay/opt/nebulaos/factory-clean-provision.sh` (squashfs-
+resident, always available) is the on-demand tool for simulating a genuinely
+new install on an already-provisioned device, without touching stock or
+destroying anything: `factory-clean-provision.sh --archive-and-reset`
+archives (moves, never deletes) `apps/`, `envs/`, and `system/` to a
+timestamped directory under `$NEBULAOS_ROOT/factory-clean-backups/`, then
+recreates an empty namespace via the same idempotent
+`S02nebulaos-namespace` used at every real boot. `printer_data/config`
+(USER OWNED) and `printer_data/{gcodes,logs,database}` are never touched -
+a separate directory tree the script doesn't even reference. Requires a
+reboot afterward: `S04nebulaos-factory-seed` then re-seeds everything fresh
+from the image's own archives, and `S04nebulaos-migrate` records the new
+baseline generation, exactly as a real new device would.
+
 ## Testing
 
-`tests/app-migration-tests.sh` exercises this offline, following the same
-real-git-fixture convention as `tests/factory-seed-git-tests.sh`: a no-op
-when generations already match, correct baseline recording on a genuinely
-fresh namespace, a real generation-mismatch migration (backup created, new
-checkout's commit verified to be the real seed commit, generation advanced),
-and the missing-archive failure path (existing installation completely
-untouched, generation not advanced).
+`tests/app-migration-tests.sh` exercises the migration script offline,
+following the same real-git-fixture convention as
+`tests/factory-seed-git-tests.sh`: a no-op when generations already match,
+correct baseline recording on a genuinely fresh namespace, a real
+generation-mismatch migration (backup created, new checkout's commit
+verified to be the real seed commit, generation advanced), the
+missing-archive failure path (existing installation completely untouched,
+generation not advanced), and the fresh-boot-ordering no-op above.
+
+`tests/factory-clean-provision-tests.sh` exercises the provisioning tool
+against a real, populated fixture namespace: refusal without the
+confirmation flag, a real archive+reset run (backup verified to hold the
+real pre-reset checkout, namespace reset to empty, USER OWNED
+`printer_data` left byte-for-byte untouched), and the missing-namespace-
+script failure path (archived state remains fully intact and recoverable).

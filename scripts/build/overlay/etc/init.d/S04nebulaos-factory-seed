@@ -420,6 +420,42 @@ start() {
 
 	resume_expendable_services
 	record_known_good
+	record_initial_generation
+}
+
+# Clean-Update + Virgin Baseline mission, Phase 4 (2026-08-08): record the
+# app-generation baseline the moment THIS script performs a real fresh
+# seed, not later in S04nebulaos-migrate's own boot slot (same S04
+# position, runs immediately after this one - filename ordering places
+# "factory-seed" before "migrate"). Without this, migrate would see
+# content it did not itself install, with no generation recorded yet, and
+# treat that as a real mismatch - immediately backing up and re-seeding
+# the exact same content this script just verified and put in place.
+# Harmless (identical source, idempotent), but wasteful I/O on literally
+# every first boot, and leaves a spurious backup directory nobody asked
+# for. No-op on any image that predates migration_version entirely (the
+# grep simply finds nothing) - S04nebulaos-migrate's own fallback path
+# still covers seeding-failed/partial cases correctly either way.
+record_initial_generation() {
+	manifest="$SEEDS/seed-manifest.json"
+	[ -f "$manifest" ] || return 0
+	version=$(grep -o '"migration_version"[[:space:]]*:[[:space:]]*"[^"]*"' "$manifest" | \
+		sed -E 's/.*"([^"]*)"$/\1/' | head -1)
+	[ -n "$version" ] || return 0
+	[ -e "$SYSTEM/app-generation.json" ] && return 0
+	mkdir -p "$SYSTEM"
+	klipper_commit=$( [ -d "$APPS/klipper/.git" ] && git -C "$APPS/klipper" rev-parse HEAD 2>/dev/null || echo "unseeded")
+	moonraker_commit=$( [ -d "$APPS/moonraker/.git" ] && git -C "$APPS/moonraker" rev-parse HEAD 2>/dev/null || echo "unseeded")
+	now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+	cat > "$SYSTEM/app-generation.json" <<EOF
+{
+  "migration_version": "$version",
+  "recorded_at": "$now",
+  "klipper_commit": "$klipper_commit",
+  "moonraker_commit": "$moonraker_commit"
+}
+EOF
+	log "recorded initial app generation ($version) immediately after fresh seed"
 }
 
 # S04NEBULAOS_FACTORY_SEED_NO_AUTORUN=1 lets tests/factory-seed-git-tests.sh

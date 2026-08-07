@@ -16,6 +16,7 @@ SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
 MAKE_ARCHIVE_LIB="$REPO_ROOT/scripts/build/lib/make-seed-archive.sh"
 MIGRATE_SCRIPT="$REPO_ROOT/scripts/build/overlay/etc/init.d/S04nebulaos-migrate"
+FACTORY_SEED_SCRIPT="$REPO_ROOT/scripts/build/overlay/etc/init.d/S04nebulaos-factory-seed"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/app-migration-tests.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT INT TERM
 
@@ -198,11 +199,47 @@ test_failure_leaves_existing_untouched() {
 	fi
 }
 
+# --- Test 6: boot-sequence integration - factory-seed then migrate must ---
+# --- NOT redundantly re-back-up/re-reseed what factory-seed just seeded ---
+
+test_no_redundant_reseed_after_fresh_factory_seed() {
+	SEEDS_DIR="$WORK/t6-seeds"; APPS_DIR="$WORK/t6-apps"; SYSTEM_DIR="$WORK/t6-system"
+	rm -rf "$SEEDS_DIR" "$APPS_DIR" "$SYSTEM_DIR"
+	mkdir -p "$APPS_DIR" "$SYSTEM_DIR"
+	setup_seeds "$SEEDS_DIR" > /dev/null
+
+	# Same S04nebulaos-factory-seed function real boot uses to seed klipper
+	# into a fresh namespace - sourced directly (NO_AUTORUN), same
+	# convention tests/factory-seed-git-tests.sh already uses.
+	env S04NEBULAOS_FACTORY_SEED_NO_AUTORUN=1 SEEDS="$SEEDS_DIR" APPS="$APPS_DIR" SYSTEM="$SYSTEM_DIR" \
+		sh -c ". '$FACTORY_SEED_SCRIPT'; seed_git_app klipper master '$KLIPPER_PROD_ORIGIN' klippy/chelper/c_helper.so; record_initial_generation" \
+		> "$WORK/t6-seed.log" 2>&1
+	seeded_hash=$(git -C "$APPS_DIR/klipper" rev-parse HEAD 2>/dev/null)
+
+	if [ ! -f "$SYSTEM_DIR/app-generation.json" ]; then
+		fail "boot sequence: record_initial_generation did not write a generation file after a fresh seed ($(cat "$WORK/t6-seed.log"))"
+		return
+	fi
+
+	env S04NEBULAOS_MIGRATE_NO_AUTORUN=1 SEEDS="$SEEDS_DIR" APPS="$APPS_DIR" SYSTEM="$SYSTEM_DIR" LOCKDIR="$WORK/no-lock" \
+		sh -c ". '$MIGRATE_SCRIPT'; start" > "$WORK/t6-migrate.log" 2>&1
+
+	after_hash=$(git -C "$APPS_DIR/klipper" rev-parse HEAD 2>/dev/null)
+	backup_count=$(find "$SYSTEM_DIR/migration-backups" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | wc -l)
+
+	if [ "$after_hash" = "$seeded_hash" ] && [ "$backup_count" -eq 0 ] && grep -q "already matches" "$WORK/t6-migrate.log"; then
+		pass "boot sequence: migrate makes no redundant backup/reseed of content factory-seed just installed"
+	else
+		fail "boot sequence: expected a clean no-op, got backups=$backup_count seeded=$seeded_hash after=$after_hash ($(cat "$WORK/t6-migrate.log"))"
+	fi
+}
+
 test_json_get
 test_fresh_namespace
 test_matching_generation_noop
 test_migration_happens
 test_failure_leaves_existing_untouched
+test_no_redundant_reseed_after_fresh_factory_seed
 
 echo
 echo "app-migration-tests: $PASS passed, $FAIL failed"

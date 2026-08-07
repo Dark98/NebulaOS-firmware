@@ -18,13 +18,17 @@ artifacts/buildroot-halley5-v30-image/xImage
 artifacts/buildroot-halley5-image/rootfs.ext2
 artifacts/buildroot-halley5-image/uImage
 
-# Proprietary Cypress/Broadcom WiFi firmware + board NVRAM, extracted live
-# off a real stock device by scripts/build/fetch-wifi-firmware.sh
-# (FIRMWARE.md sec 53) - no license file found accompanying them anywhere
-# on the device, so there's no clear basis to redistribute them through
-# this repo. Re-run that script after a fresh checkout.
+# Proprietary Cypress/Broadcom WiFi firmware + board NVRAM. Redistribution
+# is now explicitly authorized (see LICENSES/WIFI-FIRMWARE-NOTICE.md) and
+# 00-fetch-vendor-sources.sh downloads+verifies them automatically from this
+# repo's own wifi-firmware-v1.0.0 GitHub Release - not committed directly
+# here for the same reason rootfs.ext2/xImage above aren't (real binary
+# build/fetch output, not source; a version bump is a reviewable release,
+# not a git-history binary diff). scripts/build/fetch-wifi-firmware.sh still
+# exists if you'd rather re-derive fresh copies from your own stock device.
 scripts/build/overlay/lib/firmware/brcm/brcmfmac43430-sdio.bin
 scripts/build/overlay/lib/firmware/brcm/brcmfmac43430-sdio.txt
+/vendor-downloads/
 
 # wireless-regdb (ISC-licensed, but still fetched-and-verified rather than
 # committed, so a version bump is a reviewable diff to the fetch script, not

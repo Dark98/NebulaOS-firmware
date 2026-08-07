@@ -25,40 +25,36 @@ when it isn't.
 
 | Field | Value |
 |---|---|
-| Path | `artifacts/guppyscreen-mips/guppyscreen` (git-tracked in this repo) |
-| Size | 7,293,272 bytes |
-| SHA-256 | `810d895675198b3f73cd8552656f5bfbe593b8faca5883c201807d006e2bdbe4` |
-| Path | `artifacts/guppyscreen-mips/guppybeep` (git-tracked in this repo) |
-| Size | 103,356 bytes |
-| SHA-256 | `4a2a719411944e5c2d0f7a9231440487073ce454e398d61f27181a821f2a9d76` |
-| Origin | Prebuilt MIPS binaries only — **no fetch-script entry, no declared source commit, no download URL exists anywhere in this repo for these two files.** They predate this project's current vendoring conventions. |
-| Reconstruction | **Limited.** These binaries are git-tracked (so they will not silently disappear or drift once committed — any future change to them would show as a real git diff), but there is no documented way to rebuild them from source, and no record of which upstream GuppyScreen commit or release they came from. If they were ever lost from git history entirely, they could not currently be reconstructed. This is the least-reproducible artifact in the whole build and is flagged as such, not glossed over. |
+| Path | `artifacts/guppyscreen-mips/guppyscreen`, `artifacts/guppyscreen-mips/guppybeep` (git-tracked, but now a build-time-overwritten snapshot, not the source of truth) |
+| Origin (pre-2026-08-07) | Prebuilt MIPS binaries with no fetch-script entry, no declared source commit, no download URL anywhere in this repo. |
+| Origin (2026-08-07+) | **Fixed.** `GUPPYSCREEN_REPO`/`GUPPYSCREEN_PIN` in `manifests/dependencies.conf` pin the exact source commit (`coreflake1/NebulaOS-guppyscreen`); `00-fetch-vendor-sources.sh` clones and pin-verifies it, `04-cross-compile-app-stack.sh` cross-builds it for MIPS via the project's own documented toolchain image (`ghcr.io/coreflake1/guppydev`) and overwrites these two tracked files with the freshly-built, freshly-stripped result every build. The old hashes above are a historical snapshot only — a real build produces different (but source-traceable) bytes; `05-final-build.sh`'s manifest records both the source commit (`git_commit_guppyscreen`) and the resulting binary hash (`guppyscreen_sha256`/`guppybeep_sha256`) so the two are never ambiguous. |
+| Reconstruction | Fully reconstructable from source as of 2026-08-07 — no longer the least-reproducible artifact in the build. |
 
 ## Wi-Fi firmware and calibration
 
 | Field | Value |
 |---|---|
-| Path | `scripts/build/overlay/lib/firmware/brcm/brcmfmac43430-sdio.bin` (git-tracked) |
+| Path | `scripts/build/overlay/lib/firmware/brcm/brcmfmac43430-sdio.bin` (gitignored — see `.gitignore`) |
 | Size | 406,602 bytes |
 | SHA-256 | `60dbb5b77b2c232e513322e0ff4350ab5dab5a9fcad0e26e80a2f089e652d720` |
-| Path | `scripts/build/overlay/lib/firmware/brcm/brcmfmac43430-sdio.txt` (git-tracked; NVRAM/board-calibration override) |
+| Path | `scripts/build/overlay/lib/firmware/brcm/brcmfmac43430-sdio.txt` (gitignored; NVRAM/board-calibration override) |
 | Size | 962 bytes |
 | SHA-256 | `78fee458ab69c0a66ea462f6d6769e15b36f73582693f4dbb5a0e8e8be3cfb0a` |
 | Origin | Confirmed (`docs/NEBULAOS_CAMERA_USB_RT_SOURCE_ANALYSIS.md` §18.3, citing FIRMWARE.md §57) SHA-256-identical to the real stock device's own board-calibrated firmware (`cyw43438-7.46.58.13.bin`) and NVRAM (`nvram_azw372.txt`, board id `BCM943430WLSELG`), extracted directly from the physical printer and renamed to mainline `brcmfmac`'s own naming convention. Real, board-specific, not a generic/mismatched file. |
-| Reconstruction | Fully reconstructable — git-tracked directly in this repo; provenance is a real physical device extraction, documented in FIRMWARE.md. |
+| Reconstruction | Fully reconstructable — 2026-08-07: redistribution explicitly authorized (see `LICENSES/WIFI-FIRMWARE-NOTICE.md`), published as the `wifi-firmware-v1.0.0` GitHub Release asset on this repo, downloaded and hash-verified automatically by `00-fetch-vendor-sources.sh`. No longer requires manual per-machine extraction (`fetch-wifi-firmware.sh` still exists for re-deriving fresh copies from your own stock device if preferred). |
 
 ## Regulatory database
 
 | Field | Value |
 |---|---|
-| Path | `scripts/build/overlay/lib/firmware/regulatory.db` (git-tracked) |
+| Path | `scripts/build/overlay/lib/firmware/regulatory.db` (gitignored — see `.gitignore`) |
 | Size | 4,896 bytes |
 | SHA-256 | `0a4abd7ae20d07bb70642937ccb2293a72a6504730eea45a698882599f586368` |
-| Path | `scripts/build/overlay/lib/firmware/regulatory.db.p7s` (git-tracked, detached signature) |
+| Path | `scripts/build/overlay/lib/firmware/regulatory.db.p7s` (gitignored, detached signature) |
 | Size | 1,182 bytes |
 | SHA-256 | `bcd81aed039ea6b9b6f3726fbf26911a0caf4a5d894210e0fa2effb384d6b326` |
 | Origin | `wireless-regdb` project's signed regulatory database, baked into the kernel image via `CONFIG_EXTRA_FIRMWARE` (see `halley5-nebulaos-fragment.config`'s own dated comment for why — a rootfs-not-yet-mounted boot timing fix). |
-| Reconstruction | Fully reconstructable — git-tracked directly in this repo, and `wireless-regdb` is itself an actively-maintained public project if a newer database is ever needed. |
+| Reconstruction | Fully reconstructable — fetched and hash-verified automatically by `scripts/firmware/fetch-wireless-regdb.sh` (called from `00-fetch-vendor-sources.sh` since 2026-08-07), not committed directly for the same reviewable-diff-not-binary-swap reasoning as the WiFi firmware above. `wireless-regdb` is itself an actively-maintained public project if a newer database is ever needed. |
 
 ## Verification
 

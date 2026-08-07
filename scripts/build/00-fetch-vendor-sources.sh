@@ -32,6 +32,7 @@ for required in KERNEL_REPO KERNEL_BRANCH KERNEL_PIN BUILDROOT_REPO BUILDROOT_PI
 	PELLCORP_CREALITY_REPO PELLCORP_CREALITY_PIN KLIPPER_REPO KLIPPER_BRANCH KLIPPER_PIN \
 	MOONRAKER_REPO MOONRAKER_PIN K1_USTREAMER_REPO K1_USTREAMER_PIN \
 	V4L_UTILS_REPO V4L_UTILS_PIN MAINSAIL_TAG MAINSAIL_SHA256 \
+	WIFI_FIRMWARE_RELEASE_TAG WIFI_FIRMWARE_RELEASE_URL WIFI_FIRMWARE_ARCHIVE_SHA256 \
 	WIFI_FIRMWARE_BIN_SHA256 WIFI_FIRMWARE_TXT_SHA256 \
 	GUPPYSCREEN_REPO GUPPYSCREEN_BRANCH GUPPYSCREEN_PIN GUPPYSCREEN_VERSION GUPPYSCREEN_THEME; do
 	require_pin "$required"
@@ -49,29 +50,43 @@ echo "== all required pins present in $MANIFEST =="
 # "No rule to make target" failure once the first one (below) was fixed.
 sh "$SCRIPT_DIR/../firmware/fetch-wireless-regdb.sh"
 
-# 2026-08-07 baseline-repair mission: the proprietary WiFi firmware/NVRAM
-# (see manifests/dependencies.conf's own comment on WIFI_FIRMWARE_*_SHA256
-# for why this can't be a normal network pin) is required to even COMPILE
-# the kernel (CONFIG_EXTRA_FIRMWARE builds it in) - not just to boot. A
-# missing or wrong file here used to surface as a cryptic "No rule to make
-# target" error roughly two hours into a kernel compile (hit for real
-# during this mission's own clean-room reproducibility test). Checked here,
-# first, before anything expensive runs.
+# 2026-08-07 (canonical-repository mission): the proprietary WiFi firmware/
+# NVRAM is required to even COMPILE the kernel (CONFIG_EXTRA_FIRMWARE builds
+# it in), not just to boot - a missing or wrong file here used to surface as
+# a cryptic "No rule to make target" error roughly two hours into a kernel
+# compile. Previously this required a manual, per-machine extraction
+# (fetch-wifi-firmware.sh, live SSH to a stock device); redistribution is
+# now explicitly authorized (see LICENSES/WIFI-FIRMWARE-NOTICE.md) and the
+# exact same bytes are published as a GitHub Release asset on this repo, so
+# a normal build fetches and verifies them automatically like every other
+# pin - no manual staging, no device access required.
 WIFI_FW_DIR="$REPO_ROOT/scripts/build/overlay/lib/firmware/brcm"
 WIFI_FW_BIN="$WIFI_FW_DIR/brcmfmac43430-sdio.bin"
 WIFI_FW_TXT="$WIFI_FW_DIR/brcmfmac43430-sdio.txt"
+mkdir -p "$WIFI_FW_DIR"
 if [ ! -f "$WIFI_FW_BIN" ] || [ ! -f "$WIFI_FW_TXT" ]; then
-	echo "FATAL: $WIFI_FW_BIN and/or $WIFI_FW_TXT missing." >&2
-	echo "These are gitignored proprietary files, not fetched by this script - a fresh clone never has them." >&2
-	echo "Run: sh scripts/build/fetch-wifi-firmware.sh [user@stock-device-host]" >&2
-	exit 1
+	echo "== downloading WiFi firmware release $WIFI_FIRMWARE_RELEASE_TAG =="
+	WIFI_FW_ARCHIVE="$REPO_ROOT/vendor-downloads/nebulaos-wifi-firmware.tar.gz"
+	mkdir -p "$(dirname "$WIFI_FW_ARCHIVE")"
+	curl -sL -o "$WIFI_FW_ARCHIVE" "$WIFI_FIRMWARE_RELEASE_URL"
+	archive_actual_sha256=$(sha256sum "$WIFI_FW_ARCHIVE" | awk '{print $1}')
+	if [ "$archive_actual_sha256" != "$WIFI_FIRMWARE_ARCHIVE_SHA256" ]; then
+		echo "FATAL: $WIFI_FW_ARCHIVE sha256 is $archive_actual_sha256, expected pinned $WIFI_FIRMWARE_ARCHIVE_SHA256" >&2
+		echo "Either the download is corrupt/tampered, the repo is still private (see README), or this is a" >&2
+		echo "deliberate, reviewed bump - if so, update WIFI_FIRMWARE_ARCHIVE_SHA256 in $MANIFEST." >&2
+		exit 1
+	fi
+	tar xzf "$WIFI_FW_ARCHIVE" -C "$(dirname "$WIFI_FW_ARCHIVE")"
+	cp "$(dirname "$WIFI_FW_ARCHIVE")"/nebulaos-wifi-firmware-*/brcmfmac43430-sdio.bin "$WIFI_FW_BIN"
+	cp "$(dirname "$WIFI_FW_ARCHIVE")"/nebulaos-wifi-firmware-*/brcmfmac43430-sdio.txt "$WIFI_FW_TXT"
+	echo "== WiFi firmware release archive verified and extracted =="
 fi
 actual_bin_sha256=$(sha256sum "$WIFI_FW_BIN" | awk '{print $1}')
 actual_txt_sha256=$(sha256sum "$WIFI_FW_TXT" | awk '{print $1}')
 if [ "$actual_bin_sha256" != "$WIFI_FIRMWARE_BIN_SHA256" ]; then
 	echo "FATAL: $WIFI_FW_BIN sha256 is $actual_bin_sha256, expected pinned $WIFI_FIRMWARE_BIN_SHA256" >&2
-	echo "Either re-run fetch-wifi-firmware.sh against the correct device, or this is a deliberate," >&2
-	echo "reviewed bump - if so, update WIFI_FIRMWARE_BIN_SHA256 in $MANIFEST." >&2
+	echo "Either the staged file is stale/wrong, or this is a deliberate, reviewed bump - if so, update" >&2
+	echo "WIFI_FIRMWARE_BIN_SHA256 in $MANIFEST (see fetch-wifi-firmware.sh to re-derive from your own device)." >&2
 	exit 1
 fi
 if [ "$actual_txt_sha256" != "$WIFI_FIRMWARE_TXT_SHA256" ]; then

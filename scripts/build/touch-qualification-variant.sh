@@ -92,6 +92,22 @@ esac
 	exit 1
 }
 
+# 2026-08-07 baseline-repair mission: this script's own header already
+# documents QUAL0 as the accepted state and warns not to compose it with
+# the other three deprecated touch-*-diag/-irq scripts - but it did not
+# guard against the one composition that actually matters now:
+# touch-final-qualification-variant.sh's FINALQUAL1, which IS part of the
+# accepted baseline apply-qualified-baseline.sh composes. The blanket
+# checkout below would silently wipe FINALQUAL1's Kconfig symbol and
+# ns2009.c changes with zero error - refuse instead.
+if grep -qF "config TOUCHSCREEN_NS2009_FINAL_QUALIFICATION" \
+	"$KERNEL_DIR/kernel/kernel-6.6/drivers/input/touchscreen/Kconfig" 2>/dev/null; then
+	echo "FATAL: touch-final-qualification-variant.sh's accepted FINALQUAL1 state is already applied." >&2
+	echo "This script (a superseded prototype) would silently discard it. Refusing to run." >&2
+	echo "Start from a pristine checkout (00-fetch-vendor-sources.sh only) if you genuinely need QUAL1." >&2
+	exit 1
+fi
+
 git -C "$KERNEL_DIR" checkout -- $AFFECTED_FILES
 
 if grep -qF "$BEGIN_MARK" "$FRAGMENT"; then

@@ -144,6 +144,7 @@ artifact_sha256() {
 	git_field git_commit_buildroot vendor/buildroot-x2000
 	git_field git_commit_klipper vendor/klipper
 	git_field git_commit_moonraker vendor/moonraker
+	git_field git_commit_guppyscreen vendor/nebulaos-guppyscreen
 	git_field git_commit_pellcorp_creality vendor/pellcorp-creality
 	git_field git_commit_k1_ustreamer vendor/k1-ustreamer
 	git_field git_commit_v4l_utils vendor/v4l-utils

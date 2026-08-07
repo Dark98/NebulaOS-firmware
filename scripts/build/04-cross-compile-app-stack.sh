@@ -14,6 +14,17 @@ set -e
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
 
+# 2026-08-07: GUPPYSCREEN_VERSION/GUPPYSCREEN_THEME (section 6, below) come
+# from the same authoritative pin manifest 00-fetch-vendor-sources.sh
+# already sources - see that script/manifests/dependencies.conf's own
+# header for why pins live in one file instead of being hardcoded per-script.
+MANIFEST="$REPO_ROOT/manifests/dependencies.conf"
+[ -f "$MANIFEST" ] || {
+	echo "FATAL: $MANIFEST not found - this is the one authoritative dependency pin file, required to build at all" >&2
+	exit 1
+}
+. "$MANIFEST"
+
 # 2026-07-23: see 02-configure-buildroot.sh for why this lock exists.
 exec 9>"$REPO_ROOT/.nebulaos-build.lock"
 flock -n 9 || { echo "another build stage already owns $REPO_ROOT/.nebulaos-build.lock" >&2; exit 1; }
@@ -397,7 +408,99 @@ echo "== copying Mainsail static build =="
 mkdir -p "$OVERLAY/usr/share/mainsail"
 cp -r "$VENDOR"/mainsail-dist/dist/* "$OVERLAY/usr/share/mainsail/"
 
-### 6. NebulaOS mutable-runtime mission, Phase 4 (revised - real-history
+### 6. GuppyScreen (project-specific frontend; consumes the z_compensate
+# structured status contract - see docs/z_compensate_status_api.md)
+#
+# 2026-08-07 baseline-repair mission: this used to be built by hand in a
+# separate checkout (nebulaos-guppyscreen/, outside this repo) and its two
+# binaries `cp`'d in manually - done twice across the earlier baseline-
+# repair/canonicalization mission, with no record of which source commit
+# produced the binary actually running on the printer (see
+# manifests/dependencies.conf's own GUPPYSCREEN_PIN comment for that
+# history, and docs/NEBULAOS_QUALIFIED_BASELINE_VARIANT_AUDIT.md). Fetched
+# and pinned by 00-fetch-vendor-sources.sh; built here with the exact
+# toolchain image and script this fork's own docs use
+# (wiki/Building-from-Source.md's "4b. Cross-compile for the Ender-3 V3 KE
+# (MIPS)" section, scripts/build-mips.sh) rather than reinventing the build
+# steps - GUPPY_SMALL_SCREEN=1 is already hardcoded inside that script, not
+# passed in from here.
+GUPPYSCREEN_SRC="$VENDOR/nebulaos-guppyscreen"
+if [ ! -d "$GUPPYSCREEN_SRC" ]; then
+	echo "FATAL: $GUPPYSCREEN_SRC not found - run 00-fetch-vendor-sources.sh first" >&2
+	exit 1
+fi
+echo "== cross-compiling GuppyScreen (ghcr.io/coreflake1/guppydev:latest toolchain image) =="
+rm -rf "$GUPPYSCREEN_SRC/build"
+docker run --label "openke-build-pid=$$" --rm \
+	-v "$GUPPYSCREEN_SRC:/work" \
+	-e GUPPYSCREEN_VERSION="$GUPPYSCREEN_VERSION" \
+	-e GUPPY_THEME="$GUPPYSCREEN_THEME" \
+	-w /work ghcr.io/coreflake1/guppydev:latest \
+	bash -c '
+	set -e
+	# file(1), used by scripts/build-mips.sh for its own final sanity-check
+	# line, is not present in this toolchain image - confirmed empirically,
+	# same kind of gap as the v4l-utils autoconf/automake install above.
+	# Installed here rather than relied on, so a missing package cannot
+	# turn a genuinely successful MIPS build into a false pipeline abort.
+	apt-get -qq update >/dev/null 2>&1
+	apt-get install -y -qq file >/dev/null 2>&1
+	# wiki/Building-from-Source.md step 3 ("Build the bundled libraries") -
+	# scripts/build-mips.sh backs up and restores these three native
+	# archives around its own MIPS rebuild, so they must already exist.
+	# Deliberately NOT setting CROSS_COMPILE in this container env for
+	# these three - the top-level Makefile switches CC/AR/etc the moment
+	# CROSS_COMPILE is non-empty (see its own `ifdef CROSS_COMPILE` block),
+	# and these three targets need a plain NATIVE build here (confirmed:
+	# setting it broke `make libhv.a` with "Relocations in generic ELF" -
+	# its own build system does not cross-compile correctly through this
+	# simple CC override, unlike build-mips.sh below, which cross-compiles
+	# libhv/spdlog itself via a proper CMake toolchain file).
+	make wpaclient
+	make libhv.a
+	make libspdlog.a
+	# build-mips.sh defaults CROSS_COMPILE to mipsel-linux- itself when
+	# unset - not overridden here, for the same reason as above.
+	bash scripts/build-mips.sh
+	# scripts/release.sh, the documented release packaging step for this
+	# project, strips both binaries before shipping them - matches the
+	# previously hand-built binary being replaced here, and there is no
+	# reason to ship debug symbols on the printer.
+	mipsel-linux-strip build/bin/guppyscreen build/bin/guppybeep
+'
+
+# The toolchain image runs as root - reclaim ownership of the build/ tree it
+# left behind so later runs (this repo's own working tree, not the vendor
+# checkout's git-tracked files) can rm -rf it without sudo, same pattern
+# already used elsewhere in this pipeline for docker-root-owned output.
+docker run --rm -v "$GUPPYSCREEN_SRC:/work" -w /work alpine:latest \
+	chown -R "$(id -u):$(id -g)" build
+
+GUPPY_BIN="$GUPPYSCREEN_SRC/build/bin/guppyscreen"
+GUPPY_BEEP="$GUPPYSCREEN_SRC/build/bin/guppybeep"
+
+# Verify real output rather than trusting a zero exit code alone - the
+# per-object-directory-race retry logic inside build-mips.sh (see its own
+# header comment) is a real, documented workaround, not proof the final
+# binary is actually a complete, correctly-linked MIPS executable.
+for bin in "$GUPPY_BIN" "$GUPPY_BEEP"; do
+	[ -s "$bin" ] || { echo "FATAL: $bin missing or empty after build" >&2; exit 1; }
+	file "$bin" | grep -q "MIPS" || { echo "FATAL: $bin is not a MIPS binary (got: $(file "$bin"))" >&2; exit 1; }
+done
+file "$GUPPY_BIN" | grep -q "statically linked" || {
+	echo "FATAL: $GUPPY_BIN is not statically linked - this rootfs has no dynamic linker entry for it (see the ustreamer section above for the exact ABI-mismatch failure mode a dynamically-linked binary hits here)" >&2
+	exit 1
+}
+echo "== GuppyScreen build verified: $(file "$GUPPY_BIN") =="
+
+mkdir -p "$OVERLAY/opt/guppyscreen" "$REPO_ROOT/artifacts/guppyscreen-mips"
+cp "$GUPPY_BIN" "$OVERLAY/opt/guppyscreen/guppyscreen"
+cp "$GUPPY_BEEP" "$OVERLAY/opt/guppyscreen/guppybeep"
+cp "$GUPPY_BIN" "$REPO_ROOT/artifacts/guppyscreen-mips/guppyscreen"
+cp "$GUPPY_BEEP" "$REPO_ROOT/artifacts/guppyscreen-mips/guppybeep"
+chmod 755 "$OVERLAY/opt/guppyscreen/guppyscreen" "$OVERLAY/opt/guppyscreen/guppybeep"
+
+### 7. NebulaOS mutable-runtime mission, Phase 4 (revised - real-history
 # repair mission, see docs/NEBULAOS_MOONRAKER_UPDATE_AND_CAMERA_ANALYSIS.md
 # and the auto-updates-camera-complete mission): immutable offline factory
 # seeds for Klipper and Moonraker, baked into the read-only squashfs so

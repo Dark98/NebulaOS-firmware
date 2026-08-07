@@ -1,8 +1,24 @@
 #!/bin/sh
 # Authoritative, single-command reproduction of the qualified NebulaOS
-# production baseline (tag nebulaos-display-baseline-vsync-pwm-sleep-2026-08-03,
-# commit f9dc10f594cd7591e1146317cda877f75165934b) on top of a pristine
-# vendor kernel checkout.
+# production baseline on top of a pristine vendor kernel checkout.
+#
+# 2026-08-07 baseline-repair mission: widened from the original 7-variant
+# scope (tag nebulaos-display-baseline-vsync-pwm-sleep-2026-08-03) to also
+# include wifi-roamoff-disable-variant.sh ROAMOFF1, reaching the newer,
+# currently-latest tagged and live-qualified baseline,
+# nebulaos-wifi-camera-irq-fix-2026-08-04 (a superset of the 08-03 one -
+# see that tag's own message: "WiFi SDIO IRQ priority fix + brcmfmac
+# roamoff disable + ustreamer TCP_NODELAY, all live-qualified"). The other
+# two fixes from that same mission (WiFi SDIO IRQ thread priority,
+# ustreamer TCP_NODELAY) are NOT variant-gated at all - they are plain
+# tracked overlay/init.d files (S02nebulaos-wifi-irq-priority, S50webcam),
+# already picked up by every build with no script to run here. roamoff was
+# the one piece still living behind a toggle, per this project's
+# "never commit directly to the vendor kernel fork" convention (see
+# wifi-roamoff-disable-variant.sh's own header) - originally, deliberately
+# left out of this script's first version because that version was
+# scoped to reproduce the OLDER tag specifically; that scoping reason no
+# longer applies once "the currently accepted baseline" is the goal.
 #
 # WHY THIS SCRIPT EXISTS (2026-08-06/07 baseline canonicalization mission):
 # the individual *-variant.sh scripts under this directory are deliberately
@@ -20,12 +36,17 @@
 # the backlight-final-controller DT node, and the touch final-qualification
 # driver all silently disappeared from a "clean" rebuild).
 #
-# This script does NOT invent new configuration - every one of the 7 calls
-# below applies a change already independently verified present in the real,
-# tracked, currently-deployed artifacts/buildroot-halley5-v30-image/
+# This script does NOT invent new configuration - every one of the first 7
+# calls below applies a change already independently verified present in the
+# real, tracked, currently-deployed artifacts/buildroot-halley5-v30-image/
 # {kernel.config,halley5_v30.dts} (see docs/NEBULAOS_QUALIFIED_BASELINE_
 # VARIANT_AUDIT.md for the full per-script audit this was derived from,
 # including which scripts/arguments were deliberately excluded and why).
+# The 8th call (wifi-roamoff-disable-variant.sh ROAMOFF1) is verified the
+# same way but against a source-level patch rather than kernel.config/DTS -
+# see wifi-roamoff-disable-variant.sh's own header and commit 8d445a98's
+# message for the live-verification evidence
+# (/sys/module/brcmfmac/parameters/roamoff reads 1 on the deployed device).
 #
 # Explicitly NOT applied here (audited and excluded, not merely forgotten):
 #   - touch-qualification-variant.sh (QUAL0/QUAL1) - QUAL0 (off) is the
@@ -40,11 +61,6 @@
 #     diagnostic/prototype tools only; none of their Kconfig symbols appear
 #     in the tracked kernel.config, confirming their accepted state is the
 #     default/off value. Not invoked.
-#   - wifi-roamoff-disable-variant.sh - real and accepted, but for the LATER
-#     nebulaos-wifi-camera-irq-fix-2026-08-04 baseline, not this mission's
-#     pinned nebulaos-display-baseline-vsync-pwm-sleep-2026-08-03 source.
-#     Out of scope for this profile by the mission's own explicit baseline
-#     pin, not an oversight.
 #
 # Usage: sh scripts/build/apply-qualified-baseline.sh
 # Run AFTER 00-fetch-vendor-sources.sh (needs a real vendor/x2000_kernel_6.6
@@ -57,7 +73,7 @@ SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 
 echo "== apply-qualified-baseline: applying every accepted baseline variant =="
 
-# No inter-script ordering dependency exists among these seven calls (each
+# No inter-script ordering dependency exists among these eight calls (each
 # owns disjoint kernel source files, or edits the shared DTS/fragment via
 # its own uniquely-marked, append-only region rather than a blanket
 # rewrite - verified per-script during the audit, see the doc referenced
@@ -70,5 +86,6 @@ sh "$SCRIPT_DIR/pinctrl-ownership-fix-variant.sh" FIX1
 sh "$SCRIPT_DIR/backlight-final-controller-variant.sh" FINAL1
 sh "$SCRIPT_DIR/pwm-state-readback-variant.sh" GETSTATE1
 sh "$SCRIPT_DIR/touch-final-qualification-variant.sh" FINALQUAL1
+sh "$SCRIPT_DIR/wifi-roamoff-disable-variant.sh" ROAMOFF1
 
-echo "== apply-qualified-baseline: all 7 accepted variants applied =="
+echo "== apply-qualified-baseline: all 8 accepted variants applied =="

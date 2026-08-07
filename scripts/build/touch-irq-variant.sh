@@ -104,6 +104,17 @@ esac
 	exit 1
 }
 
+# 2026-08-07 baseline-repair mission: this is a deprecated diagnostic
+# script (see this script's own header) that still does a blanket
+# checkout of the two files touch-final-qualification-variant.sh's
+# accepted FINALQUAL1 state now owns. Refuse rather than silently wipe it.
+if grep -qF "config TOUCHSCREEN_NS2009_FINAL_QUALIFICATION" \
+	"$KERNEL_DIR/kernel/kernel-6.6/drivers/input/touchscreen/Kconfig" 2>/dev/null; then
+	echo "FATAL: touch-final-qualification-variant.sh's accepted FINALQUAL1 state is already applied." >&2
+	echo "This script is deprecated and would silently discard it. Refusing to run." >&2
+	exit 1
+fi
+
 git -C "$KERNEL_DIR" checkout -- $AFFECTED_FILES
 
 if grep -qF "$BEGIN_MARK" "$FRAGMENT"; then

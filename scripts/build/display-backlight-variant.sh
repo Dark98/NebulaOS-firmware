@@ -67,12 +67,27 @@ esac
 	exit 1
 }
 
+# 2026-08-07 baseline-repair mission: this DISPLAY-B1 prototype is
+# EXPLICITLY marked above as never for a production/active-slot build (its
+# real backlight enable-line electrical behavior was still
+# UNKNOWN_UNTIL_HARDWARE when written), and it has since been fully
+# superseded by backlight-final-controller-variant.sh's FINAL1, which IS
+# part of the accepted baseline apply-qualified-baseline.sh composes. A
+# blanket `git checkout -- "$DTS_REL"` right below would silently wipe
+# FINAL1's marked DT node with zero error - refuse instead of risking that.
+if grep -qF "NEBULAOS_BACKLIGHT_FINAL_CONTROLLER_VARIANT_DTS_BEGIN" "$DTS" 2>/dev/null; then
+	echo "FATAL: $DTS already carries backlight-final-controller-variant.sh's accepted FINAL1 state." >&2
+	echo "This script (DISPLAY-B1, a superseded compile-only prototype) would silently discard it." >&2
+	echo "Refusing to run. If you genuinely need DISPLAY-B1 again, start from a pristine checkout" >&2
+	echo "(00-fetch-vendor-sources.sh only, no apply-qualified-baseline.sh), not this one." >&2
+	exit 1
+fi
+
 # Always reset to the real, git-committed baseline first - never trust that
-# a previous invocation's edits (or another variant script's edits, e.g.
-# wifi-sdio-variant.sh) were cleanly undone. This does discard any other
-# uncommitted change to this file - that is the same tradeoff
-# wifi-sdio-variant.sh already makes, and is why these variant scripts are
-# meant to be the only thing editing this file outside of a reviewed commit.
+# a previous invocation's edits were cleanly undone. This does discard any
+# other uncommitted change to this file, which is exactly why the guard
+# above exists: this script is no longer the only thing editing this file
+# outside of a reviewed commit now that FINAL1 is a real, accepted variant.
 git -C "$KERNEL_DIR" checkout -- "$DTS_REL"
 
 if ! grep -q '^&pwm {' "$DTS"; then

@@ -12,6 +12,16 @@ IMAGES="$REPO_ROOT/vendor/buildroot-x2000/output/images"
 KERNEL_CONFIG="$REPO_ROOT/vendor/buildroot-x2000/output/build/linux-custom/.config"
 MANIFEST_FILE="$REPO_ROOT/artifacts/buildroot-halley5-v30-image/build-manifest.txt"
 
+# 2026-08-07: source the same manifests/dependencies.conf every other pin-
+# aware script reads, instead of a second, independently-hardcoded copy of
+# each SHA - real bug found by this mission's own clean-room test: the
+# Klipper pin here still said d839d037... after 00-fetch-vendor-sources.sh
+# had long since moved to 0e5785dac..., so this script silently reported a
+# false "pin drift" MISS against a checkout that was actually correct.
+DEPS_MANIFEST="$REPO_ROOT/manifests/dependencies.conf"
+[ -f "$DEPS_MANIFEST" ] || { echo "FATAL: $DEPS_MANIFEST not found" >&2; exit 1; }
+. "$DEPS_MANIFEST"
+
 if [ ! -f "$IMAGES/rootfs.ext2" ]; then
 	echo "rootfs.ext2 not found - run 05-final-build.sh first" >&2
 	exit 1
@@ -42,7 +52,8 @@ check_vendor_pin() {
 	vp_name="$1"
 	vp_expected="$2"
 	vp_expected_url="$3"
-	shift 3
+	vp_bulk_dirty_expected="$4"
+	shift 4
 	vp_dir="$REPO_ROOT/vendor/$vp_name"
 	if [ ! -d "$vp_dir/.git" ]; then
 		echo "MISS vendor/$vp_name is not a git checkout - cannot verify its pin"
@@ -69,6 +80,9 @@ check_vendor_pin() {
 	vp_dirty=$(printf '%s\n' "$vp_dirty" | sed '/^$/d')
 	if [ -z "$vp_dirty" ]; then
 		echo "OK   vendor/$vp_name working tree has no unexplained changes"
+	elif [ "$vp_bulk_dirty_expected" = "1" ]; then
+		echo "OK   vendor/$vp_name working tree is dirty, as expected once apply-qualified-baseline.sh has run - see assert-baseline-config.sh for the real content-level check of this checkout's variant patches (too many individual paths across 8 variants to allowlist here without this list silently going stale again):"
+		printf '%s\n' "$vp_dirty" | sed 's/^/     /'
 	else
 		echo "MISS vendor/$vp_name has unexplained working-tree changes:"
 		printf '%s\n' "$vp_dirty" | sed 's/^/     /'
@@ -80,27 +94,27 @@ check_vendor_pin() {
 # (the correctly cross-compiled MIPS binary vs. whatever's tracked in git -
 # same allowlisted-path convention as make-seed-archive.sh's own dirty-tree
 # guard fix).
-check_vendor_pin klipper d839d0375a31327e57e0a35e99e70ba60814ec05 \
-	https://github.com/coreflake1/NebulaOS-klipper.git \
+check_vendor_pin klipper "$KLIPPER_PIN" \
+	"$KLIPPER_REPO" 0 \
 	klippy/chelper/c_helper.so
-check_vendor_pin moonraker d5ee17128bb88434aacdab90c2e9e990e2b64e4a \
-	https://github.com/Arksine/moonraker.git
-check_vendor_pin pellcorp-creality d18d354456a89c20507e574feaa34d6389e679ca \
-	https://github.com/pellcorp/creality.git
+check_vendor_pin moonraker "$MOONRAKER_PIN" \
+	"$MOONRAKER_REPO" 0
+check_vendor_pin pellcorp-creality "$PELLCORP_CREALITY_PIN" \
+	"$PELLCORP_CREALITY_REPO" 0
 # buildroot-x2000: the .mk change and board/halley5-nebulaos-* files are
 # deterministically copied in by 02-configure-buildroot.sh from tracked
 # sources in this repo (scripts/build/vendor-patches/, this project's own
 # config layer) - expected every time, not accidental drift.
-check_vendor_pin buildroot-x2000 74d020081096972857acdb9e76c6c5335455d430 \
-	https://github.com/lone0/buildroot-x2000.git \
+check_vendor_pin buildroot-x2000 "$BUILDROOT_PIN" \
+	"$BUILDROOT_REPO" 0 \
 	package/python-matplotlib/python-matplotlib.mk \
 	board/halley5-nebulaos-busybox-fragment.config \
 	board/halley5-nebulaos-fragment.config \
 	board/halley5-nebulaos-overlay/ \
 	board/halley5-nebulaos-wheels/ \
 	local.mk
-check_vendor_pin k1-ustreamer 18e30bb313d54b1b01dd995bd31ce5a3d5adffd6 \
-	https://github.com/pellcorp/k1-ustreamer.git
+check_vendor_pin k1-ustreamer "$K1_USTREAMER_PIN" \
+	"$K1_USTREAMER_REPO" 0
 # k1-ustreamer's own real git submodules (jpeg-9d, ustreamer) - pinned via
 # the parent commit's own recorded submodule SHAs, so a plain `git status`
 # on the parent won't show submodule drift; `submodule status` is the real
@@ -118,17 +132,39 @@ fi
 # v4l-utils: pinned to the exact commit v4l-utils-1.20.0 resolves to (not the
 # tag name) as of the 2026-07-31 pin audit; messages.mo is a harmless
 # untracked compiled gettext artifact.
-check_vendor_pin v4l-utils 3b22ab02b960e4d1e90618e9fce9b7c8a80d814a \
-	https://git.linuxtv.org/v4l-utils.git \
+check_vendor_pin v4l-utils "$V4L_UTILS_PIN" \
+	"$V4L_UTILS_REPO" 0 \
 	messages.mo
-# x2000_kernel_6.6: same enforcement as 00-fetch-vendor-sources.sh's own
-# X2000_KERNEL_6_6_PIN and 01-apply-kernel-patches.sh's independent check -
-# duplicated here on purpose (this script never re-fetches, so it can't
-# accidentally paper over drift the other two scripts would have caught).
+# x2000_kernel_6.6: same pin source as 00-fetch-vendor-sources.sh's own
+# KERNEL_PIN and 01-apply-kernel-patches.sh's independent check - all three
+# now read manifests/dependencies.conf directly rather than keeping
+# independent hardcoded copies that can (and did - see this file's own
+# 2026-08-07 header comment) drift out of sync.
 # Remote name is "nebulaos" here, not "origin" - check_vendor_pin's URL check
 # greps all remotes, so this is remote-name-agnostic.
-check_vendor_pin x2000_kernel_6.6 295b7101d751fd888ae39e6f1746a4a940664a5f \
-	https://github.com/coreflake1/NebulaOS.git
+#
+# bulk_dirty_expected=1: this checkout is DELIBERATELY left dirty by
+# apply-qualified-baseline.sh (8 accepted variant patches applied on top of
+# the pinned commit) by the time this verify step runs - not drift.
+# assert-baseline-config.sh (run earlier in the pipeline) is the real,
+# precise content-level check of what that dirt should contain.
+check_vendor_pin x2000_kernel_6.6 "$KERNEL_PIN" \
+	"$KERNEL_REPO" 1
+# GuppyScreen: added 2026-08-07 - previously not pin-checked here at all
+# (it was still a manually-copied binary with no vendor checkout to check
+# when this script was last touched). `submodule status` confirms all four
+# submodules stay pinned at their exact recorded commits (no +/- marker) -
+# the three allowlisted below show as modified in the PARENT's own status
+# only because of real, expected in-place content changes: 00-fetch-
+# vendor-sources.sh's two submodule patches (spdlog, lvgl), and libhv's own
+# working-tree state after scripts/build-mips.sh's native/MIPS library
+# swap-and-restore (04-cross-compile-app-stack.sh). Verified empirically
+# against a real build, not assumed.
+check_vendor_pin nebulaos-guppyscreen "$GUPPYSCREEN_PIN" \
+	"$GUPPYSCREEN_REPO" 0 \
+	libhv \
+	lvgl \
+	spdlog
 
 echo "=== release artifact provenance (docs/NEBULAOS_RELEASE_ARTIFACT_PROVENANCE.md) ==="
 check_artifact_sha256() {

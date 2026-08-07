@@ -653,6 +653,29 @@ cat > "$OVERLAY/opt/nebulaos-seeds/seed-manifest.json" <<EOF
 EOF
 echo "== factory seeds created: $(ls -la "$OVERLAY/opt/nebulaos-seeds/") =="
 
+# Clean-Update + Virgin Baseline mission, Phase 6 (2026-08-08): a single,
+# immutable, squashfs-resident record of exactly what this image IS -
+# firmware tag/SHA, kernel/GuppyScreen pins - read at runtime by
+# klippy_extras/nebulaos_version.py (see docs/NEBULAOS_PERSISTENT_LIFECYCLE.md
+# and docs/NEBULAOS_UPDATE_OWNERSHIP.md) and combined there with the
+# LIVE Klipper checkout's own git state plus $SYSTEM/app-generation.json,
+# so "what's actually running" is always queryable in one place rather
+# than scattered across Moonraker's update_manager, this file, and manual
+# SSH commands. firmware_tag intentionally allows an unclean git describe
+# (e.g. "...-5-gdc241c8") - that just means this build is N commits past
+# the last tag, a normal and honest thing to report, not an error.
+firmware_tag=$(git -C "$REPO_ROOT" describe --tags 2>/dev/null || echo "unknown")
+cat > "$OVERLAY/opt/nebulaos-version.json" <<EOF
+{
+  "build_date": "$build_date",
+  "firmware_tag": "$firmware_tag",
+  "firmware_sha": "$firmware_head",
+  "kernel_sha": "${KERNEL_PIN:-unknown}",
+  "guppyscreen_sha": "${GUPPYSCREEN_PIN:-unknown}"
+}
+EOF
+echo "== wrote /opt/nebulaos-version.json: $(cat "$OVERLAY/opt/nebulaos-version.json") =="
+
 # Production optimization mission, Phase 11 (2026-07-30): pre-built venv
 # seeds, so S04nebulaos-factory-seed can extract a ready-made virtualenv
 # on first boot instead of running `python3 -m venv` live on this

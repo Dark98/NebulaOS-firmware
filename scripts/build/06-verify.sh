@@ -447,6 +447,14 @@ check /usr/lib/python3.11/site-packages/numpy
 check /usr/bin/python3.11
 check /opt/klipper/klippy/klippy.py
 check /opt/klipper/klippy/chelper/c_helper.so
+# Clean-Update + Virgin Baseline mission, Phase 6: nebulaos_version.py
+# ships from the forks own klippy/extras/ directory (the earlier cp -r
+# klippy step already carries it, same as z_compensate.py and
+# prtouch_*.py) - this is what catches a forgotten fork sync before the
+# image ever reaches a device, rather than a printer.cfg [nebulaos_version]
+# section that fails to load at boot.
+check /opt/klipper/klippy/extras/nebulaos_version.py
+check /opt/nebulaos-version.json
 check /opt/moonraker/moonraker/server.py
 check /usr/lib/python3.11/site-packages/streaming_form_data
 check /usr/sbin/nginx
@@ -758,6 +766,15 @@ if [ -s /tmp/printerdata-check/printer.cfg ] && grep -q "^\[include camera-quali
 	echo "OK   packaged printer.cfg seed includes camera-quality.cfg"
 else
 	echo "MISS packaged printer.cfg seed does not include camera-quality.cfg"
+fi
+# Clean-Update + Virgin Baseline mission, Phase 6: confirms the seeded
+# printer.cfg actually loads the new version-truth printer object, not
+# just that nebulaos_version.py exists on disk (checked separately above)
+# - a missing config section would leave the file shipped but inert.
+if [ -s /tmp/printerdata-check/printer.cfg ] && grep -q "^\[nebulaos_version\]$" /tmp/printerdata-check/printer.cfg 2>/dev/null; then
+	echo "OK   packaged printer.cfg seed includes [nebulaos_version]"
+else
+	echo "MISS packaged printer.cfg seed does not include [nebulaos_version]"
 fi
 # A bare "key:" is only actually blank if nothing indented follows on the
 # next line - moonraker.confs own trusted_clients/cors_domains use this

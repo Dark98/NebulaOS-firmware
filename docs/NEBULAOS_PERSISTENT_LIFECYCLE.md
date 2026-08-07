@@ -157,6 +157,35 @@ reboot afterward: `S04nebulaos-factory-seed` then re-seeds everything fresh
 from the image's own archives, and `S04nebulaos-migrate` records the new
 baseline generation, exactly as a real new device would.
 
+## Runtime version truth
+
+Phase 6 (2026-08-08) adds `[nebulaos_version]` (`klippy_extras/nebulaos_version.py`,
+synced into `coreflake1/NebulaOS-klipper`'s `klippy/extras/` the same way as
+every other accepted extra) - a printer object queryable via the ordinary
+`/printer/objects/query?nebulaos_version` endpoint, reporting `firmware_tag`/
+`firmware_sha`/`kernel_sha`/`guppyscreen_sha`/`build_date` (from the new,
+build-time, squashfs-resident `/opt/nebulaos-version.json`), `klipper_sha`/
+`klipper_dirty` (read live from the running checkout's own `.git`, excluding
+the same known-safe `c_helper.so` exception used everywhere else in this
+project), and `app_generation`/`generation_recorded_at` (from
+`$SYSTEM/app-generation.json`, the same file this document already
+describes above). All reads are best-effort - a missing/malformed file
+reports `"unknown"` rather than preventing Klipper from starting.
+
+This does not itself enforce "a healthy system must not depend on dirty git
+state for accepted functionality" - it has no authority to refuse to start
+Klipper. It exists so a violation of that rule is visible in one obvious
+place (`klipper_dirty: true`) rather than hidden. See Phase 8's own build
+verification for where cleanliness is actually enforced before something
+ships.
+
+**Known related gap, not yet closed**: see
+`docs/NEBULAOS_PRINTER_CFG_LOADCELL_GAP.md` - the canonical `printer.cfg`
+does not yet wire in `[z_compensate]`/`[prtouch_v2]`, even though that
+config was live-tested successfully on the real device. Fixing it needs
+real device access to pull the true parameter values, which this mission's
+printer-offline phases cannot do.
+
 ## Testing
 
 `tests/app-migration-tests.sh` exercises the migration script offline,

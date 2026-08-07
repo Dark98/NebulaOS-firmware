@@ -38,6 +38,17 @@ for required in KERNEL_REPO KERNEL_BRANCH KERNEL_PIN BUILDROOT_REPO BUILDROOT_PI
 done
 echo "== all required pins present in $MANIFEST =="
 
+# 2026-08-07 baseline-repair mission: wireless-regdb (regulatory.db, its
+# .p7s signature, and its LICENSE) is ISC-licensed and freely fetchable -
+# unlike the proprietary WiFi firmware below, this one already had a
+# complete, correct, hash-verified fetch script
+# (scripts/firmware/fetch-wireless-regdb.sh) that simply was never called
+# from anywhere in the actual build pipeline. Also required to compile the
+# kernel (same CONFIG_EXTRA_FIRMWARE mechanism as the WiFi firmware) - a
+# genuinely fresh clone hit this as a second, immediately-following
+# "No rule to make target" failure once the first one (below) was fixed.
+sh "$SCRIPT_DIR/../firmware/fetch-wireless-regdb.sh"
+
 # 2026-08-07 baseline-repair mission: the proprietary WiFi firmware/NVRAM
 # (see manifests/dependencies.conf's own comment on WIFI_FIRMWARE_*_SHA256
 # for why this can't be a normal network pin) is required to even COMPILE

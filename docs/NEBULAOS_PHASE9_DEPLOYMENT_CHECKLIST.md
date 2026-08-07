@@ -17,17 +17,50 @@ carries the handoff between those two halves.
 | 5. Offline recovery-safety assertions | Done | `tests/recovery-safety-tests.sh` |
 | 6. Runtime version-truth exposure | Done | `klippy_extras/nebulaos_version.py` |
 | 7. Canonical OTA flow + release automation | Done | `docs/NEBULAOS_OTA_FLOW.md`, `scripts/release.sh` |
-| 8. Virgin candidate build | See below | fresh clone, `./build.sh` |
+| 8. Virgin candidate build | **PASSED** | fresh clone, `./build.sh` |
 
 All canonical branches (`NebulaOS-firmware` main, `NebulaOS-klipper` master)
 are pushed and match what a fresh clone actually gets - verified directly
 by `tests/recovery-safety-tests.sh` and by Phase 8's own from-scratch clone.
 
-**Phase 8 build result**: recorded separately once the background build
-started during this session finishes - see the session's own final report
-for pass/fail and the resulting package/manifest/SHA256. If it failed, that
-failure must be fixed and re-run before Phase 10 begins; a virgin build
-that does not pass is not a valid deployment candidate.
+**Phase 8 build result: PASSED.** `git clone https://github.com/coreflake1/
+NebulaOS-firmware.git` into a throwaway directory (`NebulaOS-firmware-
+virgin-build`, HEAD `f254c41`), then `./build.sh` with zero reuse of any
+`vendor/`/`build-work/`/`artifacts/` state. One transient failure along the
+way, self-diagnosed and resolved without touching any of this repo's own
+logic: `git.linuxtv.org` (v4l-utils, an unrelated third-party upstream)
+returned a 504 mid-clone; re-running `build.sh` resumed correctly (every
+already-verified pin skipped its re-clone, confirmed by the log) and
+completed cleanly on retry. Result:
+
+- `06-verify.sh`: zero `MISS` lines.
+- Post-build assertions (`assert-baseline-config.sh post-build`): all PASSED
+  (PREEMPT_RT, HZ=100, backlight/PWM/touch qualification, DISPLAY-V1,
+  W3 SD/SDIO capabilities, ROAMOFF1, kernel.config/DTS/buildroot.config
+  byte-identical to the pinned `nebulaos-display-baseline-vsync-pwm-sleep-
+  2026-08-03` tag).
+- `baseline-difference-gate.sh`: PASSED - only allowed differences from the
+  prior baseline (klipper commit now `cfa3e1c` per Phase 1/6's own fixes,
+  guppyscreen commit now tracked as a new manifest field, rootfs grows
+  ~18.6MB from a broader `linux-firmware` set - traced, not a loss, still
+  well under the 500MB rootfs2 budget - and the usual non-reproducible
+  `xImage`/`rootfs.squashfs` hashes from embedded build timestamps).
+- `scripts/build/package-deployment.sh`: package produced at
+  `build-work/deploy-packages/z-compensate-guppyscreen-20260807T224746Z/`
+  (local to the throwaway clone - not committed; canonical per
+  `docs/NEBULAOS_OTA_FLOW.md`, a package is published via `scripts/
+  release.sh` only once a real tag exists, which Phase 14 creates).
+  `sha256sum -c SHA256SUMS`: all 7 files OK.
+- One real, load-bearing bug found and fixed by this attempt itself:
+  `00-fetch-vendor-sources.sh`'s WiFi firmware fetch used plain
+  unauthenticated `curl` against this repo's own (still-PRIVATE) release
+  assets, which 404s regardless of the URL's shape. Fixed with a `gh
+  release download` fallback - see that commit for detail. Without this
+  fix, Phase 8 could not have completed at all.
+
+A virgin build that did not pass would have needed to be fixed and
+re-run before Phase 10 begins; that did not end up being necessary once
+the above fix landed.
 
 ## Known, documented gaps (not blockers to Phase 10, but must not be forgotten)
 

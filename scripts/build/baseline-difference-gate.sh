@@ -17,14 +17,24 @@ set -eu
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
 ARTIFACT_DIR="$REPO_ROOT/artifacts/buildroot-halley5-v30-image"
-BASELINE_TAG="f9dc10f594cd7591e1146317cda877f75165934b"
+# 2026-08-07: reference by TAG NAME, not a hardcoded SHA - see
+# assert-baseline-config.sh's own comment on why (the 2026-08-07
+# canonical-repository mission's history rewrite, git filter-repo,
+# changes the commit hash a tag points to; the tag NAME survives that
+# unchanged). The previous hardcoded f9dc10f594c... stopped resolving to
+# any object at all after the rewrite.
+BASELINE_TAG="nebulaos-display-baseline-vsync-pwm-sleep-2026-08-03"
+git -C "$REPO_ROOT" rev-parse --verify -q "$BASELINE_TAG" >/dev/null || {
+	echo "FATAL: baseline tag '$BASELINE_TAG' does not exist in this checkout - fetch tags with 'git fetch --tags' first." >&2
+	exit 1
+}
 OUT="$REPO_ROOT/baseline-difference.txt"
 
 FAILED=0
 {
 	echo "# Baseline difference report"
 	echo "# Generated: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-	echo "# Baseline tag: nebulaos-display-baseline-vsync-pwm-sleep-2026-08-03 ($BASELINE_TAG)"
+	echo "# Baseline tag: $BASELINE_TAG ($(git -C "$REPO_ROOT" rev-parse "$BASELINE_TAG"))"
 	echo ""
 
 	echo "## Tracked config/DTS artifacts (must be byte-identical)"

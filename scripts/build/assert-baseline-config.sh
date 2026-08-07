@@ -147,11 +147,27 @@ post-build)
 	# Byte-for-byte proof against the pinned baseline tag's own tracked
 	# copies - the strongest assertion available: not "does it look right",
 	# but "is it identical to what was actually qualified".
+	#
+	# 2026-08-07: reference by TAG NAME, not a hardcoded SHA - the 2026-08-07
+	# canonical-repository mission rewrote this repo's early history to strip
+	# oversized generated blobs (git filter-repo), which changes the commit
+	# hash of every commit downstream of the earliest one touched, including
+	# this baseline tag's own target. A hardcoded SHA silently breaks across
+	# any such rewrite (hit for real: the previous hardcoded f9dc10f594c...
+	# stopped resolving to any object at all in the rewritten repo, and this
+	# whole check failed with a confusing FAIL instead of a clear "commit not
+	# found" error). The tag name itself is stable across the rewrite - git
+	# filter-repo updates what it points to, not its name.
+	BASELINE_REF="nebulaos-display-baseline-vsync-pwm-sleep-2026-08-03"
+	git -C "$REPO_ROOT" rev-parse --verify -q "$BASELINE_REF" >/dev/null || {
+		echo "FATAL: baseline tag '$BASELINE_REF' does not exist in this checkout - fetch tags with 'git fetch --tags' first." >&2
+		exit 1
+	}
 	for f in kernel.config halley5_v30.dts buildroot.config; do
-		if git -C "$REPO_ROOT" diff --quiet f9dc10f594cd7591e1146317cda877f75165934b -- "artifacts/buildroot-halley5-v30-image/$f" 2>/dev/null; then
-			echo "  PASS: $f byte-identical to pinned baseline tag f9dc10f"
+		if git -C "$REPO_ROOT" diff --quiet "$BASELINE_REF" -- "artifacts/buildroot-halley5-v30-image/$f" 2>/dev/null; then
+			echo "  PASS: $f byte-identical to pinned baseline tag $BASELINE_REF"
 		else
-			echo "  FAIL: $f differs from pinned baseline tag f9dc10f"
+			echo "  FAIL: $f differs from pinned baseline tag $BASELINE_REF"
 			FAILED=1
 		fi
 	done

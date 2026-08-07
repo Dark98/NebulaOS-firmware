@@ -78,6 +78,13 @@ pre-build)
 	FRAGMENT="$ARTIFACT_DIR/halley5-nebulaos-fragment.config"
 	grep -q "CONFIG_PREEMPT_RT=y" "$FRAGMENT" 2>/dev/null
 	check "CONFIG_PREEMPT_RT=y present in tracked fragment" $?
+
+	# 2026-08-07: wifi-roamoff-disable-variant.sh ROAMOFF1 - not a Kconfig
+	# symbol (see that script's own header), so the only real source-level
+	# proof is the patched module_param default itself.
+	grep -qF "static int brcmf_roamoff = 1;" \
+		"$KERNEL_DIR/kernel/kernel-6.6/drivers/net/wireless/broadcom/brcm80211/brcmfmac/common.c" 2>/dev/null
+	check "wifi-roamoff-disable (ROAMOFF1) patch applied to brcmfmac common.c" $?
 	;;
 
 post-build)
@@ -127,6 +134,15 @@ post-build)
 	check "W3 cap-sd-highspeed present in resolved &msc1" $?
 	echo "$msc1_block" | grep -q 'cap-sdio-irq;'
 	check "W3 cap-sdio-irq present in resolved &msc1" $?
+
+	# 2026-08-07: wifi-roamoff-disable (ROAMOFF1) - not a Kconfig symbol,
+	# so kernel.config can't prove it. vendor/x2000_kernel_6.6 is not
+	# deleted by the build, so the same source-level check from pre-build
+	# still applies and is the only real proof available short of
+	# extracting strings from the compiled kernel image.
+	grep -qF "static int brcmf_roamoff = 1;" \
+		"$KERNEL_DIR/kernel/kernel-6.6/drivers/net/wireless/broadcom/brcm80211/brcmfmac/common.c" 2>/dev/null
+	check "wifi-roamoff-disable (ROAMOFF1) patch present in source tree used for this build" $?
 
 	# Byte-for-byte proof against the pinned baseline tag's own tracked
 	# copies - the strongest assertion available: not "does it look right",

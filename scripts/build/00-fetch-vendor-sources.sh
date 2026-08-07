@@ -70,10 +70,34 @@ if [ ! -f "$WIFI_FW_BIN" ] || [ ! -f "$WIFI_FW_TXT" ]; then
 	mkdir -p "$(dirname "$WIFI_FW_ARCHIVE")"
 	curl -sL -o "$WIFI_FW_ARCHIVE" "$WIFI_FIRMWARE_RELEASE_URL"
 	archive_actual_sha256=$(sha256sum "$WIFI_FW_ARCHIVE" | awk '{print $1}')
+	# Clean-Update + Virgin Baseline mission, Phase 8 (2026-08-08): this
+	# repos own visibility is still PRIVATE (a GitHub repo-visibility
+	# change is one of the action categories this projects own tooling
+	# cannot perform itself, confirmed persistently blocked, not a
+	# transient failure). A plain unauthenticated curl against a private
+	# repos release asset 404s regardless of the URL looking like a normal
+	# public download link - confirmed real, first hit during this
+	# missions own attempt at a genuinely fresh clone build. Fall back to
+	# the GitHub CLIs own authenticated release-download flow, which works
+	# against a private repo as long as the invoking environment has gh
+	# authenticated with read access - exactly what every build
+	# environment used by this project actually has. If gh is unavailable
+	# or unauthenticated too, this falls through to the same FATAL check
+	# below, now correctly diagnosing the real cause.
+	if [ "$archive_actual_sha256" != "$WIFI_FIRMWARE_ARCHIVE_SHA256" ] && command -v gh >/dev/null 2>&1; then
+		echo "== plain curl fetch did not match the pinned hash - retrying via gh release download (private repo) =="
+		gh release download "$WIFI_FIRMWARE_RELEASE_TAG" \
+			--repo coreflake1/NebulaOS-firmware \
+			--pattern "$(basename "$WIFI_FIRMWARE_RELEASE_URL")" \
+			--output "$WIFI_FW_ARCHIVE" --clobber \
+			|| echo "WARNING: gh release download also failed - see the FATAL check below for the real error" >&2
+		archive_actual_sha256=$(sha256sum "$WIFI_FW_ARCHIVE" | awk '{print $1}')
+	fi
 	if [ "$archive_actual_sha256" != "$WIFI_FIRMWARE_ARCHIVE_SHA256" ]; then
 		echo "FATAL: $WIFI_FW_ARCHIVE sha256 is $archive_actual_sha256, expected pinned $WIFI_FIRMWARE_ARCHIVE_SHA256" >&2
-		echo "Either the download is corrupt/tampered, the repo is still private (see README), or this is a" >&2
-		echo "deliberate, reviewed bump - if so, update WIFI_FIRMWARE_ARCHIVE_SHA256 in $MANIFEST." >&2
+		echo "Either the download is corrupt/tampered, gh is missing or unauthenticated and the repo is still" >&2
+		echo "private, or this is a deliberate, reviewed bump - if so, update WIFI_FIRMWARE_ARCHIVE_SHA256 in" >&2
+		echo "$MANIFEST." >&2
 		exit 1
 	fi
 	tar xzf "$WIFI_FW_ARCHIVE" -C "$(dirname "$WIFI_FW_ARCHIVE")"

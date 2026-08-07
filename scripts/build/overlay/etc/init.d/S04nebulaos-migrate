@@ -1,0 +1,233 @@
+#!/bin/sh
+#
+# NebulaOS Clean-Update + Virgin Baseline mission, Phase 3 (2026-08-08):
+# versioned migration for the persistent /usr/data application tree.
+#
+# S04nebulaos-factory-seed (runs immediately before this, same S04 slot -
+# see that script's own header) only ever asks "does $APPS/klipper/.git
+# exist at all?" - once seeded, it never checks again, on any later boot,
+# with any later image. That is exactly correct for what IT is for (a
+# fresh/wiped namespace's very first boot must not depend on network at
+# all), but it leaves a real gap this script closes: a device that was
+# ALREADY provisioned, then later reflashed with an image whose pinned
+# Klipper/Moonraker/GuppyScreen commits moved forward, never gets those
+# new commits into its persistent application tree - the squashfs's own
+# factory-seed archive is correct, but nothing ever re-seeds an
+# already-populated $APPS from it. (This is the exact class of gap
+# documented live in docs/NEBULAOS_CANONICAL_DEPLOYMENT_QUALIFICATION.md's
+# "persistent-data Klipper content was not touched by this reflash"
+# finding.)
+#
+# File-classification model this script relies on (see
+# docs/NEBULAOS_PERSISTENT_LIFECYCLE.md for the full writeup):
+#   IMAGE OWNED  - $APPS/klipper, $APPS/moonraker (git checkouts; entirely
+#                  replaced by this script when the image expects a newer
+#                  version - there is nothing user-authored inside them)
+#   USER OWNED   - $NEBULAOS_ROOT/printer_data/config (printer.cfg,
+#                  macros, moonraker.conf) - a SEPARATE directory tree
+#                  from $APPS, never touched by this script at all. Safety
+#                  here comes from directory separation, not per-file
+#                  logic: this script never reads or writes
+#                  printer_data/config, full stop.
+#   GENERATED    - $NEBULAOS_ROOT/{envs,database,printer_data/{gcodes,
+#                  logs,database}} - regenerated/repopulated naturally by
+#                  the application itself; also untouched here. Venv
+#                  migration (envs/klipper, envs/moonraker) is explicitly
+#                  OUT OF SCOPE for this script - they are derived from
+#                  the Buildroot/kernel pin, not the Klipper/Moonraker
+#                  source pin, and change far less often; a future mission
+#                  can extend this the same way if that ever needs it.
+#
+# Overridable for tests, same convention as S04/flash-spare-slot.sh.
+SEEDS="${SEEDS:-/opt/nebulaos-seeds}"
+APPS="${APPS:-/usr/data/nebulaos/apps}"
+SYSTEM="${SYSTEM:-/usr/data/nebulaos/system}"
+LOCKDIR="${LOCKDIR:-/usr/data/nebulaos/updates/locks}"
+GENERATION_FILE="$SYSTEM/app-generation.json"
+BACKUP_ROOT="$SYSTEM/migration-backups"
+
+echo 500 > "/proc/self/oom_score_adj" 2>/dev/null
+
+export GIT_CONFIG_COUNT=4
+export GIT_CONFIG_KEY_0=pack.threads GIT_CONFIG_VALUE_0=1
+export GIT_CONFIG_KEY_1=core.packedGitWindowSize GIT_CONFIG_VALUE_1=1m
+export GIT_CONFIG_KEY_2=core.deltaBaseCacheLimit GIT_CONFIG_VALUE_2=8m
+export GIT_CONFIG_KEY_3=gc.auto GIT_CONFIG_VALUE_3=0
+
+log() {
+	echo "S04nebulaos-migrate: $1"
+}
+
+# Minimal flat-JSON field extractor - this project's own established
+# no-jq convention (see flash-spare-slot.sh's get_field() for the
+# key=value equivalent). Only handles "key": "string value" and
+# "key": bareword/number - sufficient for the flat fields this script
+# actually reads; never asked to parse nested objects/arrays.
+json_get() {
+	file="$1"; key="$2"
+	grep -o "\"$key\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" "$file" 2>/dev/null | \
+		sed -E "s/.*\"$key\"[[:space:]]*:[[:space:]]*\"([^\"]*)\"/\1/" | head -1
+}
+
+# Same maintenance-safety gate as S04nebulaos-factory-seed - migration is
+# just as memory/IO-heavy as first-boot seeding (same tar extraction, same
+# git verification), and must never run while a print is active or an
+# update transaction is in flight. Duplicated rather than sourced from
+# S04's own file - that file is a dispatched init script in its own right
+# (case "$1" in start) ... exit 0 at the bottom), not a library.
+maintenance_gate_ok() {
+	active=$(wget -q -O - --timeout=3 'http://127.0.0.1:7125/printer/objects/query?print_stats' 2>/dev/null)
+	case "$active" in
+		*'"state":"printing"'*|*'"state":"paused"'*)
+			log "BLOCKED: a print is active - refusing to migrate this boot (will retry next boot)"
+			return 1
+			;;
+	esac
+	if [ -d "$LOCKDIR" ] && [ -n "$(ls -A "$LOCKDIR" 2>/dev/null)" ]; then
+		log "BLOCKED: an update transaction lock is present - refusing to migrate concurrently with an update"
+		return 1
+	fi
+	if ! grep -qE '^(/dev/zram0|.*/system/swapfile) ' /proc/swaps 2>/dev/null; then
+		log "BLOCKED: no memory-resilience swap active - refusing to proceed (same condition S04 itself guards against)"
+		return 1
+	fi
+	return 0
+}
+
+# Re-seed one component from its archive, unconditionally (no "already
+# exists, skip" short-circuit - that check is the caller's job, done once
+# up front by comparing generations, not per-component here). Otherwise
+# identical to S04nebulaos-factory-seed's own seed_git_app(): same
+# .partial-then-atomic-mv pattern, same branch/origin/dirty-tree
+# verification before anything is considered trustworthy, so a failure
+# here can never leave a half-replaced application tree - either the new
+# checkout is fully verified and swapped in, or the OLD one is still
+# sitting untouched at $dest.
+reseed_git_app() {
+	name="$1"; archive="$SEEDS/$name.tar.gz"; dest="$APPS/$name"
+	branch="$2"; origin="$3"; dirty_exclude="${4:-}"
+
+	if [ ! -f "$archive" ]; then
+		log "ERROR: seed archive missing ($archive) - cannot migrate $name, leaving existing installation untouched"
+		return 1
+	fi
+
+	log "migrating $name from $archive"
+	rm -rf "$dest.migrate-partial"
+	mkdir -p "$dest.migrate-partial"
+	if ! sh -c "gzip -dc '$archive' | tar -xo -C '$dest.migrate-partial'"; then
+		log "ERROR: tar extraction failed for $name - leaving existing installation untouched"
+		rm -rf "$dest.migrate-partial"
+		return 1
+	fi
+	sync
+
+	actual_branch=$(git -C "$dest.migrate-partial" symbolic-ref --short HEAD 2>/dev/null)
+	if [ "$actual_branch" != "$branch" ]; then
+		log "ERROR: $name migrated checkout is on branch '$actual_branch', expected '$branch' - rejecting, leaving existing installation untouched"
+		rm -rf "$dest.migrate-partial"
+		return 1
+	fi
+	actual_origin=$(git -C "$dest.migrate-partial" remote get-url origin 2>/dev/null)
+	if [ "$actual_origin" != "$origin" ]; then
+		log "ERROR: $name migrated checkout has origin '$actual_origin', expected '$origin' - rejecting, leaving existing installation untouched"
+		rm -rf "$dest.migrate-partial"
+		return 1
+	fi
+	if [ -n "$dirty_exclude" ]; then
+		dirty_status=$(git -C "$dest.migrate-partial" status --porcelain -- . ":!$dirty_exclude" 2>/dev/null)
+	else
+		dirty_status=$(git -C "$dest.migrate-partial" status --porcelain 2>/dev/null)
+	fi
+	if [ -n "$dirty_status" ]; then
+		log "ERROR: $name migrated checkout has an unexpectedly dirty working tree - rejecting, leaving existing installation untouched"
+		rm -rf "$dest.migrate-partial"
+		return 1
+	fi
+
+	# Only reached once the new checkout is fully verified - the actual
+	# cutover is a single rename, minimizing the window where neither the
+	# old nor new tree is fully in place.
+	mv "$dest" "$BACKUP_DIR/$name"
+	mv "$dest.migrate-partial" "$dest"
+	log "$name migrated successfully (branch $branch, $(git -C "$dest" rev-parse HEAD))"
+	return 0
+}
+
+start() {
+	[ -f "$SEEDS/seed-manifest.json" ] || { log "no seed manifest ($SEEDS/seed-manifest.json missing) - nothing to compare against, skipping"; return 0; }
+
+	expected_version=$(json_get "$SEEDS/seed-manifest.json" migration_version)
+	[ -n "$expected_version" ] || { log "ERROR: seed-manifest.json has no migration_version field - skipping (image predates this feature, or manifest is malformed)"; return 0; }
+
+	installed_version=""
+	[ -f "$GENERATION_FILE" ] && installed_version=$(json_get "$GENERATION_FILE" migration_version)
+
+	if [ "$installed_version" = "$expected_version" ]; then
+		log "installed generation ($installed_version) already matches this image - nothing to do"
+		return 0
+	fi
+
+	# Genuinely fresh namespace, first-ever boot: S04nebulaos-factory-seed
+	# (runs immediately before this) just seeded everything for the first
+	# time, from the SAME archives this script would otherwise migrate to -
+	# there is nothing to back up or replace, just record the baseline
+	# generation so future boots have something to compare against.
+	if [ ! -e "$APPS/klipper/.git" ]; then
+		log "no existing klipper checkout - nothing to migrate (factory-seed will handle first-time provisioning); recording baseline generation only"
+		record_generation "$expected_version"
+		return 0
+	fi
+
+	log "generation mismatch: installed='$installed_version' expected='$expected_version' - migration needed"
+	maintenance_gate_ok || return 0
+
+	BACKUP_DIR="$BACKUP_ROOT/$(date -u +%Y%m%dT%H%M%SZ)"
+	mkdir -p "$BACKUP_DIR"
+	log "backing up current application tree to $BACKUP_DIR before touching anything"
+
+	klipper_ok=1
+	moonraker_ok=1
+	if [ -e "$APPS/klipper/.git" ]; then
+		reseed_git_app klipper master "https://github.com/coreflake1/NebulaOS-klipper.git" \
+			klippy/chelper/c_helper.so || klipper_ok=0
+	fi
+	if [ -e "$APPS/moonraker/.git" ]; then
+		reseed_git_app moonraker master "https://github.com/Arksine/moonraker.git" || moonraker_ok=0
+	fi
+
+	if [ "$klipper_ok" = "1" ] && [ "$moonraker_ok" = "1" ]; then
+		record_generation "$expected_version"
+		log "migration complete - generation now $expected_version. Previous application tree preserved at $BACKUP_DIR (not deleted automatically - safe to remove by hand once the new generation is confirmed working)."
+	else
+		log "migration INCOMPLETE - at least one component failed and was left at its previous version (see errors above). Generation NOT advanced, so this will retry next boot. Nothing was destroyed: any component that failed still has its pre-migration tree in place at $APPS, and $BACKUP_DIR holds whatever was successfully backed up before the failure."
+	fi
+}
+
+record_generation() {
+	version="$1"
+	mkdir -p "$SYSTEM"
+	klipper_commit=$( [ -d "$APPS/klipper/.git" ] && git -C "$APPS/klipper" rev-parse HEAD 2>/dev/null || echo "unseeded")
+	moonraker_commit=$( [ -d "$APPS/moonraker/.git" ] && git -C "$APPS/moonraker" rev-parse HEAD 2>/dev/null || echo "unseeded")
+	now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+	cat > "$GENERATION_FILE" <<EOF
+{
+  "migration_version": "$version",
+  "recorded_at": "$now",
+  "klipper_commit": "$klipper_commit",
+  "moonraker_commit": "$moonraker_commit"
+}
+EOF
+	log "recorded generation $version to $GENERATION_FILE"
+}
+
+if [ -z "${S04NEBULAOS_MIGRATE_NO_AUTORUN:-}" ]; then
+	case "$1" in
+		start)
+			start
+			;;
+		*)
+			;;
+	esac
+	exit 0
+fi

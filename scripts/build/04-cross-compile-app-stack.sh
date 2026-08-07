@@ -598,10 +598,26 @@ moonraker_is_shallow=$(git -C "$VENDOR/moonraker" rev-parse --is-shallow-reposit
 mainsail_version=$(cat "$VENDOR/mainsail-dist/dist/.version" 2>/dev/null || echo "unknown")
 build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
+# 2026-08-08 (Clean-Update + Virgin Baseline mission, Phase 3): a derived,
+# not manually-maintained, migration identifier - see
+# docs/NEBULAOS_PERSISTENT_LIFECYCLE.md for the full design. Deliberately
+# a content-derived hash, not a hand-incremented counter: a counter can be
+# forgotten to bump (exactly the class of drift this whole mission exists
+# to close), while this changes automatically and exactly when any
+# component's expected persistent-app version actually changes, and
+# compares with plain string equality on-device with no history lookup
+# needed. Not a security hash - just a stable, cheap "does the installed
+# generation match what THIS image expects" fingerprint.
+migration_version=$(printf '%s' "${klipper_seed_commit}:${moonraker_seed_commit}:${GUPPYSCREEN_PIN:-unknown}" | sha256sum | cut -c1-16)
+firmware_head=$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo "unknown")
+
 cat > "$OVERLAY/opt/nebulaos-seeds/seed-manifest.json" <<EOF
 {
   "schema_version": 2,
   "build_date": "$build_date",
+  "migration_version": "$migration_version",
+  "firmware_head": "$firmware_head",
+  "guppyscreen_pin": "${GUPPYSCREEN_PIN:-unknown}",
   "seeds": {
     "klipper": {
       "format": "git_repo_archive_real_history",

@@ -10,6 +10,7 @@ SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
 IMAGES="$REPO_ROOT/vendor/buildroot-x2000/output/images"
 KERNEL_CONFIG="$REPO_ROOT/vendor/buildroot-x2000/output/build/linux-custom/.config"
+MANIFEST_FILE="$REPO_ROOT/artifacts/buildroot-halley5-v30-image/build-manifest.txt"
 
 if [ ! -f "$IMAGES/rootfs.ext2" ]; then
 	echo "rootfs.ext2 not found - run 05-final-build.sh first" >&2
@@ -146,10 +147,41 @@ check_artifact_sha256() {
 }
 check_artifact_sha256 vendor/mainsail-dist/mainsail.zip \
 	df2ba7c301f7bfc8ac9f122741a6ba08356d679ecfa1f62f898d0337802d5de5
-check_artifact_sha256 artifacts/guppyscreen-mips/guppyscreen \
-	810d895675198b3f73cd8552656f5bfbe593b8faca5883c201807d006e2bdbe4
-check_artifact_sha256 artifacts/guppyscreen-mips/guppybeep \
-	4a2a719411944e5c2d0f7a9231440487073ce454e398d61f27181a821f2a9d76
+
+# 2026-08-07: GuppyScreen is no longer a fixed prebuilt binary (see
+# manifests/dependencies.conf's GUPPYSCREEN_PIN and
+# 04-cross-compile-app-stack.sh) - it's rebuilt from pinned source every
+# run, and the resulting bytes are NOT deterministic across builds (the
+# toolchain embeds a build timestamp), even from byte-identical source. A
+# fixed expected hash here would report a false MISS on every correct
+# build. Check self-consistency against THIS run's own build-manifest.txt
+# instead (already-recorded guppyscreen_sha256/guppybeep_sha256, right
+# next to the source pin git_commit_guppyscreen that actually determines
+# correctness) plus a real MIPS-ELF sanity check.
+check_guppyscreen_binary() {
+	gb_path="$REPO_ROOT/$1"
+	gb_manifest_key="$2"
+	if [ ! -f "$gb_path" ]; then
+		echo "MISS $1 does not exist"
+		return
+	fi
+	if ! file "$gb_path" 2>/dev/null | grep -q "MIPS.*statically linked"; then
+		echo "MISS $1 is not a statically-linked MIPS ELF binary ($(file "$gb_path" 2>/dev/null))"
+		return
+	fi
+	gb_recorded=$(grep "^${gb_manifest_key}=" "$MANIFEST_FILE" 2>/dev/null | cut -d= -f2)
+	gb_actual=$(sha256sum "$gb_path" | awk '{print $1}')
+	if [ -z "$gb_recorded" ]; then
+		echo "MISS $1 - no $gb_manifest_key recorded in $MANIFEST_FILE (05-final-build.sh should have written one)"
+	elif [ "$gb_actual" = "$gb_recorded" ]; then
+		echo "OK   $1 sha256 matches this build's own manifest record ($gb_actual) - source pinned separately via git_commit_guppyscreen"
+	else
+		echo "MISS $1 sha256 is $gb_actual, this build's manifest recorded $gb_recorded - manifest is stale or binary was replaced after the build"
+	fi
+}
+check_guppyscreen_binary artifacts/guppyscreen-mips/guppyscreen guppyscreen_sha256
+check_guppyscreen_binary artifacts/guppyscreen-mips/guppybeep guppybeep_sha256
+
 check_artifact_sha256 scripts/build/overlay/lib/firmware/brcm/brcmfmac43430-sdio.bin \
 	60dbb5b77b2c232e513322e0ff4350ab5dab5a9fcad0e26e80a2f089e652d720
 check_artifact_sha256 scripts/build/overlay/lib/firmware/brcm/brcmfmac43430-sdio.txt \

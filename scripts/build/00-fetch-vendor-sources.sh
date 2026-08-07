@@ -32,10 +32,42 @@ for required in KERNEL_REPO KERNEL_BRANCH KERNEL_PIN BUILDROOT_REPO BUILDROOT_PI
 	PELLCORP_CREALITY_REPO PELLCORP_CREALITY_PIN KLIPPER_REPO KLIPPER_BRANCH KLIPPER_PIN \
 	MOONRAKER_REPO MOONRAKER_PIN K1_USTREAMER_REPO K1_USTREAMER_PIN \
 	V4L_UTILS_REPO V4L_UTILS_PIN MAINSAIL_TAG MAINSAIL_SHA256 \
+	WIFI_FIRMWARE_BIN_SHA256 WIFI_FIRMWARE_TXT_SHA256 \
 	GUPPYSCREEN_REPO GUPPYSCREEN_BRANCH GUPPYSCREEN_PIN GUPPYSCREEN_VERSION GUPPYSCREEN_THEME; do
 	require_pin "$required"
 done
 echo "== all required pins present in $MANIFEST =="
+
+# 2026-08-07 baseline-repair mission: the proprietary WiFi firmware/NVRAM
+# (see manifests/dependencies.conf's own comment on WIFI_FIRMWARE_*_SHA256
+# for why this can't be a normal network pin) is required to even COMPILE
+# the kernel (CONFIG_EXTRA_FIRMWARE builds it in) - not just to boot. A
+# missing or wrong file here used to surface as a cryptic "No rule to make
+# target" error roughly two hours into a kernel compile (hit for real
+# during this mission's own clean-room reproducibility test). Checked here,
+# first, before anything expensive runs.
+WIFI_FW_DIR="$REPO_ROOT/scripts/build/overlay/lib/firmware/brcm"
+WIFI_FW_BIN="$WIFI_FW_DIR/brcmfmac43430-sdio.bin"
+WIFI_FW_TXT="$WIFI_FW_DIR/brcmfmac43430-sdio.txt"
+if [ ! -f "$WIFI_FW_BIN" ] || [ ! -f "$WIFI_FW_TXT" ]; then
+	echo "FATAL: $WIFI_FW_BIN and/or $WIFI_FW_TXT missing." >&2
+	echo "These are gitignored proprietary files, not fetched by this script - a fresh clone never has them." >&2
+	echo "Run: sh scripts/build/fetch-wifi-firmware.sh [user@stock-device-host]" >&2
+	exit 1
+fi
+actual_bin_sha256=$(sha256sum "$WIFI_FW_BIN" | awk '{print $1}')
+actual_txt_sha256=$(sha256sum "$WIFI_FW_TXT" | awk '{print $1}')
+if [ "$actual_bin_sha256" != "$WIFI_FIRMWARE_BIN_SHA256" ]; then
+	echo "FATAL: $WIFI_FW_BIN sha256 is $actual_bin_sha256, expected pinned $WIFI_FIRMWARE_BIN_SHA256" >&2
+	echo "Either re-run fetch-wifi-firmware.sh against the correct device, or this is a deliberate," >&2
+	echo "reviewed bump - if so, update WIFI_FIRMWARE_BIN_SHA256 in $MANIFEST." >&2
+	exit 1
+fi
+if [ "$actual_txt_sha256" != "$WIFI_FIRMWARE_TXT_SHA256" ]; then
+	echo "FATAL: $WIFI_FW_TXT sha256 is $actual_txt_sha256, expected pinned $WIFI_FIRMWARE_TXT_SHA256" >&2
+	exit 1
+fi
+echo "== WiFi firmware + NVRAM present and pin-verified =="
 
 mkdir -p "$VENDOR"
 cd "$VENDOR"

@@ -303,3 +303,41 @@ expected untouched-baseline state.
 `CRTENSE_NOZZLE_CLEAR` - GuppyScreen has not issued any calibration
 command, consistent with "does not calibrate before receiving the real
 baseline ID."
+
+## Phase 9: Moonraker update/recovery safety
+
+Pre-condition (already established in Phase 8): remote correct, canonical
+branch (`master`) correct, `current_hash == remote_hash ==
+462fd689448fb1d1946a9b0dcf81a9d7b9112254`, live checkout clean (excluding
+the one allowlisted `c_helper.so` path). The real remote's own content at
+this exact commit was independently verified in an earlier mission
+(`tests/recovery-safety-tests.sh`, a real shallow clone of the actual
+remote, not a fixture).
+
+Ran the real, non-motion soft Recovery test with the printer confirmed
+idle immediately beforehand:
+
+```
+POST /machine/update/recover  {"name": "klipper", "hard": false}
+→ {"result": "ok"}
+```
+
+After Recovery, confirmed all required post-conditions directly:
+
+- Klipper checkout: `HEAD` still `462fd689...` (== canonical remote,
+  unchanged - nothing to move, it was already correct).
+- `git status --porcelain` (excluding `c_helper.so`): clean.
+- `z_compensate.py`, `prtouch_v2.py`, `prtouch_probe.py`, `prtouch_mcu.py`,
+  `prtouch_nozzle.py`: all present.
+- `/server/info`: `klippy_state: "ready"`, `failed_components: []`,
+  `warnings: []` - Moonraker fully reconnected and healthy, including
+  `update_manager` itself.
+- `z_compensate` structured status: identical over both HTTP and a real
+  WebSocket JSON-RPC call, `calibration_id: 0` still (recovery did not
+  disturb Klipper's own runtime state).
+- GuppyScreen: same PID (752) as before Recovery - never disrupted.
+- Printer: `print_stats.state: "standby"`, `idle_timeout.state: "Idle"` -
+  remained idle throughout.
+
+Recovery did not revert any accepted baseline content - confirmed
+directly, not assumed.

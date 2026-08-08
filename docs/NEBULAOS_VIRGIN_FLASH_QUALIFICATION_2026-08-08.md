@@ -228,3 +228,78 @@ Verified directly on the resulting live system:
 - Explicit search for old-state evidence: the old Klipper HEAD
   (`d839d0375...`) and old branch (`nebulaos`) do not appear anywhere in
   the live checkout's refs.
+
+## Phase 8: live non-motion qualification
+
+All checks below are read-only queries or passive kernel/log inspection -
+zero motion/homing/heating/extrusion/printing/calibration commands issued.
+
+- **PREEMPT_RT**: `uname -a` → `6.6.18-rt23 #2 SMP PREEMPT_RT`,
+  `/sys/kernel/realtime` = `1`.
+- **ROAMOFF1**: `/sys/module/brcmfmac/parameters/roamoff` = `1`.
+- **WiFi IRQ priority**: the real SDIO IRQ threads (`irq/44-mmc1`,
+  `irq/44-s-mmc1`) - `SCHED_FIFO priority 60` via `chrt -p`.
+- **WiFi power save**: `iw dev wlan0 get power_save` → `off`.
+- **CID-derived MAC**: `link/ether 16:3b:5d:...` (locally-administered bit
+  set) vs `permaddr 20:0b:74:...` (real hardware MAC) - differ as expected.
+- **TCP_NODELAY**: `ustreamer` process command line includes
+  `--tcp-nodelay`.
+- **Camera idle controller + presets**: `S51nebulaos-camera-idle-controller`
+  running; `SET_CAMERA_QUALITY_HIGH/LOW/MED` all registered
+  (`/printer/gcode/help`).
+- **DISPLAY-V1 / PWM**: dmesg - `ingenic-pwm ...: Probe of pwm success!`,
+  `nebulaos_backlight_final ...: backlight final controller ready -
+  boot-preserve...` (the documented deliberate boot-preserve design -
+  zero hardware touched until an explicit command).
+- **Backlight-only sleep / touch wake mechanisms present**:
+  `S98nebulaos-display-sleep-wake-controller` running; not actively
+  cycled (a real sleep/wake transition is a display-state change, out of
+  scope for a non-motion pass - driver health + presence is the
+  appropriate bar here, matching every other passive check in this list).
+- **Polling touch**: `ns2009_ts` input device present
+  (`/proc/bus/input/devices`).
+- **Zero pinctrl warnings**: 3 pinctrl dmesg lines total, all
+  "success"/"initialized" - 0 matching warn/error.
+- **Klipper**: `klippy_state: "ready"`.
+- **GuppyScreen**: process stable (pid unchanged across the Moonraker
+  restart below).
+- **S99confirm-good**: OTA marker is `ota:kernel2` - only ever written by
+  a successful confirm-good pass.
+
+**Real finding, resolved live**: `/server/info` initially showed
+`failed_components: ["update_manager"]` with warning "Unparsed config
+section [update_manager mainsail] detected." `moonraker.log` traced the
+exact cause: `moonraker.confighelper.ConfigError: [klipper]: Invalid
+virtualenv at path /usr` - the same class of bug already documented in
+this project's own history (Moonraker's reserved-slot venv auto-discovery
+reads Klippy's own identify handshake; on this genuinely fresh boot,
+`update_manager` tried to load before Klippy had reported it) - a
+first-boot startup race, not a regression. Resolved with a single
+`/etc/init.d/S56moonraker restart` (a service restart, not a motion/
+heating action): `failed_components: []`, `warnings: []` after.
+
+`/machine/update/status`'s klipper entry, post-restart: `current_hash ==
+remote_hash == 462fd689...` (exact canonical match - direct live
+confirmation the Phase 1 branch-unification fix holds), `branch: master`,
+`remote_url` correct. `is_dirty: true` / `is_valid: false`, but the
+*only* reported difference is `klippy/chelper/c_helper.so` - the same
+already-established, expected, harmless cross-compiled-binary difference
+this whole project has documented repeatedly (Moonraker's own dirty-check
+has no allowlist for it, unlike this project's own `nebulaos_version.py`,
+which explicitly excludes it and correctly reports `klipper_dirty: false`
+via both HTTP and WebSocket below - two tools, two different, both
+correct, definitions of "dirty").
+
+**z_compensate, both transports**: HTTP
+(`/printer/objects/query?z_compensate`) and a real WebSocket JSON-RPC
+call (`printer.objects.query` over `/websocket`, minimal stdlib-only
+client - no third-party `websockets` package needed) both return
+identical structured status: `calibration_id: 0, calibration_state:
+"idle", calibration_z_offset: null, calibration_error: null` - the
+expected untouched-baseline state.
+
+**GuppyScreen calibration-ID gating**: `calibration_id` has never left
+`0`; `klippy.log` contains zero occurrences of `Z_OFFSET_CALIBRATION` or
+`CRTENSE_NOZZLE_CLEAR` - GuppyScreen has not issued any calibration
+command, consistent with "does not calibrate before receiving the real
+baseline ID."

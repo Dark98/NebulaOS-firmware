@@ -51,6 +51,13 @@ set -e
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
 
+# Final Pre-Flash Audit mission (2026-08-08): DEPS_MANIFEST provides
+# PELLCORP_K1_BASH_BUILD_IMAGE (the digest-pinned toolchain container ref)
+# - see manifests/dependencies.conf's own comment on that entry.
+DEPS_MANIFEST="$REPO_ROOT/manifests/dependencies.conf"
+[ -f "$DEPS_MANIFEST" ] || { echo "FATAL: $DEPS_MANIFEST not found" >&2; exit 1; }
+. "$DEPS_MANIFEST"
+
 # 2026-07-23: this and the other numbered build stages all write into the
 # same shared vendor/buildroot-x2000 tree - running two of these at once
 # (e.g. from two terminals) would silently interleave writes. Cheap
@@ -90,7 +97,7 @@ fi
 # steps, makes this script actually idempotent/re-runnable.
 docker run --label "openke-build-pid=$$" --rm --user root \
 	-v "$REPO_ROOT:/repo" \
-	pellcorp/k1-bash-build bash -c '
+	"$PELLCORP_K1_BASH_BUILD_IMAGE" bash -c '
 set -e
 cp "/repo/artifacts/buildroot-halley5-v30-image/buildroot.config" "/repo/vendor/buildroot-x2000/.config"
 mkdir -p "/repo/vendor/buildroot-x2000/board"
@@ -149,13 +156,13 @@ cp "/repo/scripts/build/vendor-patches/python-matplotlib/python-matplotlib.mk" "
 # the host user.
 docker run --label "openke-build-pid=$$" --rm --user root \
 	-v "$REPO_ROOT:/repo" \
-	pellcorp/k1-bash-build \
+	"$PELLCORP_K1_BASH_BUILD_IMAGE" \
 	chown -R "$(id -u):$(id -g)" "/repo/vendor/buildroot-x2000/board/halley5-nebulaos-overlay"
 
 echo "== normalizing .config (resolves any derived Kconfig selects) =="
 docker run --label "openke-build-pid=$$" --rm --user root \
 	-v "$REPO_ROOT/vendor/x2000_kernel_6.6/kernel/kernel-6.6:/kernel_6_6/kernel/kernel-6.6" \
-	-v "$BUILDROOT_DIR:/src" -w /src pellcorp/k1-bash-build bash -c '
+	-v "$BUILDROOT_DIR:/src" -w /src "$PELLCORP_K1_BASH_BUILD_IMAGE" bash -c '
 apt-get -qq update >/dev/null 2>&1
 apt-get install -y -qq python3 bc cpio rsync unzip bison flex libncurses5-dev file build-essential libssl-dev libelf-dev >/dev/null 2>&1
 make olddefconfig
@@ -179,7 +186,7 @@ make olddefconfig
 # the package was never built yet (e.g. on a genuinely fresh output/ tree).
 docker run --label "openke-build-pid=$$" --rm --user root \
 	-v "$REPO_ROOT/vendor/x2000_kernel_6.6/kernel/kernel-6.6:/kernel_6_6/kernel/kernel-6.6" \
-	-v "$BUILDROOT_DIR:/src" -w /src pellcorp/k1-bash-build bash -c '
+	-v "$BUILDROOT_DIR:/src" -w /src "$PELLCORP_K1_BASH_BUILD_IMAGE" bash -c '
 apt-get -qq update >/dev/null 2>&1
 apt-get install -y -qq python3 bc cpio rsync unzip bison flex libncurses5-dev file build-essential libssl-dev libelf-dev >/dev/null 2>&1
 make libopenssl-dirclean 2>/dev/null || true

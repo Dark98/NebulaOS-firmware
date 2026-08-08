@@ -81,7 +81,7 @@ echo "== cross-compiling Klipper's chelper C extension =="
 docker run --label "openke-build-pid=$$" --rm \
 	-v "$VENDOR/klipper:/klipper" \
 	-v "$BUILDROOT_DIR/output:/buildroot-output" \
-	-w /klipper/klippy/chelper pellcorp/k1-bash-build bash -c '
+	-w /klipper/klippy/chelper "$PELLCORP_K1_BASH_BUILD_IMAGE" bash -c '
 	export PATH=/buildroot-output/host/bin:$PATH
 	make clean
 	make CC=mipsel-buildroot-linux-gnu-gcc
@@ -101,7 +101,7 @@ cp "$VENDOR/klipper/klippy/chelper/c_helper.so" "$WORK/debug-symbols/c_helper.so
 docker run --label "openke-build-pid=$$" --rm \
 	-v "$VENDOR/klipper:/klipper" \
 	-v "$BUILDROOT_DIR/output:/buildroot-output" \
-	-w /klipper/klippy/chelper pellcorp/k1-bash-build bash -c '
+	-w /klipper/klippy/chelper "$PELLCORP_K1_BASH_BUILD_IMAGE" bash -c '
 	export PATH=/buildroot-output/host/bin:$PATH
 	mipsel-buildroot-linux-gnu-strip --strip-unneeded c_helper.so
 '
@@ -213,7 +213,7 @@ fi
 # its own log file at all.
 echo "== downloading Moonraker's pure-Python deps with no Buildroot package =="
 mkdir -p "$WORK/pywheels"
-docker run --label "openke-build-pid=$$" --rm --user root -v "$WORK/pywheels:/wheels" pellcorp/k1-bash-build bash -c '
+docker run --label "openke-build-pid=$$" --rm --user root -v "$WORK/pywheels:/wheels" "$PELLCORP_K1_BASH_BUILD_IMAGE" bash -c '
 apt-get update >/dev/null 2>&1
 apt-get install -y python3-pip >/dev/null 2>&1
 pip3 download -d /wheels --no-deps \
@@ -228,7 +228,7 @@ for whl in "$WORK"/pywheels/*.whl; do
 done
 
 echo "== cross-compiling Moonraker's one real C extension: streaming-form-data =="
-docker run --label "openke-build-pid=$$" --rm --user root -v "$WORK/pywheels:/wheels" pellcorp/k1-bash-build bash -c '
+docker run --label "openke-build-pid=$$" --rm --user root -v "$WORK/pywheels:/wheels" "$PELLCORP_K1_BASH_BUILD_IMAGE" bash -c '
 apt-get update >/dev/null 2>&1
 apt-get install -y python3-pip >/dev/null 2>&1
 pip3 download -d /wheels --no-deps --no-binary :all: streaming-form-data==1.11.0
@@ -238,7 +238,7 @@ docker run --label "openke-build-pid=$$" --rm \
 	-v "$SYSROOT:/sysroot" \
 	-v "$TOOLCHAIN_HOST:/buildroot-host" \
 	-v "$WORK/streaming-form-data-1.11.0:/src" \
-	-w /src pellcorp/k1-bash-build bash -c '
+	-w /src "$PELLCORP_K1_BASH_BUILD_IMAGE" bash -c '
 	export PATH=/buildroot-host/bin:$PATH
 	mipsel-buildroot-linux-gnu-gcc -shared -fPIC -O2 \
 		-I/sysroot/usr/include/python3.11 \
@@ -256,7 +256,7 @@ cp "$WORK/streaming-form-data-1.11.0/streaming_form_data/_parser.cpython-311-mip
 docker run --label "openke-build-pid=$$" --rm \
 	-v "$TOOLCHAIN_HOST:/buildroot-host" \
 	-v "$WORK/streaming-form-data-1.11.0:/src" \
-	-w /src pellcorp/k1-bash-build bash -c '
+	-w /src "$PELLCORP_K1_BASH_BUILD_IMAGE" bash -c '
 	export PATH=/buildroot-host/bin:$PATH
 	mipsel-buildroot-linux-gnu-strip --strip-unneeded streaming_form_data/_parser.cpython-311-mipsel-linux-gnu.so
 '
@@ -296,7 +296,7 @@ rm -rf "$VENDOR/k1-ustreamer/build"
 docker run --label "openke-build-pid=$$" --rm \
 	-v "$VENDOR/k1-ustreamer:/src" \
 	-v "$TOOLCHAIN_HOST:/buildroot-host" \
-	-w /src pellcorp/k1-bash-build bash -c '
+	-w /src "$PELLCORP_K1_BASH_BUILD_IMAGE" bash -c '
 	set -e
 	# Append, not prepend: the Buildroot host/bin dir also carries its own
 	# internal automake-1.16/autoconf wrappers (built for its own package
@@ -380,7 +380,7 @@ echo "== cross-compiling v4l2-ctl (this project's own Buildroot toolchain) =="
 docker run --label "openke-build-pid=$$" --rm --user root \
 	-v "$VENDOR/v4l-utils:/src" \
 	-v "$TOOLCHAIN_HOST:/buildroot-host" \
-	-w /src pellcorp/k1-bash-build bash -c '
+	-w /src "$PELLCORP_K1_BASH_BUILD_IMAGE" bash -c '
 	set -e
 	apt-get update >/dev/null 2>&1
 	apt-get install -y autoconf automake libtool gettext autopoint pkg-config >/dev/null 2>&1

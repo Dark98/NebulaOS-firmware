@@ -377,7 +377,7 @@ else
 	echo "MISS DTB or dtc not found ($DTB / $DTC) - run 03-build-kernel-and-rootfs.sh first"
 fi
 
-docker run --rm --user root -v "$IMAGES:/img" pellcorp/k1-bash-build bash -c '
+docker run --rm --user root -v "$IMAGES:/img" "$PELLCORP_K1_BASH_BUILD_IMAGE" bash -c '
 apt-get -qq update >/dev/null 2>&1
 apt-get install -y -qq e2fsprogs >/dev/null 2>&1
 

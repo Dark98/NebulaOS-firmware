@@ -13,6 +13,14 @@ REPO_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
 ARTIFACT_DIR="$REPO_ROOT/artifacts/buildroot-halley5-v30-image"
 PACKAGE_ROOT="${1:-$REPO_ROOT/build-work/deploy-packages}"
 
+# Final Pre-Flash Audit mission (2026-08-08): DEPS_MANIFEST provides
+# PELLCORP_K1_BASH_BUILD_IMAGE (the digest-pinned toolchain container ref,
+# used below for the DTB decompile) - see manifests/dependencies.conf's
+# own comment on that entry.
+DEPS_MANIFEST="$REPO_ROOT/manifests/dependencies.conf"
+[ -f "$DEPS_MANIFEST" ] || { echo "FATAL: $DEPS_MANIFEST not found" >&2; exit 1; }
+. "$DEPS_MANIFEST"
+
 for required in "$ARTIFACT_DIR/xImage" "$ARTIFACT_DIR/rootfs.squashfs" "$ARTIFACT_DIR/build-manifest.txt" "$REPO_ROOT/baseline-difference.txt"; do
 	[ -f "$required" ] || { echo "FATAL: $required not found - run 05-final-build.sh and baseline-difference-gate.sh first" >&2; exit 1; }
 done
@@ -33,7 +41,7 @@ echo "== decompiling DTB for package inclusion =="
 DTB_SRC="$REPO_ROOT/vendor/buildroot-x2000/output/build/linux-custom/module_drivers/dts/x2000/halley5_v30.dtb"
 if [ -f "$DTB_SRC" ]; then
 	cp "$DTB_SRC" "$PKG_DIR/halley5_v30.dtb"
-	docker run --rm -v "$PKG_DIR:/pkg" pellcorp/k1-bash-build \
+	docker run --rm -v "$PKG_DIR:/pkg" "$PELLCORP_K1_BASH_BUILD_IMAGE" \
 		sh -c 'command -v dtc >/dev/null 2>&1 && dtc -I dtb -O dts /pkg/halley5_v30.dtb -o /pkg/halley5_v30.decompiled.dts 2>/dev/null || echo "dtc not available in build image" >&2' \
 		|| echo "WARNING: DTB decompile failed - halley5_v30.dtb (binary) still included, halley5_v30.dts (source) is the authoritative reference"
 else

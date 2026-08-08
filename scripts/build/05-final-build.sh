@@ -11,6 +11,15 @@ set -e
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
 
+# Final Pre-Flash Audit mission (2026-08-08): DEPS_MANIFEST provides
+# PELLCORP_K1_BASH_BUILD_IMAGE (the digest-pinned toolchain container ref)
+# - see manifests/dependencies.conf's own comment on that entry. Named
+# DEPS_MANIFEST, not MANIFEST, to not collide with this script's own,
+# unrelated later use of $MANIFEST for the build's own output manifest.
+DEPS_MANIFEST="$REPO_ROOT/manifests/dependencies.conf"
+[ -f "$DEPS_MANIFEST" ] || { echo "FATAL: $DEPS_MANIFEST not found" >&2; exit 1; }
+. "$DEPS_MANIFEST"
+
 # 2026-07-23: see 02-configure-buildroot.sh for why this lock exists.
 exec 9>"$REPO_ROOT/.nebulaos-build.lock"
 flock -n 9 || { echo "another build stage already owns $REPO_ROOT/.nebulaos-build.lock" >&2; exit 1; }
@@ -60,7 +69,7 @@ FINGERPRINT_BEFORE=$(source_fingerprint)
 
 docker run --label "openke-build-pid=$$" --rm --user root \
 	-v "$KERNEL_MOUNT:/kernel_6_6/kernel/kernel-6.6" \
-	-v "$BUILDROOT_DIR:/src" -w /src pellcorp/k1-bash-build bash -c '
+	-v "$BUILDROOT_DIR:/src" -w /src "$PELLCORP_K1_BASH_BUILD_IMAGE" bash -c '
 apt-get -qq update >/dev/null 2>&1
 apt-get install -y -qq python3 bc cpio rsync unzip bison flex libncurses5-dev file \
 	build-essential libssl-dev libelf-dev >/dev/null 2>&1
@@ -73,7 +82,7 @@ mkdir -p "$REPO_ROOT/artifacts/buildroot-halley5-v30-image"
 # to the real host user/group below needs root too.
 HOST_UID=$(id -u)
 HOST_GID=$(id -g)
-docker run --label "openke-build-pid=$$" --rm --user root -v "$REPO_ROOT:/repo" pellcorp/k1-bash-build bash -c "
+docker run --label "openke-build-pid=$$" --rm --user root -v "$REPO_ROOT:/repo" "$PELLCORP_K1_BASH_BUILD_IMAGE" bash -c "
 set -e
 cp '/repo/vendor/buildroot-x2000/output/images/xImage' '/repo/artifacts/buildroot-halley5-v30-image/xImage'
 cp '/repo/vendor/buildroot-x2000/output/images/rootfs.ext2' '/repo/artifacts/buildroot-halley5-v30-image/rootfs.ext2'

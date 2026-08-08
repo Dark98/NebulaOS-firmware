@@ -19,7 +19,9 @@ rootfs-overlay deletion gotcha) are all documented there with root causes, not j
 - Docker, with the `pellcorp/k1-bash-build` image pullable (the same MIPS cross-toolchain image
   used throughout this whole project - has both a Buildroot-independent
   `mips-gcc720-glibc229` toolchain *and* is the container these scripts run Buildroot's own build
-  inside).
+  inside). Pinned by immutable digest in `manifests/dependencies.conf`'s own
+  `PELLCORP_K1_BASH_BUILD_IMAGE` - every build script pulls that exact image, not a mutable
+  `:latest` tag (Final Pre-Flash Audit mission, 2026-08-08).
 - ~15GB free disk (kernel source, Buildroot's own internal toolchain build, and the final images
   add up) and a few hours of build time on a reasonably modern machine.
 - Internet access for the `git clone`/`curl` steps in `00-fetch-vendor-sources.sh` - this project's

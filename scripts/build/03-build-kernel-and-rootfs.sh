@@ -60,6 +60,13 @@ set -e
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
 
+# Final Pre-Flash Audit mission (2026-08-08): DEPS_MANIFEST provides
+# PELLCORP_K1_BASH_BUILD_IMAGE (the digest-pinned toolchain container ref)
+# - see manifests/dependencies.conf's own comment on that entry.
+DEPS_MANIFEST="$REPO_ROOT/manifests/dependencies.conf"
+[ -f "$DEPS_MANIFEST" ] || { echo "FATAL: $DEPS_MANIFEST not found" >&2; exit 1; }
+. "$DEPS_MANIFEST"
+
 # 2026-07-23: see 02-configure-buildroot.sh for why this lock exists.
 exec 9>"$REPO_ROOT/.nebulaos-build.lock"
 flock -n 9 || { echo "another build stage already owns $REPO_ROOT/.nebulaos-build.lock" >&2; exit 1; }
@@ -90,7 +97,7 @@ fi
 
 docker run --label "openke-build-pid=$$" --rm --user root \
 	-v "$KERNEL_MOUNT:/kernel_6_6/kernel/kernel-6.6" \
-	-v "$BUILDROOT_DIR:/src" -w /src pellcorp/k1-bash-build bash -c '
+	-v "$BUILDROOT_DIR:/src" -w /src "$PELLCORP_K1_BASH_BUILD_IMAGE" bash -c '
 # Stale-config purge (2026-07-31, per the NEBULAOS_CAMERA_USB_RT_SOURCE
 # _ANALYSIS.md vendor-pin audit): a real, previously-undetected gotcha was found on this
 # exact checkout - vendor/x2000_kernel_6.6/kernel/kernel-6.6/.config and

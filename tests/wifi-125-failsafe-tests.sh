@@ -50,6 +50,12 @@ exit "${FIXTURE_PING_EXIT:-1}"
 EOF
 chmod +x "$FIXTURE_BIN/ping"
 
+cat > "$FIXTURE_BIN/wpa_cli" <<'EOF'
+#!/bin/sh
+echo "wpa_state=FIXTURE_STATE"
+EOF
+chmod +x "$FIXTURE_BIN/wpa_cli"
+
 # Real, throwaway /sys/class/net-shaped fixture tree.
 make_sysnet() {
 	dir="$1"; carrier="$2"
@@ -75,10 +81,12 @@ run_start() {
 	dd if=/dev/zero bs=1 count=512 2>/dev/null | tr '\0' 'X' > "$marker"
 	printf 'ota:kernel2\n\n' | dd of="$marker" conv=notrunc 2>/dev/null
 
+	rm -f "$WORK/diagnostics.log"
 	PATH="$FIXTURE_BIN:$PATH" \
 		SENTINEL="$sentinel" MARKER_DEV="$marker" IFACE=wlan0 SYSNET="$sysnet" \
 		WIFI_125_FAILSAFE_TIMEOUT="$timeout" WIFI_125_FAILSAFE_INTERVAL="$interval" \
 		FIXTURE_HAS_IP="$has_ip" FIXTURE_HAS_ROUTE="$has_route" FIXTURE_PING_EXIT="$ping_exit" \
+		LOGFILE="$WORK/diagnostics.log" \
 		S98NEBULAOS_WIFI_125_FAILSAFE_NO_AUTORUN=1 \
 		sh -c ". '$FAILSAFE_SCRIPT'; start" > "$WORK/out.log" 2>&1
 	echo "$?" > "$WORK/rc"
@@ -108,6 +116,11 @@ if [ "$rc" -eq 0 ] && grep -q "cancelling failsafe" "$WORK/out.log" && printf '%
 else
 	fail "healthy Wi-Fi: expected fast cancel with marker untouched (rc=$rc): $(cat "$WORK/out.log")"
 fi
+if [ -f "$WORK/diagnostics.log" ] && grep -q "start (t=0s)" "$WORK/diagnostics.log" && grep -q "success" "$WORK/diagnostics.log"; then
+	pass "healthy Wi-Fi: diagnostics log written to the persistent LOGFILE path with start+success snapshots"
+else
+	fail "healthy Wi-Fi: diagnostics log missing expected start/success snapshots: $(cat "$WORK/diagnostics.log" 2>/dev/null)"
+fi
 
 # --- Test 3: sentinel present, Wi-Fi never comes up (no carrier at all) -
 # --- times out and reverts to stock, marker correctly rewritten --------
@@ -120,6 +133,12 @@ if [ "$rc" -ne 0 ] && [ "$marker_bytes" = "$(printf 'ota:kernel\n\n')" ] && grep
 	pass "Wi-Fi never associates: failsafe times out, reverts marker to stock, verified byte format"
 else
 	fail "Wi-Fi never associates: expected marker reverted to ota:kernel (rc=$rc, marker='$marker_bytes'): $(cat "$WORK/out.log")"
+fi
+if [ -f "$WORK/diagnostics.log" ] && grep -q "start (t=0s)" "$WORK/diagnostics.log" \
+	&& grep -q "timeout reached" "$WORK/diagnostics.log" && grep -q "wifi_healthy() sub-checks" "$WORK/diagnostics.log"; then
+	pass "Wi-Fi never associates: diagnostics log captured start+timeout snapshots on the persistent partition, survives the revert"
+else
+	fail "Wi-Fi never associates: diagnostics log missing expected content: $(cat "$WORK/diagnostics.log" 2>/dev/null)"
 fi
 
 # --- Test 4: carrier up but never gets an IP - still fails, still -------
@@ -173,6 +192,18 @@ test_readback_mismatch() {
 	fi
 }
 test_readback_mismatch
+
+# --- Test 7: periodic (~20s) diagnostic snapshots during a longer -------
+# --- failing run, not just start/end -------------------------------------
+
+sysnet7="$WORK/sysnet7"; make_sysnet "$sysnet7" "0"
+run_start 1 "$sysnet7" 0 0 1 45 5
+snapshot_count=$(grep -c "^=== S98nebulaos-wifi-125-failsafe diagnostics:" "$WORK/diagnostics.log" 2>/dev/null || echo 0)
+if [ "$snapshot_count" -ge 3 ]; then
+	pass "longer failing run: periodic diagnostic snapshots captured mid-wait, not just start/end ($snapshot_count total)"
+else
+	fail "longer failing run: expected at least 3 diagnostic snapshots (start, mid-wait, timeout), got $snapshot_count"
+fi
 
 echo
 echo "wifi-125-failsafe-tests: $PASS passed, $FAIL failed"

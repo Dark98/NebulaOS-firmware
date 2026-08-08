@@ -49,9 +49,41 @@ IFACE="${IFACE:-wlan0}"
 SYSNET="${SYSNET:-/sys/class/net}"
 TIMEOUT="${WIFI_125_FAILSAFE_TIMEOUT:-120}"
 INTERVAL="${WIFI_125_FAILSAFE_INTERVAL:-2}"
+# Diagnostic log on the SHARED, persistent /usr/data partition (mounted
+# identically regardless of which slot is active - FIRMWARE.md's own
+# mmcblk0p10 description) rather than anywhere under the rootfs itself:
+# dmesg/journal is wiped on every reboot, and a revert-to-stock reboot is
+# exactly this script's own failure path, so a plain rootfs-local log
+# would be destroyed at the exact moment it becomes most useful. Written
+# from custom, still readable from stock afterward - a real, found-live
+# gap (2026-08-09): the first WIFI-FW-125 boot's actual brcmfmac/
+# wpa_supplicant failure detail was unrecoverable once the device
+# reverted, since nothing had captured it anywhere persistent.
+LOGFILE="${LOGFILE:-/usr/data/wifi-125-test-diagnostics.log}"
 
 log() {
 	echo "S98nebulaos-wifi-125-failsafe: $1"
+}
+
+capture_diagnostics() {
+	label="$1"
+	{
+		echo "=== S98nebulaos-wifi-125-failsafe diagnostics: $label ($(date -u +%Y-%m-%dT%H:%M:%SZ), uptime $(cut -d' ' -f1 /proc/uptime 2>/dev/null)s) ==="
+		echo "--- wifi_healthy() sub-checks ---"
+		echo "iface present: $([ -d "$SYSNET/$IFACE" ] && echo yes || echo no)"
+		echo "carrier: $(cat "$SYSNET/$IFACE/carrier" 2>/dev/null || echo 'n/a')"
+		echo "operstate: $(cat "$SYSNET/$IFACE/operstate" 2>/dev/null || echo 'n/a')"
+		echo "--- ip addr show $IFACE ---"
+		ip addr show "$IFACE" 2>&1
+		echo "--- ip route show default dev $IFACE ---"
+		ip route show default dev "$IFACE" 2>&1
+		echo "--- wpa_cli status (if reachable) ---"
+		wpa_cli -i "$IFACE" status 2>&1
+		echo "--- dmesg: brcmfmac/CFG80211/wl0/firmware/clm lines ---"
+		dmesg 2>/dev/null | grep -aiE "brcmfmac|brcmutil|cfg80211|wl0|firmware|clm|nvram|sdio"
+		echo "=== end $label ==="
+		echo
+	} >> "$LOGFILE" 2>&1
 }
 
 wifi_healthy() {
@@ -108,19 +140,31 @@ fail_to_stock() {
 start() {
 	[ -f "$SENTINEL" ] || { log "no engineering-test sentinel ($SENTINEL) - not a WIFI-FW-125 build, nothing to do"; return 0; }
 
-	log "engineering-test sentinel present - Wi-Fi health gate armed (timeout ${TIMEOUT}s)"
+	log "engineering-test sentinel present - Wi-Fi health gate armed (timeout ${TIMEOUT}s), diagnostics -> $LOGFILE"
+	capture_diagnostics "start (t=0s)"
 
 	elapsed=0
+	last_captured=0
 	while [ "$elapsed" -lt "$TIMEOUT" ]; do
 		if wifi_healthy; then
 			fw=$(dmesg 2>/dev/null | sed -n 's/.*Firmware: \(.*\)/\1/p' | tail -1)
 			log "Wi-Fi healthy (fw: ${fw:-unknown}) after ${elapsed}s - cancelling failsafe, continuing normally"
+			capture_diagnostics "success (t=${elapsed}s)"
 			return 0
 		fi
 		elapsed=$((elapsed + INTERVAL))
+		# Periodic progress snapshot (every ~20s) rather than every
+		# INTERVAL - dmesg is cumulative for the whole boot already, so a
+		# tight per-iteration capture would just be redundant noise, not
+		# more information.
+		if [ "$((elapsed - last_captured))" -ge 20 ]; then
+			capture_diagnostics "still unhealthy (t=${elapsed}s)"
+			last_captured="$elapsed"
+		fi
 		sleep "$INTERVAL"
 	done
 
+	capture_diagnostics "timeout reached (t=${elapsed}s) - about to revert"
 	fail_to_stock "$(dmesg 2>/dev/null | sed -n 's/.*Firmware: \(.*\)/\1/p' | tail -1)"
 }
 

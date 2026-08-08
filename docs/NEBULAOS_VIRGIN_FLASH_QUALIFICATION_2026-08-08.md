@@ -137,3 +137,94 @@ This backup is complete, checksummed, and left untouched at an inert
 location off the device, outside anything Phase 5's virgin-state reset or
 Phase 6's flash can affect. Not deleted; not to be restored before
 qualification (Phase 5's own explicit instruction).
+
+## Phase 5: virgin-state reset
+
+**User caught a real safety error before this ran**: my original plan was
+to run the reset while still booted on custom, where Klipper/Moonraker
+were actively running against the exact paths being deleted (`/opt/moonraker`,
+`/opt/printer_data` etc. are bind-mounted from the same underlying
+directories) - deleting the source out from under live processes could
+have crashed them mid-write or corrupted an in-flight SQLite transaction.
+Corrected: cycled to stock first (`write_ota_marker "ota:kernel"` +
+reboot), confirmed genuinely booted on stock (`root=/dev/mmcblk0p7`,
+stock's own dropbear version/password), confirmed stock's own separate
+Klipper/Moonraker/GuppyScreen stack (different, unrelated top-level paths -
+`/usr/share/klipper`, `/usr/data/moonraker`, `/usr/data/guppyscreen`) was
+idle, and confirmed no live process anywhere had `/usr/data/nebulaos` as
+its cwd. Reset then ran with zero risk:
+
+```
+rm -rf /usr/data/nebulaos/apps /usr/data/nebulaos/envs \
+       /usr/data/nebulaos/system /usr/data/nebulaos/printer_data
+```
+
+Verified: all four gone, `/usr/data` free space rose from 67MB to 402.5MB.
+Left untouched (not part of what influences first-boot provisioning):
+`backups/`, `updates/`, `maintenance/`, `loadcell-test-backup-20260805/`,
+`display-qualified.conf`, `wpa_supplicant.conf`.
+
+## Phase 6: flash
+
+Staged the package (`xImage`, `rootfs.squashfs`, `build-manifest.txt`,
+`flash-spare-slot.sh`) to the device via `scp -O` while still on stock;
+independently re-verified transfer integrity with `sha256sum` before
+touching the flash script at all. `--check-only` preflight: `result:
+SAFE TO FLASH` (active slot 1/stock, target slot 2/custom, confirmed
+inactive). Real write: both images written and read-back-verified by the
+script's own internal MD5 comparison; independently cross-checked those
+exact MD5s against the local package files afterward - exact match. Stock
+partitions (mmcblk0p5/p7) never touched - only mmcblk0p6/p8. OTA marker
+flipped via the real on-device toggle mechanism (`ota_local_method.sh`'s
+`local_set_next_boot_device`, read-verified before and after), synced,
+then rebooted.
+
+## Phase 7: proving a genuine virgin first boot
+
+**First reboot attempt surfaced a real bug, in my own Phase 5 scope, not
+in the shipped image**: after ~5 minutes uptime, `/usr/data/nebulaos/apps/klipper`
+still had no `.git` - `S04nebulaos-factory-seed` had not populated it, yet
+Klipper was already reporting `klippy_state: "ready"` (running from the
+separate, immutable copy baked directly into the squashfs at `/opt/klipper`,
+not the intended persistent bind-mounted path - `/opt/klipper` was not
+bind-mounted at all on this boot). Root cause found directly: a **stale
+lock file**, `/usr/data/nebulaos/updates/locks/klipper.lock`, dated
+2026-08-07 - left over from the OLD image, outside Phase 5's reset scope
+(which only covered `apps/envs/system/printer_data`) - permanently
+satisfies `S04nebulaos-factory-seed`'s own `maintenance_gate_ok()` refusal
+condition (`[ -d "$LOCKDIR" ] && [ -n "$(ls -A "$LOCKDIR")" ]`), silently
+blocking real seeding on every boot. `S99confirm-good` does not check
+whether persistent seeding actually succeeded, only Moonraker's own
+`klippy_state` - so the system reported itself healthy and even flipped
+the OTA marker forward, despite factory-seed never having run. Removed
+the stale lock, rebooted again (marker was already `ota:kernel2`, so a
+plain reboot correctly returned to custom) - this second boot is the
+device's genuine, unblocked virgin first boot.
+
+Verified directly on the resulting live system:
+
+- `app-generation.json`: `migration_version: 32eb40a307874aa1`,
+  `klipper_commit: 462fd689...` (exact `KLIPPER_PIN` match),
+  `moonraker_commit: d5ee171...` (exact `MOONRAKER_PIN` match) - a
+  genuinely new marker, did not exist before this deployment at all.
+- `/usr/data/nebulaos/system/migration-backups/`: does not exist - no
+  redundant reseed happened (the fresh-boot-ordering fix from the earlier
+  mission is confirmed working on real hardware, not just offline tests).
+- Klipper checkout: `HEAD 462fd689...`, branch `master`, origin the
+  canonical fork URL, `git status --porcelain` (excluding the one
+  allowlisted `c_helper.so` path) completely clean - no local
+  modifications.
+- `printer.cfg`: `[nebulaos_version]`/`[prtouch_v2]`/`[z_compensate]` all
+  present, `bed_add_temp: 60` present - this section set did not exist in
+  the pre-deployment backup at all, direct proof it came from the new
+  factory seed, not carried over.
+- `klippy/chelper/c_helper.so`: MD5 `616ac242...`, confirmed **different**
+  from the old backup's own copy (MD5 `e0da43c2...`) - the old compiled
+  helper was not reused.
+- GuppyScreen (`/opt/guppyscreen/guppyscreen`): MD5 `3ec55f6d...`, an
+  **exact match** against the same binary extracted directly from the
+  verified package's own `rootfs.squashfs` - confirmed canonical, not a
+  leftover.
+- Explicit search for old-state evidence: the old Klipper HEAD
+  (`d839d0375...`) and old branch (`nebulaos`) do not appear anywhere in
+  the live checkout's refs.

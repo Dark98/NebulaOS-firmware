@@ -50,6 +50,10 @@ SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
 BIN_DEST="$REPO_ROOT/scripts/build/overlay/lib/firmware/brcm/brcmfmac43430-sdio.bin"
 CLM_DEST="$REPO_ROOT/scripts/build/overlay/lib/firmware/cypress/cyfmac43430-sdio.clm_blob"
+# Engineering-test metadata: the ONE file that actually arms
+# S98nebulaos-wifi-125-failsafe (that script is a no-op, by construction,
+# whenever this file is absent - true for every normal canonical build).
+SENTINEL_DEST="$REPO_ROOT/scripts/build/overlay/etc/nebulaos-wifi-125-test-marker"
 CONTROL_BIN_MARKER="$REPO_ROOT/build-work/wifi-firmware-125-variant-control-bin.sha256"
 MARKER="$REPO_ROOT/build-work/wifi-firmware-125-variant-applied.txt"
 
@@ -95,10 +99,14 @@ case "$ACTION" in
 		mkdir -p "$(dirname "$CLM_DEST")"
 		cp -f "$SRC_CLM" "$CLM_DEST"
 
+		mkdir -p "$(dirname "$SENTINEL_DEST")"
+		printf 'WIFI-FW-125 engineering test - see docs/NEBULAOS_WIFI_125_ENGINEERING_TEST.md\n' > "$SENTINEL_DEST"
+
 		printf 'WIFI-FW-125\n' > "$MARKER"
 		echo "== wifi-firmware-125-variant: APPLIED =="
 		echo "   $BIN_DEST -> $(sha256sum "$BIN_DEST" | cut -d' ' -f1)"
 		echo "   $CLM_DEST -> $(sha256sum "$CLM_DEST" | cut -d' ' -f1)"
+		echo "   $SENTINEL_DEST created - arms S98nebulaos-wifi-125-failsafe"
 		echo "   NVRAM (.txt) untouched - control baseline value preserved"
 		;;
 	revert)
@@ -107,9 +115,11 @@ case "$ACTION" in
 		fi
 		rm -f "$CLM_DEST"
 		rmdir "$(dirname "$CLM_DEST")" 2>/dev/null || true
+		rm -f "$SENTINEL_DEST"
 		rm -f "$CONTROL_BIN_MARKER" "$MARKER"
 		echo "== wifi-firmware-125-variant: REVERTED =="
 		echo "   $CLM_DEST removed - Buildroot's own linux-firmware package supplies the control CLM again"
+		echo "   $SENTINEL_DEST removed - S98nebulaos-wifi-125-failsafe reverts to its normal no-op state"
 		echo "   $BIN_DEST left as-is - re-run scripts/build/fetch-wifi-firmware.sh to restore the real control .bin from stock"
 		;;
 	*)

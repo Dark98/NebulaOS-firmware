@@ -368,3 +368,33 @@ notice (expected on a device without a clean shutdown before reboot,
 already a known/benign message class in this project). Pinctrl: same
 3-line, all-success sequence as every other boot checked this mission -
 zero warnings.
+
+## Phase 11: canonical baseline
+
+Every required live check (Phases 3-10) passed. The canonical baseline
+tag is placed on `91a190e4cd6b128de1cc071012e899cbd44b53a4` - the exact
+commit that produced the flashed, verified, live-qualified package - not
+on this document's own later HEAD (which only ever adds qualification
+records, never anything build-affecting; see Phase 1's own independent
+re-verification of that split).
+
+| Component | SHA |
+|---|---|
+| Firmware source (tagged commit) | `91a190e4cd6b128de1cc071012e899cbd44b53a4` |
+| Documentation HEAD (this record's own tip) | `bf5a0ab41eefddf58f0409e6605a395d77a04485` |
+| Kernel | `295b7101d751fd888ae39e6f1746a4a940664a5f` |
+| Klipper | `462fd689448fb1d1946a9b0dcf81a9d7b9112254` |
+| Moonraker | `d5ee17128bb88434aacdab90c2e9e990e2b64e4a` |
+| GuppyScreen | `be5d372c0d0c693adff3c23adf2655584bb2961e` |
+| Buildroot | `74d020081096972857acdb9e76c6c5335455d430` |
+| `pellcorp/k1-bash-build` image | `sha256:0b96d1d65175c5a2e3a83a64c3212d08dd774fef0900f991e0ebc570ba896c85` |
+| WiFi firmware | `60dbb5b77b2c232e513322e0ff4350ab5dab5a9fcad0e26e80a2f089e652d720` |
+| `xImage` | `03ff00fdf34d02e9f54183d5e44eef3be628456edc50c716bcd70a5b7d8a9a44` |
+| `rootfs.squashfs` | `9d2ed16abf40d17171761135c8cfd962ad07657d00850d6fa444a892a7d9e7fd` |
+| Persistent app generation | `32eb40a307874aa1` |
+
+This is the first baseline in this project's history that is genuinely
+virgin-flashed (persistent state archived off-device and reset, not
+carried over) and live-qualified end to end on real hardware from that
+exact virgin state - not merely built and deployed onto an
+already-provisioned device.

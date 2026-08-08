@@ -37,7 +37,60 @@ PIDFILE=/var/run/moonraker.pid
 PYTHON3=/usr/bin/python3
 [ -x /usr/data/nebulaos/envs/moonraker/bin/python3 ] && PYTHON3=/usr/data/nebulaos/envs/moonraker/bin/python3
 
-start() {
+# Final Baseline Closure mission (2026-08-08): a genuine first-boot
+# startup race, distinct from (but related to) S55klipper's own
+# already-documented venv-discovery bug above. Root-caused by reading the
+# pinned Moonraker source directly (moonraker/components/update_manager/
+# update_manager.py's PackageUpdateManager.__init__ ->
+# common.get_base_configuration(); moonraker/components/app_deploy.py's
+# _configure_virtualenv; moonraker/server.py's load_components/
+# load_component):
+#
+#   - update_manager reads Klipper's reserved-slot path/executable from
+#     KlippyConnection's in-memory _path/_executable fields SYNCHRONOUSLY
+#     at Moonraker's own component-load time (server.load_components(),
+#     called once, at startup, before Moonraker has ever attempted to
+#     connect to Klippy's own socket) - there is no retry.
+#   - Those fields are seeded from KlippyConnection.load_saved_state(),
+#     which restores whatever was last persisted to Moonraker's own
+#     database from a PREVIOUS successful identify - or, if none has ever
+#     been recorded (a genuinely fresh moonraker.db), from hardcoded
+#     class defaults (~/klippy-env/bin/python).
+#   - If that value is wrong at the exact instant update_manager reads it
+#     - because Klippy hasn't identified even once yet this boot, or
+#     because an earlier boot recorded a bad value (e.g. Klippy having
+#     had to fall back to bare /usr/bin/python3 - see S55klipper's own
+#     comment) - update_manager raises a ConfigError. server.py's
+#     load_component() catches this for optional/non-core components
+#     (update_manager is loaded via that path) and does NOT crash the
+#     rest of Moonraker: Klipper connectivity, Mainsail, GuppyScreen all
+#     keep working, but update_manager is permanently added to
+#     self.failed_components for that process's entire lifetime (no
+#     component reload mechanism exists) - confirmed live 2026-08-08,
+#     recovered with a single `S56moonraker restart`. That single restart
+#     works because, by the time it runs, Klippy has already connected
+#     and identified during the FIRST (still-running) Moonraker process,
+#     persisting the now-correct value to the database for the new
+#     process's own load_saved_state() to pick up.
+#
+# Fix: after every start, poll Moonraker's own /server/info (same
+# unauthenticated-from-localhost convention nebulaos-maintenance-gate.sh's
+# maintenance_gate_ok() already uses) for up to
+# $MOONRAKER_INFO_POLL_TIMEOUT seconds, and if update_manager shows up in
+# its failed_components list, restart Moonraker exactly once - this is
+# the identical recovery a human was doing by hand, now automatic and
+# bounded (never loops/retries a second time, so a genuine persistent
+# misconfiguration still surfaces as a real, visible failed_components
+# entry rather than restart-looping forever).
+MOONRAKER_INFO_URL="${MOONRAKER_INFO_URL:-http://127.0.0.1:7125/server/info}"
+MOONRAKER_INFO_POLL_TIMEOUT="${MOONRAKER_INFO_POLL_TIMEOUT:-30}"
+MOONRAKER_INFO_POLL_INTERVAL="${MOONRAKER_INFO_POLL_INTERVAL:-1}"
+
+log() {
+	echo "S56moonraker: $1"
+}
+
+start_daemon() {
 	echo "Starting moonraker (using $PYTHON3)"
 	start-stop-daemon -S -b -m -p "$PIDFILE" \
 		-x "$PYTHON3" -- \
@@ -56,21 +109,63 @@ stop() {
 	start-stop-daemon -K -p "$PIDFILE"
 }
 
-case "$1" in
-	start)
-		start
-		;;
-	stop)
-		stop
-		;;
-	restart)
-		stop
-		start
-		;;
-	*)
-		echo "Usage: $0 {start|stop|restart}"
-		exit 1
-		;;
-esac
+# Waits for Moonraker's HTTP API to answer at all (it takes a few seconds
+# to come up), then returns its /server/info body on stdout. Returns
+# non-zero (nothing on stdout) if it never answers within the timeout -
+# treated as "can't tell, don't second-guess it" by the caller, not as a
+# failure signal in itself.
+wait_for_server_info() {
+	elapsed=0
+	while [ "$elapsed" -lt "$MOONRAKER_INFO_POLL_TIMEOUT" ]; do
+		info=$(wget -q -O - --timeout=2 "$MOONRAKER_INFO_URL" 2>/dev/null)
+		if [ -n "$info" ]; then
+			echo "$info"
+			return 0
+		fi
+		sleep "$MOONRAKER_INFO_POLL_INTERVAL"
+		elapsed=$((elapsed + MOONRAKER_INFO_POLL_INTERVAL))
+	done
+	return 1
+}
 
-exit 0
+recover_update_manager_if_needed() {
+	info=$(wait_for_server_info) || {
+		log "server/info did not respond within ${MOONRAKER_INFO_POLL_TIMEOUT}s - skipping the first-boot update_manager recovery check (Moonraker may still be starting; nothing further this script can safely do)"
+		return 0
+	}
+	failed=$(printf '%s' "$info" | grep -o '"failed_components"[[:space:]]*:[[:space:]]*\[[^]]*\]')
+	case "$failed" in
+		*'"update_manager"'*)
+			log "update_manager failed to load on this start (known first-boot venv-discovery race - see this script's own header) - restarting once so it re-reads Klipper's now-identified venv path"
+			stop
+			start_daemon
+			;;
+		*)
+			;;
+	esac
+}
+
+start() {
+	start_daemon
+	recover_update_manager_if_needed
+}
+
+if [ -z "${S56MOONRAKER_NO_AUTORUN:-}" ]; then
+	case "$1" in
+		start)
+			start
+			;;
+		stop)
+			stop
+			;;
+		restart)
+			stop
+			start
+			;;
+		*)
+			echo "Usage: $0 {start|stop|restart}"
+			exit 1
+			;;
+	esac
+	exit 0
+fi

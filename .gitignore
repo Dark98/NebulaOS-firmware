@@ -30,6 +30,15 @@ scripts/build/overlay/lib/firmware/brcm/brcmfmac43430-sdio.bin
 scripts/build/overlay/lib/firmware/brcm/brcmfmac43430-sdio.txt
 /vendor-downloads/
 
+# CLM blob for the same chip - Cypress's own LICENCE.cypress EULA (not
+# ISC like wireless-regdb below), fetched-and-verified by
+# scripts/firmware/fetch-linux-firmware-clm.sh from the same public
+# linux-firmware distribution Buildroot's own package already pins -
+# same "fetch at build time, never a committed binary" treatment as the
+# proprietary WiFi firmware above.
+scripts/build/overlay/lib/firmware/brcm/brcmfmac43430-sdio.clm_blob
+scripts/build/overlay/lib/firmware/brcm/brcmfmac43430-sdio.clm_blob.LICENCE
+
 # wireless-regdb (ISC-licensed, but still fetched-and-verified rather than
 # committed, so a version bump is a reviewable diff to the fetch script, not
 # a silent binary swap in git history) - scripts/firmware/fetch-wireless-regdb.sh.

@@ -664,7 +664,20 @@ echo "== factory seeds created: $(ls -la "$OVERLAY/opt/nebulaos-seeds/") =="
 # SSH commands. firmware_tag intentionally allows an unclean git describe
 # (e.g. "...-5-gdc241c8") - that just means this build is N commits past
 # the last tag, a normal and honest thing to report, not an error.
-firmware_tag=$(git -C "$REPO_ROOT" describe --tags 2>/dev/null || echo "unknown")
+#
+# Virgin-Baseline Fix + Rebuild mission (2026-08-08): --match 'nebulaos-*'
+# is required, not cosmetic - real bug found live in this mission's own
+# fresh-build output: a vendor-dependency-archive release tag
+# (v4l-utils-vendor-src-3b22ab0, created to carry a downloadable pinned
+# source asset, not to mark a NebulaOS release) sits on this same linear
+# main-branch history and is chronologically newer than every real
+# baseline tag, so a plain `git describe --tags` picked IT as the
+# "nearest" tag and reported a firmware_tag that looks like a dependency
+# archive version, not a NebulaOS baseline. Every real baseline tag this
+# project creates is named nebulaos-*; every asset-carrier tag (this one,
+# wifi-firmware-v1.0.0) is not - restricting the match pattern is what
+# actually fixes this, not a coincidence of current tag names.
+firmware_tag=$(git -C "$REPO_ROOT" describe --tags --match 'nebulaos-*' 2>/dev/null || echo "unknown")
 cat > "$OVERLAY/opt/nebulaos-version.json" <<EOF
 {
   "build_date": "$build_date",

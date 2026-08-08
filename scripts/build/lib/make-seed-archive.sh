@@ -135,36 +135,35 @@ make_seed_archive() {
 	git -C "$tmp" config "branch.$active_branch.remote" origin
 	git -C "$tmp" config "branch.$active_branch.merge" "refs/heads/$active_branch"
 
-	# Discard local build-artifact drift on the one known, understood
-	# tracked binary this repeatedly reproduces on (klippy/chelper/
-	# c_helper.so - a host-recompiled x86 .so left over from a developer
-	# running `make` locally, outside this project's own cross-compile
-	# pipeline, that must never ship to the MIPS target). Real bug found
-	# while writing this function's own tests: an earlier version did a
-	# blanket `git checkout -- .`, which discards ANY tracked-file
-	# modification - that silently defeated the dirty-tree rejection
-	# below for every tracked file, not just this one binary (confirmed
-	# live: a deliberately dirtied source file was wiped clean before the
-	# check ever ran, so "reject a dirty tree" never actually fired).
-	# Only ever discard this specific, known-safe path; anything else
-	# dirty must still fail the check below.
+	# Discard a wrong-architecture klippy/chelper/c_helper.so before
+	# packaging (e.g. a host-recompiled x86 .so left over from a
+	# developer running `make` locally, outside this project's own
+	# cross-compile pipeline - must never ship to the MIPS target). Real
+	# bug found while writing this function's own tests: an earlier
+	# version did a blanket `git checkout -- .`, which discards ANY
+	# tracked-file modification - that silently defeated the dirty-tree
+	# rejection below for every tracked file, not just this one binary
+	# (confirmed live: a deliberately dirtied source file was wiped clean
+	# before the check ever ran, so "reject a dirty tree" never actually
+	# fired). Only ever discard this specific, known-safe path; anything
+	# else dirty must still fail the check below.
 	#
-	# Production optimization mission, Phase 9 (2026-07-30): real bug
-	# found live once 06-verify.sh's own SimpleAF-era shell-quoting bug
-	# (an unescaped apostrophe closing this script's docker heredoc early
-	# - see 06-verify.sh) was fixed and its seed-archive/immutable-
-	# baseline comparison check finally ran for the first time - this
-	# checkout was unconditional, discarding the real cross-compiled MIPS
-	# c_helper.so the actual build pipeline (04-cross-compile-app-
-	# stack.sh) always produces right before calling this function, not
-	# just a genuine stray host artifact, silently reverting every seed
-	# archive back to whatever untrusted binary happens to be committed
-	# in the vendor tree. Only discard it now if it is provably NOT the
-	# correct target architecture (a real host-arch accident), never a
-	# properly cross-compiled one.
+	# Final Baseline Closure mission (2026-08-08): c_helper.so is no
+	# longer git-tracked at all as of KLIPPER_PIN 845396f0 (it is a
+	# generated build artifact, not source - see that pin's own commit
+	# message and docs/NEBULAOS_C_HELPER_DIRTY_STATE_FIX.md), so there is
+	# no longer a committed "known good" version for `git checkout` to
+	# restore - that call would now fail every time (pathspec unknown to
+	# git) and silently no-op behind its own `|| true`. A plain `rm -f`
+	# achieves the same real safety property (never package a
+	# wrong-architecture binary) more directly: a missing c_helper.so
+	# fails loudly downstream (Klippy's own get_ffi() has no on-device
+	# build fallback - see NebulaOS-klipper's klippy/chelper/__init__.py)
+	# rather than silently shipping a binary that would have failed just
+	# as loudly, just less predictably.
 	if [ -e "$tmp/klippy/chelper/c_helper.so" ] \
 		&& ! file -b "$tmp/klippy/chelper/c_helper.so" | grep -qi "MIPS"; then
-		git -C "$tmp" checkout -q -- klippy/chelper/c_helper.so 2>/dev/null || true
+		rm -f "$tmp/klippy/chelper/c_helper.so"
 	fi
 
 	# Defense in depth: this archive must contain zero synthetic history

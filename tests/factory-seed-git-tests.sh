@@ -214,6 +214,35 @@ else
 	fail "make_seed_archive with sparse_exclude was unexpectedly rejected: $out"
 fi
 
+# Test: a wrong-architecture klippy/chelper/c_helper.so (e.g. a host-arch
+# binary from a developer's local `make`, never the real cross-compile
+# pipeline's MIPS output) is discarded from the packaged archive entirely,
+# not silently shipped. Final Baseline Closure mission (2026-08-08): this
+# path used to `git checkout -- ` a committed "known good" fallback, but
+# KLIPPER_PIN 845396f0 untracked c_helper.so entirely (it's a generated
+# build artifact, not source - see that commit's own message), so there is
+# no longer a tracked version to fall back to; the fixed behavior is a
+# plain `rm -f`, verified here by committing a real (tracked, so the tree
+# stays clean going in) non-MIPS placeholder and confirming it never makes
+# it into the packaged tar.
+rm -rf "$M/wrongarch-src" "$M/wrongarch-check"
+build_real_repo "$M/wrongarch-src" master ""
+mkdir -p "$M/wrongarch-src/klippy/chelper"
+echo "pretend host-arch binary, not real MIPS ELF" > "$M/wrongarch-src/klippy/chelper/c_helper.so"
+git -C "$M/wrongarch-src" add -A
+git -C "$M/wrongarch-src" -c user.email=t@l -c user.name=t commit -q -m "add wrong-arch chelper"
+if out=$(make_seed_archive "$M/wrongarch-src" master "https://example.invalid/wrongarch.git" "$M/wrongarch.tar.gz" 2>&1) && [ -f "$M/wrongarch.tar.gz" ]; then
+	mkdir -p "$M/wrongarch-check"
+	tar -xzf "$M/wrongarch.tar.gz" -C "$M/wrongarch-check"
+	if [ ! -e "$M/wrongarch-check/klippy/chelper/c_helper.so" ]; then
+		pass "wrong-architecture c_helper.so is discarded, not packaged into the archive"
+	else
+		fail "wrong-architecture c_helper.so was packaged into the archive - should have been discarded"
+	fi
+else
+	fail "wrong-architecture c_helper.so caused the whole archive to be unexpectedly rejected: $out"
+fi
+
 # --- Part 2: seed_git_app() (on-device first-boot consumption) --------
 
 S="$WORK/seed-git-app"

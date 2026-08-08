@@ -31,7 +31,8 @@ require_pin() {
 for required in KERNEL_REPO KERNEL_BRANCH KERNEL_PIN BUILDROOT_REPO BUILDROOT_PIN \
 	PELLCORP_CREALITY_REPO PELLCORP_CREALITY_PIN KLIPPER_REPO KLIPPER_BRANCH KLIPPER_PIN \
 	MOONRAKER_REPO MOONRAKER_PIN K1_USTREAMER_REPO K1_USTREAMER_PIN \
-	V4L_UTILS_REPO V4L_UTILS_PIN MAINSAIL_TAG MAINSAIL_SHA256 \
+	V4L_UTILS_REPO V4L_UTILS_PIN V4L_UTILS_ARCHIVE_URL V4L_UTILS_ARCHIVE_SHA256 \
+	MAINSAIL_TAG MAINSAIL_SHA256 \
 	WIFI_FIRMWARE_RELEASE_TAG WIFI_FIRMWARE_RELEASE_URL WIFI_FIRMWARE_ARCHIVE_SHA256 \
 	WIFI_FIRMWARE_BIN_SHA256 WIFI_FIRMWARE_TXT_SHA256 \
 	GUPPYSCREEN_REPO GUPPYSCREEN_BRANCH GUPPYSCREEN_PIN GUPPYSCREEN_VERSION GUPPYSCREEN_THEME; do
@@ -240,7 +241,55 @@ git -C k1-ustreamer submodule update --init --recursive
 # toolchain cross-compiles (pellcorp/k1-bash-build) has no python3/meson/
 # ninja, so staying on the plain autotools ./configure && make build here
 # avoids adding that whole toolchain just for one diagnostic utility.
-clone_pinned v4l-utils "$V4L_UTILS_REPO" "$V4L_UTILS_PIN"
+#
+# Virgin-Baseline Fix + Rebuild mission (2026-08-08): NOT clone_pinned - a
+# live clone from git.linuxtv.org (the canonical upstream, still the
+# source of truth for V4L_UTILS_REPO/PIN's identity) had a real, observed
+# outage mid-build, twice, on separate fresh-clone attempts, putting a
+# third-party server's uptime on this build's critical path for one
+# diagnostic utility. Fetches a deterministic, SHA256-pinned archive of
+# the exact same pinned commit instead - see manifests/dependencies.conf's
+# own comment on how that archive's content was independently verified
+# before publishing. Same re-verify-every-run property as clone_pinned
+# (HEAD/origin checked below unconditionally, not just on first fetch).
+if [ ! -d v4l-utils/.git ]; then
+	echo "== fetching v4l-utils @ $V4L_UTILS_PIN (pinned archive, not a live clone) =="
+	V4L_UTILS_ARCHIVE="$REPO_ROOT/vendor-downloads/v4l-utils-pinned-src.tar.gz"
+	mkdir -p "$(dirname "$V4L_UTILS_ARCHIVE")"
+	curl -sL -o "$V4L_UTILS_ARCHIVE" "$V4L_UTILS_ARCHIVE_URL"
+	v4l_archive_actual_sha256=$(sha256sum "$V4L_UTILS_ARCHIVE" | awk '{print $1}')
+	# Same private-repo fallback as the WiFi firmware fetch above.
+	if [ "$v4l_archive_actual_sha256" != "$V4L_UTILS_ARCHIVE_SHA256" ] && command -v gh >/dev/null 2>&1; then
+		echo "== plain curl fetch did not match the pinned hash - retrying via gh release download (private repo) =="
+		gh release download v4l-utils-vendor-src-3b22ab0 \
+			--repo coreflake1/NebulaOS-firmware \
+			--pattern "$(basename "$V4L_UTILS_ARCHIVE_URL")" \
+			--output "$V4L_UTILS_ARCHIVE" --clobber \
+			|| echo "WARNING: gh release download also failed - see the FATAL check below for the real error" >&2
+		v4l_archive_actual_sha256=$(sha256sum "$V4L_UTILS_ARCHIVE" | awk '{print $1}')
+	fi
+	if [ "$v4l_archive_actual_sha256" != "$V4L_UTILS_ARCHIVE_SHA256" ]; then
+		echo "FATAL: $V4L_UTILS_ARCHIVE sha256 is $v4l_archive_actual_sha256, expected pinned $V4L_UTILS_ARCHIVE_SHA256" >&2
+		echo "Either the download is corrupt/tampered, gh is missing or unauthenticated and the repo is still" >&2
+		echo "private, or this is a deliberate, reviewed bump - if so, update V4L_UTILS_ARCHIVE_SHA256 in $MANIFEST." >&2
+		exit 1
+	fi
+	rm -rf v4l-utils
+	mkdir -p v4l-utils
+	tar xzf "$V4L_UTILS_ARCHIVE" -C v4l-utils
+	echo "== v4l-utils pinned archive verified and extracted =="
+fi
+v4l_utils_actual=$(git -C v4l-utils rev-parse HEAD 2>/dev/null || echo "unknown")
+if [ "$v4l_utils_actual" != "$V4L_UTILS_PIN" ]; then
+	echo "FATAL: vendor/v4l-utils HEAD is $v4l_utils_actual, expected pinned commit $V4L_UTILS_PIN" >&2
+	exit 1
+fi
+v4l_utils_origin=$(git -C v4l-utils remote get-url origin 2>/dev/null || echo "")
+if [ "$v4l_utils_origin" != "$V4L_UTILS_REPO" ]; then
+	echo "FATAL: vendor/v4l-utils origin is '$v4l_utils_origin', expected $V4L_UTILS_REPO" >&2
+	exit 1
+fi
+echo "== v4l-utils pinned commit verified ($V4L_UTILS_PIN) =="
 
 # GuppyScreen (project-specific frontend, consumes the z_compensate
 # structured status contract) - previously NOT pinned or fetched by this

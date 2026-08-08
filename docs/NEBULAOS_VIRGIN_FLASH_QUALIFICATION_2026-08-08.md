@@ -341,3 +341,30 @@ After Recovery, confirmed all required post-conditions directly:
 
 Recovery did not revert any accepted baseline content - confirmed
 directly, not assumed.
+
+## Phase 10: warm reboot + soak
+
+Confirmed idle immediately before, then issued a plain `reboot` (custom
+slot, no OTA marker change beforehand - the standard warm-reboot path).
+`S00revert-safety` correctly reset the marker to `ota:kernel` on boot
+start (its own unconditional default); `S99confirm-good` correctly
+flipped it back to `ota:kernel2` once Klipper/Moonraker were confirmed
+healthy. `root=/dev/mmcblk0p8` unchanged - custom slot remained selected
+throughout. `update_manager` loaded cleanly on the first attempt this
+time (no restart needed - the Phase 8 race was specific to the genuinely
+first, cold provisioning boot).
+
+Soak (~220s uptime at check time): all services still running (nginx,
+webcam, ustreamer, Klipper, Moonraker, GuppyScreen), WiFi still connected
+(`Office_2.4Ghz`), printer still idle. `dmesg` grep for error/fail/oops/
+panic/BUG/warn found four lines, all at boot timestamps 0.0-1.1s (long
+before the soak's own observation window) - `ingenic-dma`/`ingenic-tcu`
+IRQ-not-found probe-ordering messages and one `mmc1: Failed to initialize
+a non-removable card` immediately followed (a few lines later in the same
+early boot) by `mmc1: new high speed SDIO card at address 0001` succeeding -
+a resolved-by-retry transient, not an ongoing fault; live WiFi
+connectivity is the direct proof. One `EXT4-fs ... mounting unchecked fs`
+notice (expected on a device without a clean shutdown before reboot,
+already a known/benign message class in this project). Pinctrl: same
+3-line, all-success sequence as every other boot checked this mission -
+zero warnings.

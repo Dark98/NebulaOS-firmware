@@ -84,3 +84,44 @@ motion, touch detection) has never been exercised on this build (see
 from every print-start would be exactly the kind of unproven guess this
 project has consistently avoided. Wiring that integration in is real,
 separate, future work, requiring an actual live motion test first.
+
+## Load-cell scope for this baseline (Final Pre-Flash Audit, 2026-08-08)
+
+Stated explicitly, for anyone auditing what this baseline does and does not
+include:
+
+```
+[z_compensate] / [prtouch_v2]:
+    configured for explicit Z-offset calibration
+    (commands available, config validated offline - see above)
+
+PRINT_START integration:
+    NOT REQUIRED for this baseline
+    (no macro calls these commands automatically; see "Deliberately still
+    not done" above)
+
+load-cell calibration:
+    NOT RUN during virgin qualification
+    (no real toolhead motion has ever been exercised on this build)
+```
+
+**Uncommitted no-trigger recovery fix - EXCLUDED from this baseline.**
+While auditing this area, real, uncommitted work was found in a separate
+working tree (`ke-mainline-klipper`, not this repo): a genuine safety
+improvement to `prtouch_probe.py`'s touch-probe retry path (undoing a full
+commanded descent when the MCU reports no trigger, preventing repeated
+stacked full-depth blind descents on retry - see that tree's own
+`prtouch_probe.py` diff against this repo's canonical version for the
+exact change). It is real, reasoned, and worth pursuing, but:
+
+- It has never been tested against real hardware (this build's own load-cell
+  probing has never been exercised at all, per the section above).
+- It sits in an uncommitted, unreviewed working tree, not this project's
+  canonical history.
+
+Importing it into this baseline would violate this exact mission's own
+"no dirty checkout, no unreviewed local file" rule for what counts as an
+accepted module. It is **preserved separately** (left exactly where it is,
+in `ke-mainline-klipper`'s own working tree - not deleted, not merged) and
+requires a dedicated future review-and-hardware-qualification pass before
+it can become part of any canonical baseline.

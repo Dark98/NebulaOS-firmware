@@ -36,6 +36,9 @@ SEEDS="${SEEDS:-/opt/nebulaos-seeds}"
 APPS="${APPS:-/usr/data/nebulaos/apps}"
 SYSTEM="${SYSTEM:-/usr/data/nebulaos/system}"
 LOCKDIR="${LOCKDIR:-/usr/data/nebulaos/updates/locks}"
+# Overridable for tests (points fixtures at the same real, tracked shared
+# gate this script actually ships - see that file's own header).
+GATE_LIB="${GATE_LIB:-/etc/nebulaos-maintenance-gate.sh}"
 
 # NebulaOS Memory Resilience Gate (docs/NEBULAOS_MEMORY_RESILIENCE.md): this
 # is the "most expendable during maintenance" process tier - it should be
@@ -65,27 +68,11 @@ log() {
 # unresolved, or memory resilience is unavailable (the exact condition
 # that caused the original OOM kill this whole sub-mission exists to
 # fix). A read-only query only - no state-changing action taken here.
-maintenance_gate_ok() {
-	active=$(wget -q -O - --timeout=3 'http://127.0.0.1:7125/printer/objects/query?print_stats' 2>/dev/null)
-	case "$active" in
-		*'"state":"printing"'*|*'"state":"paused"'*)
-			log "BLOCKED: a print is active - refusing to run memory-heavy seeding this boot (will retry next boot)"
-			return 1
-			;;
-	esac
-
-	if [ -d "$LOCKDIR" ] && [ -n "$(ls -A "$LOCKDIR" 2>/dev/null)" ]; then
-		log "BLOCKED: an update transaction lock is present - refusing to run seeding concurrently with an update"
-		return 1
-	fi
-
-	if ! grep -qE '^(/dev/zram0|.*/system/swapfile) ' /proc/swaps 2>/dev/null; then
-		log "BLOCKED: no memory-resilience swap active (neither zram nor the NebulaOS disk swap file) - this is exactly the condition that caused the original OOM kill; refusing to proceed until S00zram-swap/S03nebulaos-diskswap have activated at least one"
-		return 1
-	fi
-
-	return 0
-}
+# maintenance_gate_ok() itself now lives in the shared $GATE_LIB (Final
+# Baseline Closure mission, 2026-08-08) - see that file's own header for
+# why it moved and the stale-lock fix it carries. Uses this script's own
+# log()/$APPS/$LOCKDIR directly.
+. "$GATE_LIB"
 
 pause_expendable_services() {
 	log "pausing expendable services for memory-heavy seeding (guppyscreen, webcam)"

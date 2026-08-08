@@ -24,6 +24,12 @@ set -u
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
+# Points S04nebulaos-factory-seed's own GATE_LIB override at the real,
+# tracked shared gate (not the real device path /etc/nebulaos-
+# maintenance-gate.sh, which does not exist on a dev machine) - the
+# script sources it unconditionally at load time even though this test
+# file only calls seed_git_app() directly, not the gate itself.
+export GATE_LIB="$REPO_ROOT/scripts/build/overlay/etc/nebulaos-maintenance-gate.sh"
 MAKE_ARCHIVE_LIB="$REPO_ROOT/scripts/build/lib/make-seed-archive.sh"
 S04_SCRIPT="$REPO_ROOT/scripts/build/overlay/etc/init.d/S04nebulaos-factory-seed"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/factory-seed-git-tests.XXXXXX")

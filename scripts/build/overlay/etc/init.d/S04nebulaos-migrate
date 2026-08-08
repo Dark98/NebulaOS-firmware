@@ -45,6 +45,9 @@ SYSTEM="${SYSTEM:-/usr/data/nebulaos/system}"
 LOCKDIR="${LOCKDIR:-/usr/data/nebulaos/updates/locks}"
 GENERATION_FILE="$SYSTEM/app-generation.json"
 BACKUP_ROOT="$SYSTEM/migration-backups"
+# Overridable for tests (points fixtures at the same real, tracked shared
+# gate this script actually ships - see that file's own header).
+GATE_LIB="${GATE_LIB:-/etc/nebulaos-maintenance-gate.sh}"
 
 echo 500 > "/proc/self/oom_score_adj" 2>/dev/null
 
@@ -72,27 +75,13 @@ json_get() {
 # Same maintenance-safety gate as S04nebulaos-factory-seed - migration is
 # just as memory/IO-heavy as first-boot seeding (same tar extraction, same
 # git verification), and must never run while a print is active or an
-# update transaction is in flight. Duplicated rather than sourced from
-# S04's own file - that file is a dispatched init script in its own right
-# (case "$1" in start) ... exit 0 at the bottom), not a library.
-maintenance_gate_ok() {
-	active=$(wget -q -O - --timeout=3 'http://127.0.0.1:7125/printer/objects/query?print_stats' 2>/dev/null)
-	case "$active" in
-		*'"state":"printing"'*|*'"state":"paused"'*)
-			log "BLOCKED: a print is active - refusing to migrate this boot (will retry next boot)"
-			return 1
-			;;
-	esac
-	if [ -d "$LOCKDIR" ] && [ -n "$(ls -A "$LOCKDIR" 2>/dev/null)" ]; then
-		log "BLOCKED: an update transaction lock is present - refusing to migrate concurrently with an update"
-		return 1
-	fi
-	if ! grep -qE '^(/dev/zram0|.*/system/swapfile) ' /proc/swaps 2>/dev/null; then
-		log "BLOCKED: no memory-resilience swap active - refusing to proceed (same condition S04 itself guards against)"
-		return 1
-	fi
-	return 0
-}
+# update transaction is in flight. maintenance_gate_ok() itself now lives
+# in the shared $GATE_LIB (Final Baseline Closure mission, 2026-08-08) -
+# previously duplicated independently in both S04 scripts, which is
+# exactly how a real stale-lock bug ended up needing the identical fix in
+# two places; extracted into one file instead. Uses this script's own
+# log()/$APPS/$LOCKDIR directly.
+. "$GATE_LIB"
 
 # Re-seed one component from its archive, unconditionally (no "already
 # exists, skip" short-circuit - that check is the caller's job, done once

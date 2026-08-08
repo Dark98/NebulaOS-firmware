@@ -14,6 +14,11 @@ set -u
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
+# Points every sourced init script's own GATE_LIB override at the real,
+# tracked shared gate (not the real device path /etc/nebulaos-
+# maintenance-gate.sh, which does not exist on a dev machine) - exported
+# once so every `env ... sh -c` call below inherits it automatically.
+export GATE_LIB="$REPO_ROOT/scripts/build/overlay/etc/nebulaos-maintenance-gate.sh"
 MAKE_ARCHIVE_LIB="$REPO_ROOT/scripts/build/lib/make-seed-archive.sh"
 MIGRATE_SCRIPT="$REPO_ROOT/scripts/build/overlay/etc/init.d/S04nebulaos-migrate"
 FACTORY_SEED_SCRIPT="$REPO_ROOT/scripts/build/overlay/etc/init.d/S04nebulaos-factory-seed"
@@ -234,12 +239,93 @@ test_no_redundant_reseed_after_fresh_factory_seed() {
 	fi
 }
 
+# --- Test 7: a stale update-transaction lock must not permanently block ---
+# --- a genuinely virgin first boot's provisioning ----------------------
+
+test_stale_lock_does_not_block_virgin_first_boot() {
+	SEEDS_DIR="$WORK/t7-seeds"; APPS_DIR="$WORK/t7-apps"; SYSTEM_DIR="$WORK/t7-system"
+	LOCKDIR="$WORK/t7-locks"
+	rm -rf "$SEEDS_DIR" "$APPS_DIR" "$SYSTEM_DIR" "$LOCKDIR"
+	mkdir -p "$APPS_DIR" "$SYSTEM_DIR" "$LOCKDIR"
+	setup_seeds "$SEEDS_DIR" > /dev/null
+
+	# The exact real-world incident this test exists to prevent
+	# recurring: a leftover lock from BEFORE this namespace's own
+	# apps/klipper was ever seeded (found live, Virgin Flash +
+	# Verification mission, 2026-08-08 - a lock that survived an
+	# off-device persistent-state reset because the reset's own scope
+	# missed updates/locks/). Deliberately a real, non-empty file (an
+	# empty klipper.lock is exactly what nebulaos-update-supervisor.sh
+	# itself creates), not a directory placeholder.
+	echo -n "" > "$LOCKDIR/klipper.lock"
+
+	# maintenance_gate_ok() is what real boot calls before ever
+	# attempting to seed - test it exactly as S04nebulaos-factory-seed's
+	# own start() does: gate first, only seed if it returns success.
+	env SEEDS="$SEEDS_DIR" APPS="$APPS_DIR" SYSTEM="$SYSTEM_DIR" LOCKDIR="$LOCKDIR" \
+		S04NEBULAOS_FACTORY_SEED_NO_AUTORUN=1 \
+		sh -c ". '$FACTORY_SEED_SCRIPT'; \
+			if maintenance_gate_ok; then \
+				echo GATE_PASSED; \
+				seed_git_app klipper master '$KLIPPER_PROD_ORIGIN' klippy/chelper/c_helper.so; \
+				record_initial_generation; \
+			else \
+				echo GATE_BLOCKED; \
+			fi" \
+		> "$WORK/t7.log" 2>&1
+
+	if ! grep -q "GATE_PASSED" "$WORK/t7.log"; then
+		fail "stale lock: virgin first boot's own maintenance gate refused to proceed despite an unseeded namespace ($(cat "$WORK/t7.log"))"
+		return
+	fi
+	pass "stale lock: virgin first boot's gate correctly distinguishes a stale lock (unseeded namespace) from a real one"
+
+	if [ ! -e "$APPS_DIR/klipper/.git" ]; then
+		fail "stale lock: provisioning did not complete - apps/klipper was never seeded ($(cat "$WORK/t7.log"))"
+	else
+		pass "stale lock: provisioning completed with zero manual intervention (no test code ever removed the lock itself)"
+	fi
+
+	if [ -f "$SYSTEM_DIR/app-generation.json" ]; then
+		pass "stale lock: generation still recorded correctly despite the stale lock's presence"
+	else
+		fail "stale lock: app-generation.json missing after otherwise-successful provisioning"
+	fi
+}
+
+# --- Test 8: the SAME stale-lock scenario, but on an ALREADY-seeded ------
+# --- namespace, must still block exactly as before - the fix is narrow --
+
+test_stale_lock_still_blocks_when_namespace_already_seeded() {
+	SEEDS_DIR="$WORK/t8-seeds"; APPS_DIR="$WORK/t8-apps"; SYSTEM_DIR="$WORK/t8-system"
+	LOCKDIR="$WORK/t8-locks"
+	rm -rf "$SEEDS_DIR" "$APPS_DIR" "$SYSTEM_DIR" "$LOCKDIR"
+	mkdir -p "$SYSTEM_DIR" "$LOCKDIR"
+	setup_seeds "$SEEDS_DIR" > /dev/null
+	build_real_repo "$APPS_DIR/klipper" master "$KLIPPER_PROD_ORIGIN" "already-seeded-content"
+	echo -n "" > "$LOCKDIR/klipper.lock"
+
+	env SEEDS="$SEEDS_DIR" APPS="$APPS_DIR" SYSTEM="$SYSTEM_DIR" LOCKDIR="$LOCKDIR" \
+		S04NEBULAOS_FACTORY_SEED_NO_AUTORUN=1 \
+		sh -c ". '$FACTORY_SEED_SCRIPT'; \
+			if maintenance_gate_ok; then echo GATE_PASSED; else echo GATE_BLOCKED; fi" \
+		> "$WORK/t8.log" 2>&1
+
+	if grep -q "GATE_BLOCKED" "$WORK/t8.log" && [ -e "$LOCKDIR/klipper.lock" ]; then
+		pass "stale lock: an ALREADY-seeded namespace's lock is still correctly treated as a real, blocking, human-review-needed lock - the fix stays narrow"
+	else
+		fail "stale lock: an already-seeded namespace's lock was incorrectly bypassed - this would silently defeat nebulaos-update-supervisor.sh's own deliberate 'needs human review' failed-update safety property ($(cat "$WORK/t8.log"))"
+	fi
+}
+
 test_json_get
 test_fresh_namespace
 test_matching_generation_noop
 test_migration_happens
 test_failure_leaves_existing_untouched
 test_no_redundant_reseed_after_fresh_factory_seed
+test_stale_lock_does_not_block_virgin_first_boot
+test_stale_lock_still_blocks_when_namespace_already_seeded
 
 echo
 echo "app-migration-tests: $PASS passed, $FAIL failed"

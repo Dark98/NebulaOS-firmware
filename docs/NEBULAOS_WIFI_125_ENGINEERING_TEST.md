@@ -203,7 +203,7 @@ verify+clean stale files with `unsquashfs` inspection before trusting a
 this general bug class (see `feedback_nebulaos_stale_build_artifacts`
 memory entry: 4th recurrence now).
 
-### Conclusion
+### Conclusion (superseded - see correction below)
 
 `.125` (`github.com/Infineon/ifx-linux-firmware @ release-v5.10.9-2022_0909`)
 is **not a viable candidate for this platform as-is**. The failure is a
@@ -214,3 +214,88 @@ build defect. No further promotion recommended without either a
 (the `CONFIG_EXTRA_FIRMWARE` approach tried here does not qualify).
 Canonical baseline was never modified - the device is back on the
 same tag it was live-qualified on before this test began.
+
+## Correction (2026-08-09): the "not viable" conclusion above was wrong - the intended combination was never actually tested
+
+External review (raised as a set of precise, evidence-demanding
+questions - "is the exact combination `.125` + matching Infineon `.125`
+CLM + current NVRAM + `CONFIG_EXTRA_FIRMWARE` actually tested, yes or
+no") forced a re-check of what each of the two experiments above had
+actually exercised. They did not overlap:
+
+- The first `.125` boot test (the "Result" section above) staged the
+  `.125` Infineon CLM at
+  `scripts/build/overlay/lib/firmware/cypress/cyfmac43430-sdio.clm_blob`
+  - a path `CONFIG_EXTRA_FIRMWARE` never reads and the rootfs mounts too
+    late for brcmfmac's early probe to see. So this test hit the exact
+    same pre-existing `-2`/ENOENT as control, and because `.125` has no
+    built-in fallback (`clm_min`/`noclminc`), the interface never came
+    up. This proved `.125` needs an external CLM before the rootfs
+    mounts - it did not prove the CLM itself was bad.
+- The "attempted fix" test (the `-50` regression) embedded via
+  `CONFIG_EXTRA_FIRMWARE` at the correct, early-read path - but paired
+  it with **control's own generic CLM** (from
+  `scripts/firmware/fetch-linux-firmware-clm.sh`, byte-identical to what
+  was already running live on control), never with `.125`'s own
+  Infineon-supplied CLM. This proved embedding a mismatched/generic CLM
+  via this path regresses even control - it said nothing about `.125`
+  with its own matching CLM.
+
+Root cause of the mixup: `scripts/build/wifi-firmware-125-variant.sh`'s
+`apply()` staged the `.125` CLM at the wrong destination
+(`lib/firmware/cypress/cyfmac43430-sdio.clm_blob` instead of
+`lib/firmware/brcm/brcmfmac43430-sdio.clm_blob`, the latter being what
+brcmfmac's own `brcmf_fw_alloc_request()` + `CONFIG_EXTRA_FIRMWARE`
+actually resolve to for this chip/bus). **The one specific combination
+that matters - `.125`'s own CLM, embedded via `CONFIG_EXTRA_FIRMWARE`,
+at the correct path - had never been built or booted.**
+
+### Fix and re-test result: SUCCESS
+
+`wifi-firmware-125-variant.sh` (commit `30521ef`) now stages the CLM
+override at the correct `brcm/brcmfmac43430-sdio.clm_blob` path, and a
+small diagnostic patch (`apply_diag_patch()`/`revert_diag_patch()`,
+covered by `tests/wifi-firmware-125-variant-tests.sh`) makes
+`brcmfmac`'s internal `clmload_status` visible via `bphy_err` instead of
+a compiled-out `brcmf_dbg(INFO, ...)` (this kernel has
+`# CONFIG_BRCMDBG is not set`), so a future CLM failure would no longer
+be a silent `-EIO` with no real status code logged.
+
+Built in a fresh clone, staged in the correct build order (the WIFI-FW-125
+CLM override and diagnostic patch applied *after*
+`apply-qualified-baseline.sh`, so `wifi-roamoff-disable-variant.sh`'s own
+unconditional `common.c` reset can't wipe it - both `ROAMOFF1` and the
+diagnostic patch confirmed coexisting in the final compiled source).
+Flashed to the (inactive) custom slot from stock via the standard
+stock-mediated procedure, booted, and verified live:
+
+```
+brcmf_fw_alloc_request: using brcm/brcmfmac43430-sdio for chip BCM43430/1
+brcmf_c_process_txcap_blob: no txcap_blob available (err=-2)
+brcmf_c_preinit_dcmds: Firmware: BCM43430/1 wl0: Aug 16 2022 03:05:14 version 7.45.98.125 (5b7978c CY) FWID 01-f420b81d
+```
+
+No `clmload`/download-failure lines at all (the diagnostic patch's
+`ENGINEERING DIAG clmload_status` line only fires inside
+`brcmf_c_download_blob()`'s failure branch, so its absence plus a fully
+associated `wlan0` is the positive evidence the download succeeded).
+`wlan0` came up with `wpa_state=COMPLETED` on the real 2.4GHz SSID,
+acquired a DHCP lease, SSH reachable, Klipper `ready`, Moonraker
+healthy, GuppyScreen running. NVRAM (`brcmfmac43430-sdio.txt`,
+`78fee458...`) confirmed byte-identical to control on the running
+device. `S98nebulaos-wifi-125-failsafe`'s own persisted diagnostics log
+recorded WiFi already healthy on its very first check (~124s uptime),
+so the stock-revert path was armed but never triggered.
+
+### Revised conclusion
+
+`.125` **is viable on this platform**, provided its own matching
+Infineon CLM blob is delivered via `CONFIG_EXTRA_FIRMWARE` at the
+correct `brcm/brcmfmac43430-sdio.clm_blob` path. The original "not
+viable" conclusion was an artifact of two non-overlapping, individually-
+valid-looking experiments being conflated, not a real platform
+limitation. The device was left running this corrected `.125` image
+for the user's own manual WiFi evaluation (throughput/latency/range) -
+no further automated A/B qualification was performed, per mission
+scope. Promotion to the canonical baseline (new tag, tracked
+`kernel.config`) is a separate, not-yet-taken decision.

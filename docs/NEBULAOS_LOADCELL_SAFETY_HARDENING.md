@@ -8,6 +8,34 @@ been implemented in an out-of-sync local checkout but never reached this repo's 
 
 Baseline: `nebulaos-canonical-baseline-2026-08-09-wifi-125`, untouched, not moved.
 
+## Real deployment gap found: `klippy_extras/` here is a mirror, not the build input
+
+Caught by inspecting the actual packaged rootfs after the first fresh-clone build, rather
+than trusting that a correct `klippy_extras/` edit here was sufficient. It was not: the
+freshly built rootfs shipped the OLD, pre-mission `prtouch_probe.py`, with none of this
+mission's fixes - `04-cross-compile-app-stack.sh`'s own comment explains why:
+`klippy_extras/` in this repo is "the reviewable source of truth" for these files' *content*,
+but is **no longer injected at build time**. The real build input is `vendor/klipper`'s own
+`klippy/extras/` - i.e. the separate `coreflake1/NebulaOS-klipper` fork, pulled by
+`manifests/dependencies.conf`'s `KLIPPER_PIN`. Two of this mission's own new files
+(`prtouch_units.py`, `prtouch_safety_guard.py`) didn't even exist there yet.
+
+Fixed by mirroring every change from this mission into a real commit on
+`coreflake1/NebulaOS-klipper`'s own `master` branch (commit `4510ee65`, see that repo's own
+matching commit message) and bumping `KLIPPER_PIN` to it. The two repos' copies of these
+files are DELIBERATELY not byte-identical in every respect: import style differs
+(`NebulaOS-firmware`'s `klippy_extras/` uses `from klippy_extras import X`, matching how
+`python3 -m unittest klippy_extras.test_X` resolves it from this repo's own root;
+`NebulaOS-klipper`'s `klippy/extras/` uses `from . import X` / bare `import X`, matching how
+`python3 -m unittest extras.test_X` from `klippy/` - or a bare standalone run from inside
+`extras/` for files with no cross-module relative-import dependency - resolves it there).
+Production logic is identical in both; only the import statements needed adapting, and each
+side's own test suite was run and passed independently in its own real repo structure, not
+just copied and assumed to work.
+
+**Anyone doing future `klippy_extras/` work in this repo must remember this and update both
+repos, or a "correct" change here will silently never reach a real device.**
+
 ## What this mission actually did
 
 1. **Reconciled two divergent copies of the same work.** A separate local checkout

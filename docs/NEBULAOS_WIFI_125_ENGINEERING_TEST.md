@@ -112,3 +112,105 @@ control CLM behavior since Buildroot's own package supplies it again).
 This is a temporary engineering-test tool. It is intentionally not wired
 into `apply-qualified-baseline.sh`'s 8 accepted baseline variants and must
 never run as part of a normal `./build.sh`.
+
+## Result: `.125` does not work on this platform (2026-08-09)
+
+Live-tested 6 independent boot attempts via `S98nebulaos-wifi-125-failsafe`'s
+own persisted diagnostics (`/usr/data/wifi-125-test-diagnostics.log` -
+survives the automatic revert-to-stock, since it's on the shared
+partition). Every attempt identical:
+
+```
+brcmf_c_preinit_dcmds: Firmware: BCM43430/1 wl0: ... version 7.45.98.125 (5b7978c CY) FWID 01-f420b81d
+```
+
+- `.bin` loads correctly (matches expected version/FWID exactly).
+- CLM blob load fails with `error -2` (the same pre-existing control-baseline
+  quirk above) - and unlike control, brcmfmac then produces **zero further
+  log output**: `wlan0` never appears with a carrier, `wpa_supplicant`
+  stays at `wpa_state=DISCONNECTED` for the full 120s timeout, every time.
+
+Root cause, confirmed via `strings` on both binaries' own embedded build
+tags: control's 7.46.58.13 build carries neither `clm_min` nor `noclminc`
+(ships its own built-in channel data, so it merely warns when the external
+CLM load fails). This `.125` build is compiled with `noclminc clm_min` -
+no built-in data, external CLM required - so the identical `-2` failure
+that control shrugs off leaves this candidate with no usable channel list
+at all, and the interface never comes up.
+
+### Attempted fix: bake CLM into the kernel via CONFIG_EXTRA_FIRMWARE - REVERTED, made things worse
+
+Tried closing the CLM boot-timing gap the same way `.bin`/`.txt`/
+`regulatory.db` already are (see `artifacts/buildroot-halley5-v30-image/
+halley5-nebulaos-fragment.config`'s own existing comments on this exact
+class of gap): add `brcm/brcmfmac43430-sdio.clm_blob` to
+`CONFIG_EXTRA_FIRMWARE`, staged by a new `scripts/firmware/fetch-linux-
+firmware-clm.sh` (same fetch-and-verify convention as `fetch-wireless-
+regdb.sh`, mirroring Buildroot's own pinned `linux-firmware` package
+exactly - the staged file's SHA256 was confirmed byte-identical to the
+live control device's own already-running CLM blob before any of this).
+
+Built and flash-tested on **control** (7.46.58.13, no `.125` variant)
+first, specifically to prove no regression before ever combining it with
+the `.125` candidate. Result: a real regression. The CLM blob is now
+*found* (`-2`/ENOENT gone), but downloading it through the kernel's
+built-in-firmware path fails differently:
+
+```
+brcmf_c_download_blob: clmload (4733 byte file) failed (-50)
+brcmf_c_preinit_dcmds: download CLM blob file failed, -5
+brcmf_sdio_firmware_callback: brcmf_attach failed
+```
+
+brcmfmac treats a *present-but-failed-to-download* CLM blob as fatal -
+`brcmf_attach` aborts entirely, `wlan0` doesn't even exist. This is worse
+than the original state, where a *missing* CLM blob was merely a warning.
+Confirmed live, twice (the `S98` failsafe correctly detected and reverted
+both times - it doesn't require a `.125`-specific sentinel context to
+matter here, it just happened to still be present from an earlier build
+due to a separate, unresolved stale-overlay issue noted below).
+
+**Commit `2274450` (the CONFIG_EXTRA_FIRMWARE change) was reverted
+(`3ab3c3c`).** The device was restored to the exact known-good control
+package (`z-compensate-guppyscreen-20260808T202807Z`, tag
+`nebulaos-canonical-baseline-2026-08-08-chelper-fix-live-qualified`) and
+confirmed live: WiFi associated, -33 dBm, 72.2 Mbit/s, printer idle.
+
+Why downloading identical bytes fails differently via `CONFIG_EXTRA_FIRMWARE`
+vs. a normal rootfs file was not root-caused further - plausibly a real
+size/alignment constraint or a different internal loading path
+(`request_firmware` direct vs. built-in) that this driver's SDIO
+CLM-download routine doesn't handle the same way. Worth a dedicated
+follow-up if CLM support is ever revisited, but the straightforward
+"just embed it" approach does not work and must not be reapplied as-is.
+
+### Known open issue: stale overlay content can survive a source-level revert
+
+While investigating the above, a real, reproducible bug was found: after
+reverting the `.125` variant (`scripts/build/wifi-firmware-125-variant.sh
+revert`, confirmed to correctly remove the sentinel file from the source
+overlay tree) and rebuilding a control-only image, the packaged
+`rootfs.squashfs` still contained the old `/etc/nebulaos-wifi-125-test-
+marker` sentinel (confirmed via direct `unsquashfs` inspection, with a
+~8-hour-stale mtime proving it). `02-configure-buildroot.sh` does
+`rm -rf` the intermediate overlay staging directory before its `cp -r`,
+so the staleness survives somewhere further into the pipeline (Buildroot's
+own `output/target` incremental caching is the leading suspect, not yet
+confirmed). Not root-caused or fixed in this session - flagged here for a
+dedicated future investigation. Practical mitigation used here: manually
+verify+clean stale files with `unsquashfs` inspection before trusting a
+"reverted" build, same as this project's own established pattern for
+this general bug class (see `feedback_nebulaos_stale_build_artifacts`
+memory entry: 4th recurrence now).
+
+### Conclusion
+
+`.125` (`github.com/Infineon/ifx-linux-firmware @ release-v5.10.9-2022_0909`)
+is **not a viable candidate for this platform as-is**. The failure is a
+genuine firmware/platform incompatibility (this build's `clm_min`
+dependency vs. this platform's current CLM delivery), not a NebulaOS
+build defect. No further promotion recommended without either a
+`clm_min`-free `.125` build or a correctly-working CLM-delivery fix
+(the `CONFIG_EXTRA_FIRMWARE` approach tried here does not qualify).
+Canonical baseline was never modified - the device is back on the
+same tag it was live-qualified on before this test began.

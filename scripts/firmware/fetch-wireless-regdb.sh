@@ -14,8 +14,8 @@
 # rootfs are byte-identical - not two independently-sourced regulatory
 # databases that happen to agree today.
 #
-# Unlike the proprietary WiFi firmware fetch-wifi-firmware.sh handles,
-# wireless-regdb is ISC-licensed and freely redistributable - but this is
+# Unlike the proprietary WiFi firmware fetch-cyw43430-wifi-firmware.sh
+# handles, wireless-regdb is ISC-licensed and freely redistributable - but this is
 # still a fetch-and-verify script, not a committed binary, so a version bump
 # is a deliberate, reviewable diff to this script rather than a silent binary
 # swap in git history.

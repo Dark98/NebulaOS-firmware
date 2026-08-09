@@ -34,7 +34,7 @@ for required in KERNEL_REPO KERNEL_BRANCH KERNEL_PIN BUILDROOT_REPO BUILDROOT_PI
 	V4L_UTILS_REPO V4L_UTILS_PIN V4L_UTILS_ARCHIVE_URL V4L_UTILS_ARCHIVE_SHA256 \
 	MAINSAIL_TAG MAINSAIL_SHA256 \
 	WIFI_FIRMWARE_RELEASE_TAG WIFI_FIRMWARE_RELEASE_URL WIFI_FIRMWARE_ARCHIVE_SHA256 \
-	WIFI_FIRMWARE_BIN_SHA256 WIFI_FIRMWARE_TXT_SHA256 \
+	WIFI_FIRMWARE_TXT_SHA256 WIFI_FIRMWARE_BIN_SHA256 WIFI_FIRMWARE_CLM_SHA256 \
 	GUPPYSCREEN_REPO GUPPYSCREEN_BRANCH GUPPYSCREEN_PIN GUPPYSCREEN_VERSION GUPPYSCREEN_THEME; do
 	require_pin "$required"
 done
@@ -51,31 +51,27 @@ echo "== all required pins present in $MANIFEST =="
 # "No rule to make target" failure once the first one (below) was fixed.
 sh "$SCRIPT_DIR/../firmware/fetch-wireless-regdb.sh"
 
-# CYW43430 Wi-Fi firmware engineering test (2026-08-09): the CLM blob has
-# the identical rootfs-not-mounted-yet CONFIG_EXTRA_FIRMWARE timing gap as
-# the .bin/.txt/regulatory.db entries above. Required to compile the
-# kernel now that the fragment.config below embeds it. See docs/
-# NEBULAOS_WIFI_125_ENGINEERING_TEST.md and this fetch script's own
-# header for the full trace (including the first, mismatched-CLM attempt
-# that was reverted, and the corrected re-attempt this restores).
-sh "$SCRIPT_DIR/../firmware/fetch-linux-firmware-clm.sh"
+# 2026-08-09 (WiFi .125 promotion): canonical CYW43430 .bin + CLM, fetched
+# directly from Infineon's own upstream repo and hash-verified inside that
+# script itself (WIFI_FIRMWARE_BIN_SHA256/WIFI_FIRMWARE_CLM_SHA256 above).
+# Required to compile the kernel (CONFIG_EXTRA_FIRMWARE embeds both - see
+# artifacts/buildroot-halley5-v30-image/halley5-nebulaos-fragment.config),
+# not just to boot. See docs/NEBULAOS_WIFI_125_ENGINEERING_TEST.md for the
+# full qualification history behind this pin.
+sh "$SCRIPT_DIR/../firmware/fetch-cyw43430-wifi-firmware.sh"
 
-# 2026-08-07 (canonical-repository mission): the proprietary WiFi firmware/
-# NVRAM is required to even COMPILE the kernel (CONFIG_EXTRA_FIRMWARE builds
-# it in), not just to boot - a missing or wrong file here used to surface as
-# a cryptic "No rule to make target" error roughly two hours into a kernel
-# compile. Previously this required a manual, per-machine extraction
-# (fetch-wifi-firmware.sh, live SSH to a stock device); redistribution is
-# now explicitly authorized (see LICENSES/WIFI-FIRMWARE-NOTICE.md) and the
-# exact same bytes are published as a GitHub Release asset on this repo, so
-# a normal build fetches and verifies them automatically like every other
-# pin - no manual staging, no device access required.
+# Board NVRAM (.txt) - real per-board calibration data extracted from this
+# project's own hardware, redistribution explicitly authorized by the
+# repository owner (see LICENSES/WIFI-FIRMWARE-NOTICE.md), published as a
+# GitHub Release asset on this repo and fetched the same way Mainsail is
+# above: pinned tag + URL + archive sha256, individual file hash checked
+# after extraction. Unrelated to which .bin/CLM firmware is running -
+# stays byte-identical across the 2026-08-09 .125 promotion.
 WIFI_FW_DIR="$REPO_ROOT/scripts/build/overlay/lib/firmware/brcm"
-WIFI_FW_BIN="$WIFI_FW_DIR/brcmfmac43430-sdio.bin"
 WIFI_FW_TXT="$WIFI_FW_DIR/brcmfmac43430-sdio.txt"
 mkdir -p "$WIFI_FW_DIR"
-if [ ! -f "$WIFI_FW_BIN" ] || [ ! -f "$WIFI_FW_TXT" ]; then
-	echo "== downloading WiFi firmware release $WIFI_FIRMWARE_RELEASE_TAG =="
+if [ ! -f "$WIFI_FW_TXT" ]; then
+	echo "== downloading WiFi firmware release $WIFI_FIRMWARE_RELEASE_TAG (NVRAM only) =="
 	WIFI_FW_ARCHIVE="$REPO_ROOT/vendor-downloads/nebulaos-wifi-firmware.tar.gz"
 	mkdir -p "$(dirname "$WIFI_FW_ARCHIVE")"
 	curl -sL -o "$WIFI_FW_ARCHIVE" "$WIFI_FIRMWARE_RELEASE_URL"
@@ -111,23 +107,15 @@ if [ ! -f "$WIFI_FW_BIN" ] || [ ! -f "$WIFI_FW_TXT" ]; then
 		exit 1
 	fi
 	tar xzf "$WIFI_FW_ARCHIVE" -C "$(dirname "$WIFI_FW_ARCHIVE")"
-	cp "$(dirname "$WIFI_FW_ARCHIVE")"/nebulaos-wifi-firmware-*/brcmfmac43430-sdio.bin "$WIFI_FW_BIN"
 	cp "$(dirname "$WIFI_FW_ARCHIVE")"/nebulaos-wifi-firmware-*/brcmfmac43430-sdio.txt "$WIFI_FW_TXT"
-	echo "== WiFi firmware release archive verified and extracted =="
+	echo "== WiFi NVRAM extracted from release archive =="
 fi
-actual_bin_sha256=$(sha256sum "$WIFI_FW_BIN" | awk '{print $1}')
 actual_txt_sha256=$(sha256sum "$WIFI_FW_TXT" | awk '{print $1}')
-if [ "$actual_bin_sha256" != "$WIFI_FIRMWARE_BIN_SHA256" ]; then
-	echo "FATAL: $WIFI_FW_BIN sha256 is $actual_bin_sha256, expected pinned $WIFI_FIRMWARE_BIN_SHA256" >&2
-	echo "Either the staged file is stale/wrong, or this is a deliberate, reviewed bump - if so, update" >&2
-	echo "WIFI_FIRMWARE_BIN_SHA256 in $MANIFEST (see fetch-wifi-firmware.sh to re-derive from your own device)." >&2
-	exit 1
-fi
 if [ "$actual_txt_sha256" != "$WIFI_FIRMWARE_TXT_SHA256" ]; then
 	echo "FATAL: $WIFI_FW_TXT sha256 is $actual_txt_sha256, expected pinned $WIFI_FIRMWARE_TXT_SHA256" >&2
 	exit 1
 fi
-echo "== WiFi firmware + NVRAM present and pin-verified =="
+echo "== WiFi firmware + CLM + NVRAM present and pin-verified =="
 
 mkdir -p "$VENDOR"
 cd "$VENDOR"

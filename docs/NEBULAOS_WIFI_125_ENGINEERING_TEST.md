@@ -1,8 +1,21 @@
 # CYW43430 Wi-Fi firmware engineering test: 7.46.58.13 (control) vs 7.45.98.125 (Infineon)
 
-Engineering test only. Not a baseline change. See
-`scripts/build/wifi-firmware-125-variant.sh` for the apply/revert tool this
-record backs.
+> **PROMOTED 2026-08-09**: `7.45.98.125` + its own matching CLM is now the
+> canonical NebulaOS WiFi firmware, fetched automatically by
+> `scripts/firmware/fetch-cyw43430-wifi-firmware.sh` on every build - no
+> variant, no manual step, no engineering-test flag. This whole document,
+> including every script name below (`wifi-firmware-125-variant.sh`,
+> `fetch-linux-firmware-clm.sh`, `S98nebulaos-wifi-125-failsafe`, the
+> `clmload_status` diagnostic patch), describes the ENGINEERING-TEST-ONLY
+> tooling used to reach that result - all of it has since been removed from
+> the tree, folded into the normal build path. Kept as-is below for the
+> historical incident record (the root-cause analysis and the "Correction"
+> section's evidence are still exactly why `.125` was promoted); do not
+> expect any of the file paths mentioned past this point to still exist.
+
+Engineering test only, historical record. Not itself a baseline change -
+see `docs/NEBULAOS_RELEASE_ARTIFACT_PROVENANCE.md`'s CYW43430 entry and
+`LICENSES/WIFI-FIRMWARE-NOTICE.md` for the current, canonical sourcing.
 
 ## Control baseline
 

@@ -5240,3 +5240,33 @@ against the current plain-PREEMPT baseline before any decision to ship it.
 
 - Classification: **`PREEMPT_RT_DOCUMENTATION_CORRECTED`**, **`PRODUCTION_KERNEL_IS_PLAIN_PREEMPT`**,
   **`PREEMPT_RT_DEFERRED_TO_SEPARATE_AB_EXPERIMENT`** - no kernel behavior changed in this phase.
+
+## WiFi firmware promotion: 7.46.58.13 replaced by 7.45.98.125 + matching CLM (2026-08-09)
+
+Canonical CYW43430 WiFi firmware changed from `7.46.58.13` (control, extracted from this
+project's own stock device) to `7.45.98.125` (Infineon build, FWID `01-f420b81d`, fetched
+directly from `github.com/Infineon/ifx-linux-firmware`), after live hardware qualification
+proved it stable and working end to end - see `docs/NEBULAOS_WIFI_125_ENGINEERING_TEST.md`'s
+"Correction" section for the full incident record and evidence (an earlier same-day "not
+viable" conclusion was itself wrong, caused by two non-overlapping test runs never actually
+exercising `.125` together with its own matching CLM blob).
+
+The fix that made this promotable: `.125` requires its own external CLM blob (no built-in
+channel data), which must be embedded via `CONFIG_EXTRA_FIRMWARE` at the exact path
+`brcm/brcmfmac43430-sdio.clm_blob` - the same rootfs-not-mounted-yet timing gap already closed
+for `.bin`/`.txt`/`regulatory.db` (see §53 above), just not previously closed for the CLM.
+`scripts/firmware/fetch-cyw43430-wifi-firmware.sh` now fetches both `.bin` and `.clm_blob`
+together, pinned and hash-verified, as part of every normal build - no engineering-test flag,
+no manual staging step. Board NVRAM is unaffected (byte-identical before and after, still
+sourced from this repo's own release asset).
+
+Obsolete engineering-test-only infrastructure removed from the tree as part of this promotion:
+the old control-firmware/CLM fetch scripts, the manual apply/revert variant tool, the
+temporary WiFi-specific stock-fallback failsafe, and the temporary `clmload_status` kernel
+diagnostic patch. See `docs/NEBULAOS_WIFI_125_ENGINEERING_TEST.md` for what each one did and
+why removing them doesn't lose any safety coverage (the existing, permanent
+`S00revert-safety`/`S99confirm-good` OTA mechanism already covers "did this custom image boot
+correctly" generally, WiFi included).
+
+- Classification: **`WIFI_125_PROMOTED_TO_CANONICAL`**, **`NVRAM_UNCHANGED`**,
+  **`ENGINEERING_TEST_INFRASTRUCTURE_RETIRED`**.

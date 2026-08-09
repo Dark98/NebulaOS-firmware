@@ -41,7 +41,16 @@ when it isn't.
 | Size | 962 bytes |
 | SHA-256 | `78fee458ab69c0a66ea462f6d6769e15b36f73582693f4dbb5a0e8e8be3cfb0a` |
 | Origin | Confirmed (`docs/NEBULAOS_CAMERA_USB_RT_SOURCE_ANALYSIS.md` §18.3, citing FIRMWARE.md §57) SHA-256-identical to the real stock device's own board-calibrated firmware (`cyw43438-7.46.58.13.bin`) and NVRAM (`nvram_azw372.txt`, board id `BCM943430WLSELG`), extracted directly from the physical printer and renamed to mainline `brcmfmac`'s own naming convention. Real, board-specific, not a generic/mismatched file. |
-| Reconstruction | Fully reconstructable — 2026-08-07: redistribution explicitly authorized (see `LICENSES/WIFI-FIRMWARE-NOTICE.md`), published as the `wifi-firmware-v1.0.0` GitHub Release asset on this repo, downloaded and hash-verified automatically by `00-fetch-vendor-sources.sh`. No longer requires manual per-machine extraction (`fetch-wifi-firmware.sh` still exists for re-deriving fresh copies from your own stock device if preferred). |
+| Reconstruction | Fully reconstructable — 2026-08-07: redistribution explicitly authorized (see `LICENSES/WIFI-FIRMWARE-NOTICE.md`), published as the `wifi-firmware-v1.0.0` GitHub Release asset on this repo, downloaded and hash-verified automatically by `00-fetch-vendor-sources.sh`. No manual per-machine extraction needed (the live-extraction tool that originally produced this file has since been removed - see `LICENSES/WIFI-FIRMWARE-NOTICE.md`'s "History" section). Unrelated to which WiFi `.bin`/CLM firmware is running - see the entry below for that. |
+
+## CYW43430 WiFi firmware + CLM (7.45.98.125)
+
+| Field | Value |
+|---|---|
+| Path | `scripts/build/overlay/lib/firmware/brcm/brcmfmac43430-sdio.bin` / `brcmfmac43430-sdio.clm_blob` (both gitignored) |
+| SHA-256 | `.bin`: `82ed67a211877efa47aff4aab83d6d2d1ccf3d5d0f5c396df97f292ade01de9e` · `.clm_blob`: `1dbe1a396b68786bb189b7c255318ae546fd2e9d15f70ccc8ecbdc52b6cd4c47` |
+| Origin | Infineon's own public upstream repo (`github.com/Infineon/ifx-linux-firmware`, tag `release-v5.10.9-2022_0909`), not this project's own hardware - promoted 2026-08-09 after hardware qualification (see `docs/NEBULAOS_WIFI_125_ENGINEERING_TEST.md`), replacing the previous, device-extracted `7.46.58.13` control firmware. |
+| Reconstruction | Fully reconstructable, automatically — `scripts/firmware/fetch-cyw43430-wifi-firmware.sh` fetches and hash-verifies both files directly from the pinned upstream commit on every build. See `LICENSES/WIFI-FIRMWARE-NOTICE.md` for the license basis. |
 
 ## Regulatory database
 

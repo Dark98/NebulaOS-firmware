@@ -34,17 +34,17 @@ rootfs-overlay deletion gotcha) are all documented there with root causes, not j
   own real git history instead of a patch file. What else *is* checked into this repo: the small set
   of files this project actually wrote by hand (`scripts/build/overlay/` - init scripts and configs,
   not the third-party source/binaries those scripts launch).
-- **Network/serial access to a real, working stock Nebula Pad** for `fetch-wifi-firmware.sh` (see
-  below) - the WiFi firmware/NVRAM are proprietary Cypress/Broadcom binaries with no accompanying
-  license found anywhere on the device, so they're never committed to this repo (see `.gitignore`).
-  Without this step, the build still completes and boots, just without WiFi.
+- **Network access** for `00-fetch-vendor-sources.sh` to fetch the WiFi firmware/CLM/NVRAM - no
+  real device or manual staging step required (see below). WiFi firmware (`.bin`/`.clm_blob`) is
+  fetched directly from Infineon's own upstream repo; NVRAM (`.txt`) from this repo's own
+  `wifi-firmware-v1.0.0` GitHub Release - both proprietary Cypress/Broadcom-format binaries, never
+  committed to this repo (see `.gitignore` and `LICENSES/WIFI-FIRMWARE-NOTICE.md`).
 
 ## Running the whole thing
 
 ```sh
 cd scripts/build
 ./00-fetch-vendor-sources.sh
-STOCK_ROOT_PW=... ./fetch-wifi-firmware.sh          # optional - only needed for WiFi, see below
 ./01-apply-kernel-patches.sh
 ./02-configure-buildroot.sh
 ./03-build-kernel-and-rootfs.sh
@@ -57,11 +57,11 @@ Each script is idempotent (safe to re-run) and checks its own prerequisites befo
 Run them in order the first time; after that, re-running just the stage you're iterating on is
 fine as long as its inputs (the previous stages' outputs) are still in place.
 
-**`fetch-wifi-firmware.sh` must run before `02-configure-buildroot.sh`** (which is what actually
-copies `scripts/build/overlay/` - including whatever this script staged under
-`overlay/lib/firmware/brcm/` - into Buildroot's own overlay dir). Skipping it is fine for a first
-build/boot test of everything else; WiFi just won't come up (`brcmfmac` will report a firmware
-load failure, harmless to everything else - see `FIRMWARE.md` §53).
+`00-fetch-vendor-sources.sh` fetches and hash-verifies the WiFi firmware/CLM/NVRAM automatically
+(`scripts/firmware/fetch-cyw43430-wifi-firmware.sh` for the firmware+CLM, an inline step for the
+NVRAM) before `02-configure-buildroot.sh` runs (which is what actually copies
+`scripts/build/overlay/` - including everything staged under `overlay/lib/firmware/brcm/` - into
+Buildroot's own overlay dir). No manual step, no real device required.
 
 ## What each stage does
 
@@ -71,14 +71,15 @@ load failure, harmless to everything else - see `FIRMWARE.md` §53).
    x2000-v1.0-20250221`), the Buildroot config (`lone0/buildroot-x2000`), Klipper
    (`pellcorp/klipper`, SimpleAF's fork), Moonraker (`Arksine/moonraker`, official),
    `pellcorp/k1-ustreamer`, and Mainsail's latest prebuilt release.
-   - **`fetch-wifi-firmware.sh`** (optional, real device required) - extracts the stock CYW43438/
-     BCM43430 WiFi firmware + board NVRAM live off a real, running stock device (read-only, over
-     SSH) and stages them as `brcmfmac43430-sdio.bin`/`.txt` under `scripts/build/overlay/lib/
-     firmware/brcm/`, the filenames/path mainline `brcmfmac` actually requests. Not numbered into
-     the 00-06 sequence since it needs a real device, not a URL - see `FIRMWARE.md` §53 for how
-     these exact files/paths were determined (disassembling stock's own `cywdhd.ko`, reading its
-     live boot log) and why they're fetched rather than committed (proprietary binaries, no
-     license file found on the device).
+   - **`scripts/firmware/fetch-cyw43430-wifi-firmware.sh`** - fetches the canonical 7.45.98.125
+     WiFi firmware + its own matching CLM blob directly from Infineon's own upstream repo
+     (`Infineon/ifx-linux-firmware`, pinned commit, hash-verified) and stages them as
+     `brcmfmac43430-sdio.bin`/`.clm_blob` under `scripts/build/overlay/lib/firmware/brcm/`, the
+     filenames/path mainline `brcmfmac` actually requests. The board NVRAM (`.txt`) is fetched
+     inline in this same stage from this repo's own release asset instead (real per-device
+     calibration data, unrelated to which firmware build is running). See `FIRMWARE.md` §53 and
+     `docs/NEBULAOS_WIFI_125_ENGINEERING_TEST.md` for how these exact files/paths were determined
+     and why they're fetched rather than committed (proprietary binaries).
 2. **`01-apply-kernel-patches.sh`** - no longer applies anything (this project's kernel changes -
    touch DT wiring, the new display panel driver, the new Bluetooth H5 Broadcom vendor extension,
    WiFi/BT/display Kconfig changes, the real ported NS2009 driver, and the upstream `binder.h`
@@ -93,7 +94,7 @@ load failure, harmless to everything else - see `FIRMWARE.md` §53).
    than relying on the rootfs being mounted yet - `brcmfmac` is built-in and probes for it earlier
    in boot than the real root filesystem mounts, see `FIRMWARE.md` §53), `local.mk` (the
    `LINUX_OVERRIDE_SRCDIR` pointer), and copies this repo's own hand-written overlay content
-   (`scripts/build/overlay/`, including whatever `fetch-wifi-firmware.sh` staged) into
+   (`scripts/build/overlay/`, including whatever `fetch-cyw43430-wifi-firmware.sh` staged) into
    `board/halley5-nebulaos-overlay/`.
 4. **`03-build-kernel-and-rootfs.sh`** - the main kernel + rootfs build (`make`) - touch, display,
    WiFi, Bluetooth, camera-kernel-side, and Core SoC infra all come from this one pass, since

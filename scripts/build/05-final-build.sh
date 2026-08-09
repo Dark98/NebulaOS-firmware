@@ -166,6 +166,7 @@ artifact_sha256() {
 	artifact_sha256 guppyscreen_sha256 "$REPO_ROOT/artifacts/guppyscreen-mips/guppyscreen"
 	artifact_sha256 guppybeep_sha256 "$REPO_ROOT/artifacts/guppyscreen-mips/guppybeep"
 	artifact_sha256 wifi_firmware_sha256 "$REPO_ROOT/scripts/build/overlay/lib/firmware/brcm/brcmfmac43430-sdio.bin"
+	artifact_sha256 wifi_clm_sha256 "$REPO_ROOT/scripts/build/overlay/lib/firmware/brcm/brcmfmac43430-sdio.clm_blob"
 	artifact_sha256 wifi_nvram_sha256 "$REPO_ROOT/scripts/build/overlay/lib/firmware/brcm/brcmfmac43430-sdio.txt"
 	artifact_sha256 regulatory_db_sha256 "$REPO_ROOT/scripts/build/overlay/lib/firmware/regulatory.db"
 	artifact_sha256 kernel_config_sha256 "$ARTIFACT_DIR/kernel.config"

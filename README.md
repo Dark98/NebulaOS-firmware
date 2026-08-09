@@ -40,9 +40,9 @@ earlier, much less complete state - see `FIRMWARE.md` §44-53 for the real, full
 multi-session hardware bring-up investigation: a detection race found and fixed, two separate GPIO
 polarity bugs found via disassembling stock's own live kernel modules and fixed, and a kernel-image-
 embedded-firmware fix for a driver-probe-vs-rootfs-mount timing race). `scripts/build/README.md` is
-the current, accurate way to reproduce this build from scratch, including the one manual step WiFi
-needs (`fetch-wifi-firmware.sh` - pulls stock's own proprietary firmware live off a real device,
-never committed to this repo).
+the current, accurate way to reproduce this build from scratch - WiFi firmware/CLM/NVRAM are all
+fetched and hash-verified automatically (`scripts/firmware/fetch-cyw43430-wifi-firmware.sh` plus an
+inline NVRAM fetch, both never committed to this repo), no manual device-extraction step needed.
 
 The paragraphs immediately below (IN PROGRESS, 2026-07-19/20) are kept for their real historical
 value but are superseded by the above and by `FIRMWARE.md`'s own much longer, more current record.

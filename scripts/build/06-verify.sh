@@ -219,7 +219,9 @@ check_guppyscreen_binary artifacts/guppyscreen-mips/guppyscreen guppyscreen_sha2
 check_guppyscreen_binary artifacts/guppyscreen-mips/guppybeep guppybeep_sha256
 
 check_artifact_sha256 scripts/build/overlay/lib/firmware/brcm/brcmfmac43430-sdio.bin \
-	60dbb5b77b2c232e513322e0ff4350ab5dab5a9fcad0e26e80a2f089e652d720
+	82ed67a211877efa47aff4aab83d6d2d1ccf3d5d0f5c396df97f292ade01de9e
+check_artifact_sha256 scripts/build/overlay/lib/firmware/brcm/brcmfmac43430-sdio.clm_blob \
+	1dbe1a396b68786bb189b7c255318ae546fd2e9d15f70ccc8ecbdc52b6cd4c47
 check_artifact_sha256 scripts/build/overlay/lib/firmware/brcm/brcmfmac43430-sdio.txt \
 	78fee458ab69c0a66ea462f6d6769e15b36f73582693f4dbb5a0e8e8be3cfb0a
 check_artifact_sha256 scripts/build/overlay/lib/firmware/regulatory.db \
@@ -271,7 +273,7 @@ if [ -f "$KERNEL_CONFIG" ]; then
 	if grep -q '^CONFIG_EXTRA_FIRMWARE="brcm/brcmfmac43430-sdio\.bin brcm/brcmfmac43430-sdio\.txt' "$KERNEL_CONFIG"; then
 		echo "OK   CONFIG_EXTRA_FIRMWARE set (WiFi firmware embedded in the kernel image)"
 	else
-		echo "MISS CONFIG_EXTRA_FIRMWARE not set as expected - did fetch-wifi-firmware.sh run before 02-configure-buildroot.sh?"
+		echo "MISS CONFIG_EXTRA_FIRMWARE not set as expected - did fetch-cyw43430-wifi-firmware.sh run before 02-configure-buildroot.sh?"
 	fi
 	# FIRMWARE.md sec 23 (2026-07-23): the base vendor defconfig has this off
 	# (a kernel-size trim, not deliberate for this project) - without it,
@@ -409,8 +411,9 @@ echo "=== kernel modules (still loadable, not built-in) ==="
 check_absent /lib/modules/6.6.18-rt23/kernel/drivers/bluetooth/hci_uart.ko
 check_absent /lib/modules/6.6.18-rt23/kernel/drivers/bluetooth/btbcm.ko
 
-echo "=== WiFi firmware (FIRMWARE.md sec 53 - proprietary, not committed, staged by fetch-wifi-firmware.sh) ==="
+echo "=== WiFi firmware (FIRMWARE.md sec 53 - proprietary, not committed, staged by fetch-cyw43430-wifi-firmware.sh) ==="
 check /lib/firmware/brcm/brcmfmac43430-sdio.bin
+check /lib/firmware/brcm/brcmfmac43430-sdio.clm_blob
 check /lib/firmware/brcm/brcmfmac43430-sdio.txt
 
 echo "=== camera ==="

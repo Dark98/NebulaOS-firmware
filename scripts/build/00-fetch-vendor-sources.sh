@@ -51,6 +51,15 @@ echo "== all required pins present in $MANIFEST =="
 # "No rule to make target" failure once the first one (below) was fixed.
 sh "$SCRIPT_DIR/../firmware/fetch-wireless-regdb.sh"
 
+# CYW43430 Wi-Fi firmware engineering test (2026-08-09): the CLM blob has
+# the identical rootfs-not-mounted-yet CONFIG_EXTRA_FIRMWARE timing gap as
+# the .bin/.txt/regulatory.db entries above. Required to compile the
+# kernel now that the fragment.config below embeds it. See docs/
+# NEBULAOS_WIFI_125_ENGINEERING_TEST.md and this fetch script's own
+# header for the full trace (including the first, mismatched-CLM attempt
+# that was reverted, and the corrected re-attempt this restores).
+sh "$SCRIPT_DIR/../firmware/fetch-linux-firmware-clm.sh"
+
 # 2026-08-07 (canonical-repository mission): the proprietary WiFi firmware/
 # NVRAM is required to even COMPILE the kernel (CONFIG_EXTRA_FIRMWARE builds
 # it in), not just to boot - a missing or wrong file here used to surface as

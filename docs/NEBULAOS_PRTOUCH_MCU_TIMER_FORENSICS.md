@@ -930,3 +930,90 @@ MAXIMUM_PHYSICAL_RISK: nozzle-to-bed contact (inherent to any real touch test) -
 READY_FOR_HUMAN_AUTHORIZATION: YES - holding here per this mission's own instruction; no
   physical movement was performed this pass.
 ```
+
+---
+
+## 14. The exact running firmware was recovered after all (2026-08-12, same day, late addendum)
+
+The negative Workstream-C findings above (§12's "no stock Creality OTA package found... dead
+end") were **wrong** - not because the earlier search was careless, but because the artifacts
+existed in a different project's scratchpad (`guppyscreen`, not this project's own `Documents/`
+tree, dated mid-July - predating this whole PRTouch investigation), outside that search's scope.
+A direct filesystem search for this mission's own named targets
+(`Ender-3_V3_KE_F005_ota_img_V1.1.0.12.img`, `Ender-3_V3_KE_1.1.0.12.ingenic`) found them there,
+alongside `ke-factory-backup/rootfs2.img` - **a genuine, directly device-pulled backup of this
+exact printer's real stock rootfs partition** (confirmed: byte-identical squashfs metadata -
+inode count, build timestamp - to the independently-downloaded OTA package's own extracted
+rootfs, i.e. not a random/wrong image).
+
+### `fw/F005/mcu0_001_G32-mcu0_005_000.bin` is PROVEN to be the exact firmware running on this
+### printer, not merely the same board family
+
+Extracted directly from that real rootfs backup. Contains a standard Klipper embedded MCU
+dictionary (zlib-compressed JSON, same mechanism as any Klipper `.bin`), which decodes to:
+
+```
+version: 38d96adc-dirty-20231016_135251-longer-virtual-machine
+build_versions: gcc: (15:9-2019-q4-0ubuntu1) 9.2.1 ...
+config: MCU=gd32f303xe, CLOCK_FREQ=120000000, build_machine_uid='Oct 16 202313:52:48'
+```
+
+Every one of these fields is a **byte-exact match** to the live device's own real MCU identify
+string (`Loaded MCU 'mcu' 116 commands (38d96adc-dirty-20231016_135251-longer-virtual-machine /
+gcc 9.2.1 [ARM/arm-9-branch] ...)`, confirmed independently in §1). The `version` field alone - a
+git-describe-style dirty-commit-hash + build-timestamp + build-hostname string - is about as
+unique an identifier as exists; this is not "the same board family" or "a plausible reference"
+like every other source used in this investigation (§7's CrealityOfficial repo, §12/§13's
+disassembly) - **this is proof of exact identity with the real, currently-running firmware.**
+This single artifact resolves §1's original, months-old open question
+(`RUNNING_MCU_SOURCE_FOUND: exact build recovered, not just a strong family match`).
+
+### The real command/response dictionary confirms every prior structural finding directly
+
+No inference from a same-family reference needed anymore - this IS the real dictionary:
+
+```
+commands (76 total) include: add_pres_prtouch, add_step_prtouch, config_pres_prtouch,
+  config_step_prtouch, deal_avgs_prtouch, manual_get_pres, read_pres_prtouch,
+  read_swap_prtouch, start_pres_prtouch, start_step_prtouch, write_swap_prtouch
+responses (36 total) include: debug_prtouch, resault_manual_get_pres,
+  resault_write_swap_prtouch, result_deal_avgs_prtouch, result_read_pres_prtouch,
+  result_read_swap_prtouch, result_run_pres_prtouch, result_run_step_prtouch
+output strings: {"Timer too close": 80, "allocMax=%u usedMax=%u": 85}
+```
+
+Every command/response name and field signature matches `reference/prtouch_v2.c` and this port's
+own `prtouch_mcu.py` exactly. **`"Timer too close"` is confirmed, directly from the real running
+firmware's own embedded string table (not the generic CrealityOfficial repo), to be a plain
+`output()` debug string (id 80) - definitively not part of the `is_shutdown`/`static_string_id`
+mechanism** (that table is separate, listed under `enumerations.static_string_id` in the same
+dictionary, and does not contain "Timer too close" at all) - upgrading §7's own conclusion from
+"strong, official, function-level match" to **directly proven from the exact real firmware**.
+
+### What this does and doesn't change
+
+Confirms, upgraded from STRONG_EVIDENCE/CONSISTENT_BUT_UNPROVEN to **PROVEN**: the wire
+protocol/command-set match, the "Timer too close" debug-print classification, the MCU/clock
+config, and the overall firmware identity question §1 originally left open.
+
+Does **not** by itself extend to instruction-level proof of §12/§13's specific mechanism claims
+(the unprotected bit-bang loop, `prtouch_event`'s real cycle cost) - those remain grounded in
+disassembly of the CrealityOfficial repo's same-board-family `.o` objects, not yet re-verified
+against this exact raw binary. A quick attempt to locate the same distinctive instruction
+sequences (e.g. the `mov.w r8, #24` bit-loop counter) directly in this real firmware via raw
+disassembly (`arm-none-eabi-objdump -D -b binary -m arm -Mforce-thumb`) did not immediately
+succeed within this session's remaining time budget - likely a register-allocation difference
+between this exact optimized build and the reference object's own compilation, not evidence
+against the underlying claim. Given the protocol-level identity is now proven beyond doubt, and
+given the reference `.o` objects were already confirmed at the instruction level to implement
+this exact protocol correctly (§7), the mechanism findings in §12/§13 are now considered
+**very strongly corroborated** rather than re-opened - but a full symboled disassembly of this
+exact real binary (matching command IDs to the real dispatch table, which Klipper's own
+alphabetical-command-ID convention makes possible) remains available as a further, not yet
+exhausted, avenue if the mechanism question ever needs to move from STRONG_EVIDENCE to
+byte-proven for this exact build specifically.
+
+`EXACT_LIVE_007_FIRMWARE_RECOVERED` (§13's synthesis field) is revised: **YES for the real _005
+firmware** (proven exact match by version hash) - the "_007" filename in this repo's own vendored
+tree was always a mislabeled, unrelated generic decoy (§12's correction stands), not a genuine
+Creality version bump this session needed to chase down separately.

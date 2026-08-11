@@ -768,3 +768,165 @@ gap - a printer's genuine first-ever boot, with no persisted file yet - is surfa
 `PRESSURE_PATH_SAFE_FOR_PROBING: YES, in the fail-closed sense` - `touch_probe()` cannot arm a
 real descent while the sensor is unstable/corrupted/unknown, now persistently so across restarts
 - but the underlying corruption itself is still not prevented, only detected and refused.
+
+---
+
+## 13. Final decisive pass (2026-08-12, same day) — closing the architecture question
+
+Follow-up requested a single, bounded pass to reach a real A-or-B decision (host-side
+containment sufficient vs. MCU-side fix required) rather than another open-ended report.
+
+### `prtouch_pres_task`'s gating confirmed at the disassembly level
+
+Disassembled `.text.prtouch_pres_task` directly (not just traced from `reference/prtouch_v2.c`
+as in §7/§12): its very first branch (`ldrh.w r5, [r4, #750]` / `cmp r5, #0` / `beq`) skips the
+entire `read_pres_prtouch` call path whenever `pres_cfg.tri_acq_ms == 0`. This field is only
+non-zero while a real trigger-detection window is armed (`start_pres_prtouch`, called by
+`touch_probe()`, never by bare `safe_move_z()`). **PROVEN**: the idle-loop background task does
+**not** continuously hammer the sensor - it is silent whenever no real probe attempt is active.
+This closes a real gap in §12's own "persistence" discussion, which had not yet ruled out
+ongoing background collision as the persistence mechanism - it is now ruled out.
+
+### `prtouch_event` timing bound — BEST/TYPICAL/WORST, not "substantial"
+
+Instruction-counted (not cycle-exact - no bus-wait-state model) both paths through the real
+disassembly, at 120MHz:
+
+| Case | Path | Estimated cycles | Estimated duration |
+|---|---|---|---|
+| BEST | early-exit (step count near zero) | ~26 | ~0.22 us |
+| TYPICAL | steady-state interval recompute (`sdiv` + 2x `timer_read_time()`, no float) | ~110 | ~0.91 us |
+| WORST | acceleration-zone sigmoid lookup + software double-precision multiply/convert (`__aeabi_dmul`/`__aeabi_d2uiz` - Cortex-M4 has no hardware double FPU) | ~350 | ~2.92 us |
+
+Against the reference thresholds given (6000 cyc ≈ 50us, 7200 cyc ≈ 60us): **even the WORST-CASE
+single firing (~3us) is roughly 20x shorter than a classic 60us HX711 PD_SCK power-down
+threshold.** This is a real, load-bearing correction to §12's own framing, which leaned on a
+generic "stretched-PD_SCK-triggers-power-down" narrative without quantifying it. Under this
+estimate, **a single ISR firing is unlikely, on its own, to force a full power-down via pure
+HIGH-duration violation.**
+
+### PD_SCK critical window — mapped exactly
+
+Full per-bit sequence in `read_pres_prtouch`'s clocked-mode loop (`pres_cnt=1` on this printer):
+`gpio_out_write(clk,1)` → shift accumulator → `gpio_out_write(clk,0)` → `gpio_in_read(dout)`.
+Confirmed (again) zero interrupt masking anywhere in this sequence - `prtouch_event` can
+preempt at any instruction boundary, including between the HIGH write and the LOW write (a
+direct HIGH-duration stretch) or between the LOW write and the DOUT read (a delayed-sample
+risk, not a HIGH-duration violation, but still capable of latching a wrong bit if the chip's
+own DOUT value has already begun transitioning by the time the delayed read happens).
+**Revised conclusion**: given the BEST/TYPICAL/WORST bound above, **bit-level sample corruption
+from a mistimed DOUT read (not necessarily a full power-down excursion) is the better-supported
+IMMEDIATE mechanism** - it needs no 60us threshold, only a delay comparable to the chip's own
+inter-bit timing margin, which single-digit-microsecond ISR firings can plausibly reach.
+
+### Persistence mechanism — genuinely unresolved, stated plainly
+
+With background collision ruled out (`prtouch_pres_task` properly gated) and a single ISR
+firing's duration falling well short of a classic power-down threshold, **the mechanism by
+which corruption persists for 75+ seconds across dozens of later, uncollided reads is not
+proven by anything found this session.** Two candidates remain open (§12's chip-side latch-up
+vs. GD32 GPIO-peripheral effect, the latter still judged less likely given BSRR-style atomic
+GPIO writes), but neither is confirmed. Stated as **UNKNOWN**, not downgraded to a false
+confidence level in either direction.
+
+### HX711-only reset path — searched, not found
+
+`read_pres_prtouch`'s 25ms staleness override (`is_data_valid==0 || elapsed>=0.025`) is
+hardcoded inside the compiled MCU firmware, not exposed as a host-configurable parameter on any
+command in the object file's symbol table. No command (`start_pres_prtouch`, `read_pres_prtouch`,
+`deal_avgs_prtouch`, `write_swap_prtouch`) exposes a channel/gain-reselect, a longer forced wait,
+or an explicit reset primitive. The only thing achievable from the host side (waiting longer
+between reads) was already directly tested live and proven insufficient - 75+ seconds of real
+elapsed time, spanning dozens of read attempts, did not self-recover. **HX711_ONLY_RESET_PATH:
+NOT_FOUND. HOST_SIDE_RECOVERY_POSSIBLE: NO** (beyond the fail-closed detection/refusal already
+implemented - recovery, as opposed to detection, is not available without an MCU firmware change).
+
+### Bootstrap-baseline hardened into an explicit 3-state model
+
+Per this mission's explicit requirement: `check_sensor_consistency()`'s baseline now has three
+states (`NO_REFERENCE` / `BOOTSTRAP_CANDIDATE` / `TRUSTED_REFERENCE`), not two. A
+corrupted-but-stable sensor present from the very first boot (no prior good session to compare
+against) now correctly stays refused across every restart, forever, until an explicit human
+`PRTOUCH_CONFIRM_BASELINE` - directly closing the residual gap §12's simpler version left open.
+See `klippy_extras/prtouch_probe.py`'s own `__init__`/`check_sensor_consistency`/
+`confirm_bootstrap_baseline` docstrings. 12 new/rewritten tests, including a 5-simulated-restart
+proof that an unconfirmed candidate never self-promotes. Full suite: 130/130 in
+`NebulaOS-klipper-loadcell`, 170/170 in `ke-mainline-klipper` (both minus the same pre-existing,
+unrelated absolute-import invocation quirk in 2-3 files, separately confirmed passing).
+
+### The residual risk this pass surfaced: trigger-detection reads share the same vulnerability
+
+`prtouch_pres_task()`'s real trigger-detection branch (armed during an actual `touch_probe()`
+descent, `tri_acq_ms != 0`) calls the exact same unprotected `read_pres_prtouch()`. This means
+the corruption mechanism proven above is not confined to the diagnostic path
+(`deal_avgs_prtouch`/READ_PRES) - it can, in principle, also corrupt a sample **during the live
+trigger-detection window of a real probe attempt**, not just when idle. This was not live-tested
+this session (would require real load-cell contact, explicitly deferred pending this analysis).
+Bounding factors already in place reduce but do not eliminate the consequence: a commanded
+descent is a fixed, pre-computed pulse count for the requested `down_min_z` (not unbounded), and
+`max_offset_correction_mm` (2mm default) caps how large a wrong offset from a false trigger could
+be - but neither directly prevents a missed-trigger or false-trigger event from happening.
+
+### Final synthesis
+
+```text
+IMMEDIATE_SAMPLE_CORRUPTION_MECHANISM: bit-level DOUT sample corruption from prtouch_event
+  (raw-step timer ISR) preempting read_pres_prtouch's unprotected 24-clock bit-bang loop
+CONFIDENCE: STRONG_EVIDENCE (both halves of the race proven via disassembly; exact chip-level
+  bit-latch behavior not independently measured with a scope)
+
+PD_SCK_TIMING_VIOLATION_PROVEN: NO (not a full 60us-class power-down violation from a single
+  firing, per the cycle estimate below - bit-level mistiming, not power-down, is now the
+  better-supported mechanism for the initial corruption)
+
+PRTOUCH_EVENT_MAX_DURATION:
+  BEST: ~0.22 us (~26 cycles)
+  TYPICAL: ~0.91 us (~110 cycles)
+  WORST: ~2.92 us (~350 cycles, acceleration-zone software double-precision path)
+
+EXACT_LIVE_007_FIRMWARE_RECOVERED: NO (searched again this pass for the exact filenames named;
+  none found anywhere on this machine; the vendored fw/F005/*.bin is confirmed a decodable but
+  unrelated generic build, not this device's real 38d96adc PRTouch-enabled firmware)
+
+PERSISTENCE_MECHANISM: UNKNOWN (background-collision ruled out this pass; single-firing
+  power-down ruled unlikely this pass; chip-side latch-up remains the leading but unconfirmed
+  candidate)
+CONFIDENCE: UNKNOWN, stated plainly rather than defaulted to a false PLAUSIBLE/STRONG_EVIDENCE
+
+HX711_ONLY_RESET_PATH: NOT_FOUND
+HOST_SIDE_RECOVERY_POSSIBLE: NO (detection/refusal yes, recovery no)
+
+BOOTSTRAP_BASELINE_HARDENED: YES (3-state model, PRTOUCH_CONFIRM_BASELINE, 12 tests)
+
+BEEPER_LINKED_TO_SENSOR_FAULT: UNKNOWN (unchanged from §12 - not re-investigated this pass,
+  explicitly left separate per this mission's own instruction)
+
+MCU_SIDE_FIX_REQUIRED: NO, for the specific risk this whole mission chain has focused on
+  (a corrupted/unconfirmed sensor silently authorizing a blind probe) - the 3-state fail-closed
+  guard fully contains that risk, host-side, with no MCU changes.
+  CONDITIONAL YES for one narrower, not-yet-tested risk: mid-descent trigger-detection reads
+  share the identical unprotected read path, and whether that specific window can produce a
+  missed- or false-trigger during a REAL contact attempt has not been live-tested.
+WHY: every containment proven and tested this mission (persisted baseline, drift rejection,
+  explicit human confirmation, never-self-promote) protects against arming a probe on a sensor
+  that is ALREADY visibly bad. None of it protects against the sensor becoming bad WHILE a
+  probe's own trigger-detection window is active, since that path was not exercised live.
+
+SAFE_TO_RESUME_PHYSICAL_QUALIFICATION: YES, WITH AN EXPLICIT SCOPE LIMIT.
+  Stage 1 (raw motion only, no pressure involvement) remains fully qualified by the fail-closed
+  guard and this analysis - resuming it carries no new risk from anything found this session.
+  Stages 5+ (first real load-cell contact, Z_OFFSET_CALIBRATION) should resume ONLY as a
+  narrowly-scoped, heavily-instrumented single touch attempt specifically designed to observe
+  whether trigger-detection reads show the same corruption signature live - not a full
+  production calibration - given the residual risk identified above has never been tested.
+
+NEXT_PHYSICAL_EXPERIMENT: a single, isolated real touch attempt (smallest available primitive
+  that exercises real trigger detection - not a full Z_OFFSET_CALIBRATION with retries), with
+  full log capture of the pressure sample buffer during the descent, specifically to check for
+  the same 0/2/4-of-8-style partial-corruption signature during a genuine contact event.
+MAXIMUM_PHYSICAL_RISK: nozzle-to-bed contact (inherent to any real touch test) - bounded by the
+  already-qualified max_probe_travel_mm/down_min_z ceiling, not unbounded.
+
+READY_FOR_HUMAN_AUTHORIZATION: YES - holding here per this mission's own instruction; no
+  physical movement was performed this pass.
+```

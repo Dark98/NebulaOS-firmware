@@ -592,3 +592,179 @@ already established in §8 as not replaceable without upstream Klipper changes).
 `UPSTREAM_KLIPPER_CORE_DIFFS: NONE` — confined to `klippy_extras/prtouch_probe.py`/
 `prtouch_v2.py` (both repos) and their own tests. `NebulaOS-klipper` `KLIPPER_PIN` bumped
 `4ae82620` → `7a755706` (fast-forward).
+
+---
+
+## 12. Root-cause mission (2026-08-12) — disassembly-grounded mechanism found
+
+Follow-up mission, explicitly asked not to stop at another investigation report. Re-cloned
+`CrealityOfficial/Ender-3_V3_KE_Klipper` (same tag, `V1.1.0.12`, already used in §7) and
+disassembled its real, unstripped `src/prtouch_v2_cm4.o` with `arm-none-eabi-objdump` (both
+tools confirmed available this session, unlike §7's assumption that only targeted symbol
+disassembly was practical).
+
+### The mechanism: an unprotected HX711 bit-bang transaction, preemptible by the raw-step ISR
+
+`read_pres_prtouch`'s full disassembly (0x208 bytes) was compared instruction-by-instruction
+against `reference/prtouch_v2.c`'s structure and matches it exactly — same 24-clock bit-bang
+loop, same `is_data_valid`/25ms-staleness gate, same sign-extension (`orr.w r2, r2, #0xff000000`
+on bit 23 set), same final `out_buf[i] -= pres_cfg.tri_avg_vals[i]` subtraction loop. This
+upgrades `reference/prtouch_v2.c`'s confidence rating for `read_pres_prtouch` specifically from
+"consistent but unproven" (§4) to **CONFIRMED_BY_REAL_FIRMWARE at the instruction level** — not
+just function/call-graph correspondence like §7's `prtouch_task` finding.
+
+**Critical new finding**: `read_pres_prtouch`'s entire 24-clock GPIO toggle sequence has **zero
+interrupt protection** — grepped the whole object file for `irq_disable`/`irq_save`/`cpsid`;
+none exist anywhere in it. Disassembling `prtouch_event` (the real per-step-pulse timer ISR,
+registered via `sched_add_timer` inside `command_start_step_prtouch`, confirmed by symbol
+relocation) shows it is a substantial handler (0x240 bytes): direction-change logic, buffered
+sample writes, and floating-point division/multiplication to look up the next waketime from a
+sigmoid acceleration table (`__aeabi_dmul`/`__aeabi_d2uiz`/`sigmoid_ary` lookup) before calling
+`sched_add_timer` again. This is a real, non-trivial hardware-interrupt handler, not a
+two-instruction stub — plausibly tens of microseconds per firing, and it fires repeatedly
+throughout the entire duration of any active raw step operation (`SAFE_MOVE_Z`, or
+`touch_probe()`'s own down/lift phases). `prtouch_step_task` (the buffered-sample-sending half
+of the always-running idle-loop `prtouch_task`) was also checked and confirmed to have **no**
+coordination with the pressure path either — the only cross-communication between step and
+pressure subsystems anywhere in this object file is the single-bit `read_swap_sta()`/
+`write_swap_sta()` trigger latch, not a synchronization primitive.
+
+**The mechanism this proves possible**: if `prtouch_event` (a hardware timer IRQ) fires while
+the always-running idle-loop's `prtouch_pres_task()` → `read_pres_prtouch()` call chain is
+mid-way through toggling PD_SCK, the ISR preempts it and stretches that specific clock pulse's
+width by however long the handler takes — exactly the mechanism this mission's own hypothesis
+named (unprotected bit-bang + concurrent timer activity → invalid PD_SCK framing/timing →
+corrupted acquisition). This is **STRONG_EVIDENCE**, grounded in real disassembly of both sides
+of the race (the unprotected read and the real ISR that can preempt it) — not fully **PROVEN**,
+since neither `prtouch_event`'s exact cycle count nor the HX711-family chip's exact power-down
+threshold on this specific board was independently measured (would need live firmware tracing
+or a scope on the sensor's clk/sdo lines).
+
+### 8-sample hypothesis: CONFIRMED, not just plausible
+
+Reproduced `command_deal_avgs_prtouch`'s exact algorithm (sort ascending, sum indices `[2:6]` of
+8, divide by 4) against mixtures of the real ~-256,000 baseline and near-zero corrupted samples:
+
+| valid samples / 8 | computed average | live observation |
+|---|---|---|
+| 0, 1, or 2 | 0 (the 1-2 real samples land in the trimmed *bottom* two slots, since -256000 sorts below 0, and get discarded as "outliers") | `-1` |
+| 3 | -64,000 | `-63,923` (77 off) |
+| 4 | -128,000 | `-127,864` (136 off) |
+| 6-8 | -256,000 (unaffected) | matches healthy baseline |
+
+The match for 3/8 and 4/8 is exact to within real sensor noise (~0.1-0.2%). **CONFIRMED**: the
+live-observed intermediate values are precisely explained by a mix of genuinely-good and
+genuinely-corrupted individual `read_pres_prtouch` calls landing in the trimmed average — not a
+coincidental resemblance. This also explains why `-1` (not exactly 0) was observed instead of a
+clean zero for the worst cases: real sensor noise on the 0-2 "corrupted" samples themselves.
+
+### Persistence across restart/reboot, only cleared by power cycle: still not fully explained
+
+The mechanism above explains a single momentarily-preempted `read_pres_prtouch` call producing
+one bad sample. It does **not**, by itself, explain why the corruption persisted for 75+ seconds
+across dozens of subsequent, uncollided read attempts (no raw step operation running, no
+`prtouch_event` firing) — a single bad sample from timing collision should not on its own
+explain a systematically-wrong reading long after the collision window closed. Two candidate
+explanations, both **PLAUSIBLE**, neither confirmed:
+- The load-cell amplifier chip itself (HX711-family; not independently confirmed as literally an
+  HX711 versus a compatible clone) enters a real power-down/latched state if a stretched PD_SCK
+  pulse crosses its own datasheet threshold, and the existing firmware has no explicit
+  detect-and-recover logic for this condition — only a genuine VDD removal/reapplication (a real
+  power cycle) resets the chip's own internal state, independent of anything the GD32 MCU or
+  Klipper software can do.
+- A GD32 GPIO/peripheral-register-level effect on the MCU side. Judged **less likely**:
+  `prtouch_event`'s step pulse uses `gpio_out_toggle_noirq`, and standard Cortex-M/GD32 GPIO
+  atomic set/reset (BSRR-style) operations are specifically designed not to require read-modify-
+  write, so they should not be able to disturb a sibling pin's configuration even under
+  interrupt-context use - but this was not independently verified against this exact toolchain's
+  generated code for `gpio_out_toggle_noirq`/`gpio_out_write`.
+
+Both explanations are consistent with the proven experimental fact (§11 above): 2 Klipper
+restarts and a full OS reboot all failed to clear it; a genuine physical power cycle did, twice.
+
+### Corrections to prior sessions' findings
+
+- **§1's "almost certainly encrypted/obfuscated"** claim about `fw/F005/mcu0_001_G32-mcu0_007_000.bin`
+  was investigated further this mission and found **wrong**: the file is not encrypted at all —
+  it decodes cleanly as a standard Klipper `.bin` (valid Cortex-M vector table, Klipper's own
+  documented bootloader-entry strings `"Request Serial Bootloader!!"`/`"CanBoot!"`, and a
+  zlib-compressed embedded MCU data dictionary that decompresses to valid JSON). However, that
+  dictionary reveals `"app": "Klipper"`, `"version": "v0.13.0-164-gc97932188"`,
+  `"build_machine_uid": "PELLCORP Apr 22 2026..."` — a generic 2026 pellcorp-fork rebuild for a
+  bare `gd32f303xe`, with a pure-vanilla 51-command list (`config_stepper`, `queue_step`,
+  `endstop_home`, ...) and **zero** PRTouch commands. This file was never the real Creality
+  firmware to begin with, consistent with §1's other finding that nothing in the live custom OS
+  ever consumes it - it's simply vendored dead weight, not a lead worth pursuing further for this
+  investigation.
+- No stock Creality OTA package/`.img` containing the real, PRTouch-enabled MCU firmware was
+  found anywhere on this machine, and no public documentation of the OTA package format or a
+  GD32 UART bootloader protocol specific to F005 was located. `CrealityOfficial/Ender-3_V3_KE_Klipper`'s
+  precompiled `.o` objects (§7, extended this section) remain the strongest evidence obtainable
+  without live MCU extraction or Creality's actual internal build history.
+
+### Beeper incident (2026-08-11 physical test) — separately investigated
+
+Exhaustively grepped the official Creality F005 source tree (`src/`, `config/F005/*.cfg`) and
+every symbol in all three `prtouch_v2_cm*.o` objects for `beep`/`buzz`/`alarm`/`speaker` — zero
+matches anywhere. This printer's own `printer.cfg` has no beeper config either. **STRONG_EVIDENCE**
+the mainboard's PRTouch/Klipper-facing MCU firmware does not drive whatever produced the
+repeating on/off alarm the operator heard. Community sources (a klipper-macros GitHub discussion,
+a Creality forum moderator reply) indicate the Ender-3 V3 KE may not have a factory-populated
+mainboard beeper at all — one moderator was explicitly unsure whether this model's beeper (if
+any) lives on the mainboard or inside the separate display module. **PLAUSIBLE, not proven**:
+the alarm originated from the physically-separate display/touchscreen module (not part of the
+Klipper↔F005 UART link, cleanly explaining why it's invisible to both Klipper's and
+GuppyScreen's own logs) or an independent hardware watchdog/supervisor circuit. **UNKNOWN**: the
+exact circuit or fault-triggering condition — no schematic or teardown was located. This
+finding does not block or change the pressure-sensor root-cause conclusion above; the two
+incidents remain not proven to share a cause (per this mission's own explicit instruction not to
+assume they do).
+
+### Why this cannot be fixed at the root, host-side
+
+The disturbance happens *inside* Creality's proprietary, compiled GD32 MCU firmware, in code
+this project has never had buildable source access to (only precompiled `.o` objects from an
+official-but-generic board-family repo, not this device's own `38d96adc` build). Adding
+interrupt protection around `read_pres_prtouch`'s bit-bang loop, or serializing it against
+`prtouch_event`, would require a real firmware patch and reflash of the mainboard's own MCU —
+explicitly out of scope for this mission without separate authorization, and not attempted.
+§8's already-established finding (the pressure/step coupling is fused inside the MCU firmware
+itself, with no upstream Klipper primitive able to observe this signal another way) still holds
+and was not re-litigated.
+
+### Root-cause fix implemented (host-side, defense only)
+
+Given a true prevention fix is not available, `check_sensor_consistency()`'s baseline was
+upgraded to persist to disk (`/opt/printer_data/prtouch_baseline.json` by default) and survive
+Klipper restarts and Linux reboots - closing the specific residual gap the 2026-08-11 session's
+purely session-local version had (a corrupted-but-stable reading present at Klipper startup,
+with no prior-session reference to compare against, could previously have been learned as
+"healthy"). See `klippy_extras/prtouch_probe.py`'s own `_load_persisted_baseline`/
+`_save_persisted_baseline`/`check_sensor_consistency` docstrings for the exact policy: a stable-
+but-wrong reading is now rejected against the OLD persisted reference and can never overwrite
+it, even across a restart - only readings already within tolerance of the trusted reference
+(persisted or freshly bootstrapped) are ever recorded as the new one. The one honest remaining
+gap - a printer's genuine first-ever boot, with no persisted file yet - is surfaced via a new
+`bootstrap` status field rather than silently assumed safe.
+
+### Final synthesis
+
+| Finding | Confidence |
+|---|---|
+| `read_pres_prtouch`'s compiled machine code matches `reference/prtouch_v2.c` instruction-for-instruction | **PROVEN** (direct disassembly comparison) |
+| `read_pres_prtouch`'s 24-clock bit-bang loop has no interrupt-disable/critical-section protection anywhere | **PROVEN** (exhaustive `irq_disable`/`irq_save`/`cpsid` grep across the whole object file: zero hits) |
+| `prtouch_event` is a real, substantial (0x240 byte) hardware timer ISR that fires repeatedly throughout any active raw step operation | **PROVEN** (disassembly + `sched_add_timer`/`sched_del_timer` call evidence) |
+| `prtouch_event` preempting a concurrent `read_pres_prtouch` call can stretch a PD_SCK pulse and corrupt that individual sample | **STRONG_EVIDENCE** (both halves of the race independently proven; the exact stretch duration vs. the sensor chip's own power-down threshold not independently measured) |
+| The live-observed `-1`/`-63,923`/`-127,864` values are produced by a mix of good/corrupted individual samples inside `deal_avgs_prtouch`'s own 8-sample trimmed average | **CONFIRMED** (exact quantitative reproduction: 3/8 valid → -64,000 predicted vs. -63,923 observed; 4/8 valid → -128,000 predicted vs. -127,864 observed) |
+| The corruption persists for 75+ seconds across dozens of uncollided reads, clearing only on physical power cycle (not Klipper restart, not OS reboot) | **PROVEN** (directly tested twice), mechanism for the *persistence specifically* (as opposed to the initial trigger) is **PLAUSIBLE**, not proven - see the two candidate explanations above |
+| `fw/F005/mcu0_001_G32-mcu0_007_000.bin` is encrypted/obfuscated | **DISPROVEN** this mission (it's a standard, decodable Klipper `.bin` - just for the wrong, generic firmware) |
+| A stock Creality OTA package containing the real PRTouch-enabled MCU firmware is recoverable on this machine | **DISPROVEN** (none found; F005 OTA format is undocumented publicly) |
+| The mainboard beeper is driven by the PRTouch/Klipper-facing MCU firmware | **STRONG_EVIDENCE against** (zero beeper code/symbols anywhere in the real source or compiled objects) |
+| The beeper and the pressure-sensor corruption share one root cause | **UNKNOWN** - not assumed either way, per this mission's own instruction |
+| A true host-side fix that prevents the corruption from occurring is achievable without MCU firmware changes | **DISPROVEN** (the disturbance is inside proprietary, unbuildable MCU firmware) |
+| The persisted-baseline guard closes the specific "corrupted state learned as healthy across a restart" gap it was built for | **PROVEN** (7 new tests directly reproduce and close this exact failure mode) |
+
+`RAW_OPERATION_STILL_CORRUPTS_SENSOR: YES` (unchanged - no MCU-side fix was made or attempted).
+`PRESSURE_PATH_SAFE_FOR_PROBING: YES, in the fail-closed sense` - `touch_probe()` cannot arm a
+real descent while the sensor is unstable/corrupted/unknown, now persistently so across restarts
+- but the underlying corruption itself is still not prevented, only detected and refused.

@@ -513,3 +513,82 @@ regressions (162 total in `NebulaOS-klipper-loadcell`, 160 in `ke-mainline-klipp
 
 `UPSTREAM_KLIPPER_CORE_DIFFS: NONE` in both repos — every change is confined to
 `klippy_extras/`/`klippy/extras/` (NebulaOS-owned) and its own tests.
+
+---
+
+## 11. Physical qualification Stage 1 (2026-08-11) — a new, more serious finding
+
+Executed `docs/NEBULAOS_PRTOUCH_PHYSICAL_QUALIFICATION.md`'s Stage 0/1 for real, live, on the
+device (engineering package `integration/prtouch-timer-fix-and-migrate-exec-bit` /
+`NebulaOS-klipper` `4ae82620` at the time). Stage 0 passed cleanly. Stage 1
+(`SAFE_MOVE_Z DIR=1 DIS=1 SPD=1`) executed with clean MCU/software behavior (single arm/disarm
+pair, `_own_raw_operation`/`_settle_after_disarm` both fired correctly, `webhooks.state`
+stayed `ready`) — but the printer had never been homed this session, so the Z stepper driver's
+own `enable_pin` was never asserted (confirmed: no `enable`/`stepper_enable` reference anywhere
+in `prtouch_probe.py`'s raw-move path). **No physical rotation occurred** — Stage 1's own
+"did it move, did it sound clean" pass criteria could not be evaluated this session; only the
+MCU command dispatch itself was validated.
+
+One `#output: Timer too close` line appeared even for this single, isolated, non-cadenced
+operation — new information against §9's "repeated near-immediate rescheduling" causal chain,
+since this run had no retry/rearm cadence at all. Consistent with §7's proof that this specific
+print is a harmless debug artifact of Creality's own real `sched_add_timer()` (clamp-and-print,
+not `try_shutdown`), not evidence this run was unsafe — no sentinel, no shutdown followed.
+
+### The real finding: raw step operations corrupt the pressure-sensor read
+
+Immediately after the single `SAFE_MOVE_Z`, `READ_PRES` (previously stable at ~-256,000)
+started returning near-zero garbage (`ch0=-1`), individually finite and far under
+`max_baseline_abs` — invisible to the existing single-read guard. Reproduced twice (2/2). Not a
+simple "stuck" value: repeated polling showed it drift between `-1`, `-63,923`, `-127,864` —
+values suspiciously close to 0/8, 2/8, and 4/8 fractions of the true baseline, consistent with a
+mix of genuinely-corrupted and genuinely-valid low-level samples within `deal_avgs_prtouch`'s
+own 8-sample trimmed average (`reference/prtouch_v2.c`'s `command_deal_avgs_prtouch`).
+
+Source-level analysis ruled out the obvious host-side explanation: `deal_avgs_prtouch` zeros its
+own `tri_avg_vals` baseline at the start of every call, so the corruption is not a stale-tare
+artifact — the underlying bit-banged 24-bit acquisition (`read_pres_prtouch`) is producing bad
+data at the hardware/timing level, not a Python-side bug.
+
+**Persistence, tested directly**: the corrupted state survived two `S55klipper restart`s and
+one full `reboot` (all three reconnect to the MCU over UART but do not power-cycle it) — still
+`-1`/degraded after each. A genuine physical power cycle (user action) cleared it completely:
+three consecutive clean reads immediately after boot (`-255101`, `-255158`, `-255067`), no
+degradation. This is strong, directly-tested evidence the fault is **persistent MCU-internal
+state** (most likely inside the GD32F303's own firmware — an ADC/timing reference or similar
+disturbed by the raw step pulse train) that only clears on true power-on reset, not something
+recoverable from the host side by any means short of a physical power cycle.
+
+**Safety implication**: this is a materially different and more serious risk than anything
+§1–§10 identified. A real `touch_probe()`/`Z_OFFSET_CALIBRATION` attempt run any time after a
+raw step operation — even much later, even across service restarts — could silently attempt a
+blind descent with a non-functional trigger sensor, for however long it takes an operator to
+notice and physically power-cycle the machine. The existing pre-motion guard
+(`_check_baseline_safe`) could not have caught this: a single `-1` or `-127,864` reading passes
+`_evaluate_baseline` outright.
+
+### Fix (2026-08-11, same session)
+
+`PrtouchProbe.check_sensor_consistency()` (`klippy_extras/prtouch_probe.py`,
+`klippy/extras/prtouch_probe.py` in `NebulaOS-klipper-loadcell`): takes
+`sensor_consistency_reads` (default 3) independent `deal_avgs_prtouch` reads and requires them
+to (a) each individually pass the existing plausibility guard, (b) agree with each other within
+`sensor_consistency_max_spread` (default 5000 counts — real observed healthy-read spread was
+~300), and (c) not drift more than `sensor_baseline_max_drift` (default 10000 counts) from a
+session-local, auto-learned healthy baseline (refreshed only on a fully-passing batch, so a
+rejected batch can never poison it). Distinguishes `healthy`/`unstable`/`corrupted` rather than
+a single ok/not-ok, exposed via `get_status()`'s new `sensor_state` field. Wired into both
+`touch_probe()`'s pre-motion guard and its own per-attempt retry-loop check. 9 new tests
+reproduce the exact live-observed flicker/drift patterns; all pre-existing tests (117 in
+`NebulaOS-klipper-loadcell`, 149 in `ke-mainline-klipper`, both minus 2-3 files with an
+unrelated pre-existing absolute-import invocation quirk) continue to pass.
+
+This is explicitly **defense in depth, not a root-cause fix** — the underlying MCU-level
+corruption mechanism itself remains unexplained at the register/instruction level (would need
+live firmware debugging or an oscilloscope on the sensor's clk/sdo lines during a raw step burst
+to pin down further) and is out of scope to fix directly (proprietary Creality MCU firmware,
+already established in §8 as not replaceable without upstream Klipper changes).
+
+`UPSTREAM_KLIPPER_CORE_DIFFS: NONE` — confined to `klippy_extras/prtouch_probe.py`/
+`prtouch_v2.py` (both repos) and their own tests. `NebulaOS-klipper` `KLIPPER_PIN` bumped
+`4ae82620` → `7a755706` (fast-forward).

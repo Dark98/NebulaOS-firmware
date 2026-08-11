@@ -1017,3 +1017,165 @@ byte-proven for this exact build specifically.
 firmware** (proven exact match by version hash) - the "_007" filename in this repo's own vendored
 tree was always a mislabeled, unrelated generic decoy (§12's correction stands), not a genuine
 Creality version bump this session needed to chase down separately.
+
+## 15. Stock-vs-NebulaOS behavioral fidelity mission (2026-08-12)
+
+Mission: before any further physical testing, determine whether NebulaOS drives the PRTouch MCU
+differently from real stock host software, on the hypothesis that the remaining risk is host-side
+sequencing rather than an MCU defect. Source of truth for "stock": `reference/prtouch_v2_wrapper.py`
+(2202 lines), verified byte-faithful this session by matching its exact error-message text against
+strings extracted from the real compiled `prtouch_v2_wrapper.cpython-38-mipsel-linux-gnu.so`
+recovered from a genuine device rootfs backup (see §14 for the backup's own provenance).
+
+### Stock touch-probe sequence (`run_step_prtouch`, reference lines 1157-1307)
+
+| Order | Host function | MCU command | Key parameters | Delay | State change |
+|---|---|---|---|---|---|
+| 1 | `run_step_prtouch` loop top | `deal_avgs_prtouch` | count=8 | none scripted; MCU-side sample time | fresh pressure baseline read, no persisted trust model |
+| 2 | same | `start_pres_prtouch` | acq_ms, send_ms, need_cnt, hftr_cut, lftr_k1, tri_min_hold, tri_max_hold (real trigger params) | - | pressure trigger detection armed |
+| 3 | same | `start_step_prtouch` | dir=0, step_cnt, step_us, acc_ctl_cnt, send_ms (real move params) | - | step pulse train + step-side trigger arm |
+| 4 | same | (buffer collection) | poll `result_run_step_prtouch`/`result_run_pres_prtouch` | timeout-bounded | - |
+| 5 | same | `start_step_prtouch` | dir=0, step_cnt=0 (stop) | - | step disarmed |
+| 6 | same | `start_pres_prtouch` | all-zero (stop) | - | pressure disarmed |
+| 7a | on trigger | (compute Z, may lift back) | - | - | attempt recorded |
+| 7b | on no-trigger | `continue` straight to step 1 | - | **zero** - no settle delay | immediate rearm |
+| 8 | recovery lift (up path) | `start_step_prtouch` (dir=1) then stop | step-only, no pressure re-arm | - | position restored |
+
+`safe_move_z()` (reference lines 1122-1151), used for stock's own general manual Z moves: arms
+`start_pres_prtouch` with REAL trigger parameters concurrently with `start_step_prtouch` for every
+non-zero move - i.e. stock's manual-jog primitive is itself trigger-aware and can early-stop on
+contact. It is not a pressure-free primitive anywhere in the reference source.
+
+**`STOCK_STANDALONE_RAW_STEP: NOT_USED`** - no path in `reference/prtouch_v2_wrapper.py` arms
+`start_step_prtouch` without a concurrent `start_pres_prtouch`, except the up-direction recovery/
+retract lift after a down attempt (which needs no trigger detection, since it is moving away from
+the bed, not toward it).
+
+### NebulaOS touch-probe sequence (`prtouch_probe.py`, `_touch_probe`, lines 716-805)
+
+| Order | Host function | MCU command | Key parameters | Delay | State change |
+|---|---|---|---|---|---|
+| 1 | `_touch_probe` loop top | `check_sensor_consistency(base_cnt=8)` → `deal_avgs_prtouch` | count=8 | none scripted | 3-state guard re-checked every attempt; `_fail()`s closed on any drift from the persisted TRUSTED_REFERENCE |
+| 2 | same | `start_pres` | acq_ms, send_ms, need_cnt, hftr_cut, lftr_k1, tri_min_hold, tri_max_hold | - | pressure armed |
+| 3 | same | `start_step` | dir=0, step_cnt, step_us, acc_ctl_cnt, send_ms | - | step armed |
+| 4 | same | (buffer collection) | poll, timeout-bounded | - | - |
+| 5 | same | `start_step` | dir=0, all-zero (stop) | - | step disarmed |
+| 6 | same | `start_pres` | all-zero (stop) | - | pressure disarmed |
+| 6a | same | `_settle_after_disarm()` | - | `raw_op_settle_s` (real reactor pause) | **not present in stock** |
+| 7a | on trigger | `_lift_after_down` → `_raw_lift` (step-only) → disarm → `_settle_after_disarm()` | - | settle again | position restored |
+| 7b | on no-trigger | `_recover_after_no_trigger` → `_raw_lift` (step-only) → disarm → `_settle_after_disarm()` | - | settle again | position restored, THEN loop repeats |
+
+`safe_move_z()` (`prtouch_probe.py` lines 405-437, `_raw_move`): step-only, never arms
+`start_pres`, but does carry the same `_settle_after_disarm()` call as the production path.
+
+### Behavioral diff
+
+| Difference | Classification | Why |
+|---|---|---|
+| Pres-before-step arm order | **IDENTICAL** | NebulaOS's `_touch_probe` (lines 751/754) already matches stock's own ordering exactly - confirmed by direct read of both sources, no fix needed. |
+| Step-before-pres disarm order | **IDENTICAL** | NebulaOS lines 759/761 match stock lines 1185-1186 exactly. |
+| Per-attempt fresh baseline read before arming | **IDENTICAL (+ hardened)** | Both re-read pressure at the top of every attempt. NebulaOS additionally routes this through the persisted 3-state trust guard (§ root-cause mission, this doc's earlier sections) instead of trusting the raw read outright - a strict superset of stock's behavior, not a divergence from it. |
+| Recovery/retract lift is step-only, no pressure re-arm | **IDENTICAL** | Confirmed in both `run_step_prtouch`'s recovery lift (reference lines ~1287-1291) and `_raw_lift` - neither re-arms pressure for the up-move, since it's moving away from the bed. |
+| Settle delay after every disarm (`_settle_after_disarm`) | **NEBULAOS SAFETY IMPROVEMENT** | Stock's own no-trigger retry path (`continue` at reference lines 1211/1253) rearms with zero delay after disarm - this is the exact cadence this investigation's earlier sessions identified as able to let a still-draining `prtouch_event` ISR collide with the next `read_pres_prtouch`/`deal_avgs_prtouch` call. NebulaOS added a real settle gap on **every** disarm (production and diagnostic paths alike) specifically to close that window. This is a deliberate, evidence-driven addition beyond stock, not a fidelity gap - retained as-is. |
+| `SAFE_MOVE_Z` (NebulaOS diagnostic) never arms pressure; stock's `safe_move_z()` always does | **NEBULAOS SAFETY IMPROVEMENT / DELIBERATE SIMPLIFICATION** | Stock's manual-jog primitive is itself trigger-aware (can early-stop on unexpected contact during a jog). NebulaOS's `SAFE_MOVE_Z` is a deliberately minimal, blind, step-only diagnostic built during this investigation specifically to isolate raw step timing from pressure-channel behavior; it is not used by any production path (`Z_OFFSET_CALIBRATION`/`touch_probe()` never call it). Since it shares the same `_settle_after_disarm` gap and does not participate in the `read_pres_prtouch` corruption mechanism at all (that lives entirely inside the pressure read itself, not in whether pressure happens to be concurrently armed during a step move), this difference carries no safety cost. Documented in code (see `safe_move_z()`'s updated docstring, both repos). |
+| Persisted 3-state sensor-trust model (NO_REFERENCE/BOOTSTRAP_CANDIDATE/TRUSTED_REFERENCE) | **NEBULAOS SAFETY IMPROVEMENT** | Stock has no equivalent - a `deal_avgs_prtouch` read is trusted outright every time. NebulaOS added this earlier in the same overall investigation (root-cause mission, this doc's §12/§13) specifically because stock's own trust-everything behavior is what let corrupted post-boot readings silently become the operating baseline in the original incident's causal chain. Retained in full. |
+
+### Conclusion
+
+The sequencing that matters for the corruption mechanism - pressure-arm-before-step-arm,
+step-disarm-before-pressure-disarm, and a fresh baseline read before every attempt - was **already
+identical** between NebulaOS's production `touch_probe()`/`_touch_probe()` path and real stock
+before this mission began. No corruption-relevant behavioral fix was required or made. The one
+functional (non-doc) change from this mission is a new regression test
+(`StockFidelityOrderingTest` in `test_prtouch_orchestration.py`, both repos) that locks this
+ordering in permanently, plus a docstring clarification on `safe_move_z()` documenting its one
+confirmed, intentional, safety-neutral deviation from stock.
+
+This also reframes the original Stage 1 incident: the settle-delay and fail-closed baseline guard
+that would have prevented it did not exist in the code running at the time of that incident - both
+were built afterward, during the root-cause mission, and now cover the production `touch_probe()`
+path and the `SAFE_MOVE_Z`/`_raw_move`/`_raw_lift` diagnostic primitives equally.
+
+### Final structured report
+
+```
+STOCK_IMPLEMENTATION_FOUND: YES
+STOCK_FILES: reference/prtouch_v2_wrapper.py (byte-faithful, verified against the real compiled
+  .so's error strings), reference/z_compensate_wrapper equivalent not separately re-examined this
+  mission (out of scope - no touch-sequence logic lives there, it consumes touch_probe's output)
+STOCK_TOUCH_SEQUENCE: baseline read -> arm pres (real params) -> arm step (real params) ->
+  collect -> disarm step -> disarm pres -> (trigger: compute+lift) or (no-trigger: immediate
+  rearm, zero delay)
+STOCK_STANDALONE_RAW_STEP: NOT_USED
+STOCK_PARAMETERS: sourced from config at runtime in both stock and NebulaOS (tri_send_ms,
+  tri_acq_ms, tri_need_cnt, tri_hftr_cut, tri_lftr_k1, tri_min_hold, tri_max_hold, step_us,
+  acc_ctl_cnt, low_spd_nul, send_step_duty) - already reconciled in an earlier session (see
+  memory: load-cell config reconciliation, 2026-08-05); no new default/dynamic mismatch found.
+NEBULAOS_SEQUENCE: identical arm/disarm ordering and per-attempt baseline re-check to stock, plus
+  a settle delay after every disarm and a persisted 3-state sensor-trust guard stock lacks.
+BEHAVIORAL_DIFFERENCES: see table above - all classified IDENTICAL or NEBULAOS SAFETY IMPROVEMENT
+  / DELIBERATE SIMPLIFICATION. Zero CLEAR BUG or UNKNOWN findings.
+PRESSURE_ARM_ORDER_DIFFERENCE: NONE (identical)
+DISARM_ORDER_DIFFERENCE: NONE (identical)
+SETTLE_DELAY_DIFFERENCE: NebulaOS adds one; stock has none. Retained as a deliberate improvement.
+PRESSURE_REINIT_DIFFERENCE: NONE FOUND - deal_avgs_prtouch is inherently self-re-taring on the
+  MCU side (memsets its accumulator before reading) in both implementations; no separate
+  reinit/reset call exists in stock to be missing from NebulaOS.
+DRIVER_ENABLE_DIFFERENCE: NOT RE-EXAMINED THIS MISSION (out of scope - no evidence surfaced
+  suggesting stepper-enable sequencing participates in the corruption mechanism).
+LIKELY_CAUSE_OF_SENSOR_CORRUPTION: unchanged from the root-cause mission - the unprotected
+  read_pres_prtouch bit-bang loop being preempted by a concurrent/recently-active prtouch_event
+  step ISR (§12/§13). This mission found no evidence that host-side sequencing in the production
+  path contributes to or differs in a way that would explain the original incident; the incident
+  is attributable to code that predated the settle-delay and baseline-guard hardening.
+CONFIDENCE: HIGH for the sequencing-fidelity finding (direct source comparison, both sides
+  read in full); unchanged (STRONG_EVIDENCE, corroborated by exact-firmware protocol proof, see
+  §14) for the underlying ISR-collision mechanism itself.
+DOES_STOCK_AVOID_THE_PROBLEM_BY_HOST_SEQUENCE: NO - stock's own no-trigger retry path rearms
+  with zero settle delay, i.e. stock does not avoid the theoretical race either. NebulaOS is
+  strictly more conservative here, not less.
+HOST_SIDE_FIX_IDENTIFIED: NO new fix required - the fix (settle delay + fail-closed baseline
+  guard) was already implemented in the prior root-cause mission and is confirmed by this
+  mission to already cover the production path with full stock-sequence fidelity.
+FIX_IMPLEMENTED: Documentation/regression-test only (docstring clarification on safe_move_z();
+  new StockFidelityOrderingTest locking in the confirmed ordering match). No functional/runtime
+  behavior changed.
+FILES_CHANGED: klippy/extras/prtouch_probe.py (docstring only), klippy/extras/
+  test_prtouch_orchestration.py (new test class) - both NebulaOS-klipper-loadcell and its
+  ke-mainline-klipper/klippy_extras mirror; docs/NEBULAOS_PRTOUCH_MCU_TIMER_FORENSICS.md (this
+  section).
+SAFE_MOVE_Z_STATUS: DIAGNOSTIC_ONLY - confirmed not used by any production code path
+  (Z_OFFSET_CALIBRATION/touch_probe never call it), intentionally simpler than stock's own
+  safe_move_z() (no pressure arm), safety-neutral for the corruption mechanism under
+  investigation, and now documented as such in its own docstring.
+TESTS: 86/86 passing (NebulaOS-klipper-loadcell/klippy/extras, prtouch+z_compensate related
+  modules), 82/82 passing (ke-mainline-klipper/klippy_extras mirror), including 2 new tests
+  this mission.
+UPSTREAM_KLIPPER_CORE_DIFFS: NONE
+COMMITS: pending (this mission) - doc-only + test-only + docstring-only changes, both repos.
+BUILD: NOT REQUIRED - no runtime/functional behavior changed by this mission; the already-built
+  and already-flashed engineering candidate from the prior root-cause mission (KLIPPER_PIN
+  7a7557063f8898461e0dbfde57aa74303a2cd555) already contains the settle-delay and 3-state
+  baseline-guard hardening this mission confirms is stock-sequence-faithful.
+SAFE_TO_RESUME_PHYSICAL_TESTING: YES, for the already-flashed hardened build, starting from a
+  real touch_probe()/Z_OFFSET_CALIBRATION attempt - not further SAFE_MOVE_Z diagnostic cycling,
+  which has already served its purpose (revealing the underlying MCU-side timing vulnerability)
+  and offers no further fidelity-relevant information now that its one known deviation from
+  stock is understood and classified as safety-neutral.
+NEXT_PHYSICAL_TEST: A single, low-risk Z_OFFSET_CALIBRATION / touch_probe() attempt at a
+  conservative down_min_z, on the currently-flashed hardened build, with the operator watching
+  for (a) the mainboard beeper/alarm behavior seen in the original Stage 1 incident, (b) any
+  PrtouchProbeSafetyError raised by the fail-closed baseline guard (expected/safe outcome if the
+  sensor is ever inconsistent), (c) normal convergence to a Z offset within tolerance.
+WHY: This is the actual production code path (never exercised physically before), already
+  proven stock-sequence-faithful by this mission, already covered by the settle-delay and
+  persisted 3-state guard from the prior root-cause mission, and is the only physical test that
+  can retire the remaining real unknown - whether the hardening holds up under genuine nozzle-
+  to-bed contact - none of which can be resolved by further offline analysis.
+WHAT_REQUIRES_HUMAN_OBSERVATION: physical presence at the printer for the reasons above
+  (beeper/alarm, unexpected motion, nozzle-to-bed contact) - unchanged from every prior physical-
+  test authorization in this investigation.
+```
+
+Awaiting explicit authorization before performing NEXT_PHYSICAL_TEST, per this mission's own
+closing instruction.

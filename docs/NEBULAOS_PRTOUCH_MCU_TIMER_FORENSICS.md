@@ -1322,3 +1322,44 @@ RECOMMENDATION: treat Timer too close during raw-step disarm as a known, expecte
   factored into §13's "SAFE_TO_RESUME_PHYSICAL_QUALIFICATION" assessment and behaved exactly as
   that assessment predicted - present, logged, non-fatal, fully recovered.
 ```
+
+## 17. CORRECTION to §14 (2026-08-13) — the firmware-identity claim was wrong, active safety implication
+
+**§14's central claim is retracted**: `fw/F005/mcu0_001_G32-mcu0_005_000.bin` was claimed there to
+be byte-proven identical to the real, currently-running firmware
+(`38d96adc-dirty-20231016_135251-longer-virtual-machine`). This was independently re-checked this
+session, two ways, both giving the same contradicting answer:
+
+1. Fresh extraction directly from the genuine `ke-factory-backup/rootfs2.img` device backup.
+2. Reassembly of the real OTA update package `Ender-3_V3_KE_F005_ota_img_V1.1.0.12` from its 110
+   chunk files, MD5-verified against its own manifest (`2e3749c42bee7109ab838e50c3d1793e` - exact
+   match, so the reassembly is provably correct), then extracted the same path from that.
+
+Both give SHA256 `0b8ecfad8e65e90a3cfc08dd8534dd568e341c160897e6050eadcbf1eb917d4a`, decoding to:
+
+```
+version: v0.13.0-164-gc97932188
+build_machine_uid: 'PELLCORP Apr 22 202609:30:55'
+prtouch commands: (none)
+```
+
+This is generic PELLCORP placeholder firmware, not the real, prtouch-enabled, currently-running
+firmware. §14's own basis for the claim was not re-locatable this session to determine where the
+discrepancy originated (a different, no-longer-present extraction, or a genuine analysis error at
+the time) - not resolved, just corrected on the evidence available now.
+
+### Active safety implication - do not boot stock until this is resolved
+
+Stock's own `S13mcu_update` init script runs on every stock boot: queries the live MCU's real
+version (`mcu_util -i /dev/ttyS1 -g`), compares it against this bundled `.bin`'s embedded version,
+and calls `mcu_util -u` (a real UART flash) on any mismatch. Given the bundled file is generic
+non-PRTouch firmware, a mismatch against the real running firmware is likely - **booting into
+stock carries a real, non-theoretical risk of silently reflashing the MCU with firmware that has
+zero PRTouch commands**, with no other independently-verified-good copy of the real `38d96adc`
+firmware currently in hand to recover with. Not reversible by rebooting back to custom.
+
+`STOCK_BOOT_MCU_REFLASH_RISK: REAL, not theoretical, until this is resolved.`
+
+Any future stock-vs-NebulaOS A/B comparison (e.g. for the Z-stepper sound investigation, §16) must
+either locate and independently re-verify a genuine copy of the real `38d96adc` firmware from some
+other source first, or find a comparison method that never requires booting stock at all.

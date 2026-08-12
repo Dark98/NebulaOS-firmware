@@ -3,13 +3,17 @@
 # through the real production PrtouchProbe/PrtouchMCU classes against the fake MCU harness.
 # No physical motion, no real time elapsed (FakeReactor's clock is a plain float).
 #
-# Run from the repo root: python3 -m unittest klippy_extras.test_prtouch_orchestration -v
+# Run from klippy/: python3 -m unittest extras.test_prtouch_orchestration -v (this fork's own layout - klippy/extras/
+# is a real Python package named 'extras', not 'klippy_extras' - see NebulaOS-firmware's
+# klippy_extras/ mirror of this same file for that repo's own invocation form)
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 import unittest
 
-from klippy_extras import prtouch_test_support as fake
-from klippy_extras import prtouch_v2
+from . import prtouch_mcu
+from . import prtouch_test_support as fake
+from . import prtouch_v2
+from . import prtouch_probe
 
 
 MM_PER_STEP = 0.01  # step_base(2) * FakeStepper default step_dist(0.005)
@@ -141,7 +145,7 @@ class SuccessfulTriggerTest(unittest.TestCase):
     def test_trigger_z_uses_expected_arrays(self):
         # cross-check against prtouch_calibration directly with the same inputs the
         # orchestration layer actually collected, proving the handoff is faithful.
-        from klippy_extras import prtouch_calibration as cal
+        from . import prtouch_calibration as cal
         _, mcu, pv2 = _build()
         down_min_z = 2.0
         step_cnt = int(down_min_z / MM_PER_STEP)  # matches PrtouchProbe.get_step_counts exactly
@@ -405,6 +409,58 @@ class SafeMoveZCleanupTest(unittest.TestCase):
         disarm_calls = [c for c in mcu.all_calls('start_step_prtouch')
                          if c.by_field['step_cnt'] == 0]
         self.assertTrue(disarm_calls, "safe_move_z must disarm even when repair raises")
+
+
+class SafetyGuardRejectionIsACommandErrorTest(unittest.TestCase):
+    """Live incident, 2026-08-12: see prtouch_v2.py's _guarded() docstring for the full story -
+    PrtouchProbeSafetyError/PrtouchProtocolError reaching Klipper's real gcode dispatcher
+    unconverted triggers a full printer emergency_stop instead of a clean command rejection.
+    Confirmed live: the fail-closed no-trusted-reference guard doing exactly its documented job
+    took the whole printer down on the very first real touch attempt. Proves every prtouch_v2.py
+    gcode command that can reach probe/mcu code now converts both known exception types into
+    printer.command_error before they can escape to the dispatcher."""
+
+    def test_safe_move_z_converts_probe_safety_error(self):
+        _, mcu, pv2 = _build()
+        pv2.probe.safe_move_z = lambda *a, **k: (_ for _ in ()).throw(
+            prtouch_probe.PrtouchProbeSafetyError("raw op already active"))
+        with self.assertRaises(fake.CommandError) as ctx:
+            pv2.cmd_SAFE_MOVE_Z(fake.FakeGCmd())
+        self.assertIn("raw op already active", str(ctx.exception))
+
+    def test_safe_move_z_converts_protocol_error(self):
+        _, mcu, pv2 = _build()
+        pv2.probe.safe_move_z = lambda *a, **k: (_ for _ in ()).throw(
+            prtouch_mcu.PrtouchProtocolError("stale buffer"))
+        with self.assertRaises(fake.CommandError):
+            pv2.cmd_SAFE_MOVE_Z(fake.FakeGCmd())
+
+    def test_prtouch_test_touch_converts_probe_safety_error(self):
+        _, mcu, pv2 = _build()
+        pv2.probe.touch_probe = lambda *a, **k: (_ for _ in ()).throw(
+            prtouch_probe.PrtouchProbeSafetyError("no trusted reference yet"))
+        with self.assertRaises(fake.CommandError) as ctx:
+            pv2.cmd_PRTOUCH_TEST_TOUCH(fake.FakeGCmd())
+        self.assertIn("no trusted reference yet", str(ctx.exception))
+        self.assertNotIsInstance(ctx.exception, prtouch_probe.PrtouchProbeSafetyError)
+
+    def test_confirm_baseline_converts_probe_safety_error(self):
+        _, mcu, pv2 = _build()
+        pv2.probe.confirm_bootstrap_baseline = lambda *a, **k: (_ for _ in ()).throw(
+            prtouch_probe.PrtouchProbeSafetyError("no candidate exists"))
+        with self.assertRaises(fake.CommandError) as ctx:
+            pv2.cmd_PRTOUCH_CONFIRM_BASELINE(fake.FakeGCmd())
+        self.assertIn("no candidate exists", str(ctx.exception))
+
+    def test_a_genuinely_unexpected_error_still_propagates_unconverted(self):
+        # deliberately NOT one of the two known prtouch exception types - the whole-printer
+        # shutdown fail-safe should still apply to failure modes this fix doesn't specifically
+        # recognize, rather than silently downgrading every exception a probe method can raise.
+        _, mcu, pv2 = _build()
+        pv2.probe.touch_probe = lambda *a, **k: (_ for _ in ()).throw(
+            RuntimeError("something genuinely unexpected"))
+        with self.assertRaises(RuntimeError):
+            pv2.cmd_PRTOUCH_TEST_TOUCH(fake.FakeGCmd())
 
 
 class PrtouchTestTouchCommandTest(unittest.TestCase):

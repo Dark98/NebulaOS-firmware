@@ -1179,3 +1179,146 @@ WHAT_REQUIRES_HUMAN_OBSERVATION: physical presence at the printer for the reason
 
 Awaiting explicit authorization before performing NEXT_PHYSICAL_TEST, per this mission's own
 closing instruction.
+
+## 16. Live physical qualification (2026-08-12) — a real touch attempt, a real bug, a real root-cause answer
+
+Following §15's fidelity finding (production `touch_probe()` sequencing already matches stock),
+physical testing resumed with a live device. What actually happened, in order:
+
+### The emergency-shutdown bug (found, fixed, verified live - unrelated to Timer too close)
+
+The first `PRTOUCH_TEST_TOUCH` call on a fresh flash correctly hit the fail-closed
+no-trusted-reference guard (`PrtouchProbeSafetyError`, raised *before* arming anything - proven
+by the log: no `start_step_prtouch`/`start_pres_prtouch` anywhere near it, only the zero-motion
+`deal_avgs_prtouch` baseline reads). But that exception type isn't `self.printer.command_error`,
+and real Klipper's `gcode.py` dispatch loop only recognizes `command_error` as a clean rejection -
+anything else falls into `except: # Internal error on command` → `printer.invoke_shutdown()`, a
+full `emergency_stop` of every MCU. The safety guard doing its job correctly took the whole
+printer down. Root-caused, fixed (every gcode entry point that can reach probe/mcu code now
+converts `PrtouchProbeSafetyError`/`PrtouchProtocolError` into `command_error` before they can
+escape - see `prtouch_v2.py`'s `_guarded()` and `z_compensate.py`'s `cmd_z_offset_calibration`/
+`cmd_nozzle_clear`), tested (9 new regression tests, 111/111 passing), rebuilt, reflashed, and
+**verified live**: the identical no-trusted-reference scenario, replayed on the fixed build,
+produced the same descriptive message but the printer's `webhooks.state` stayed `"ready"`
+throughout - confirmed via `klippy.log` (`raw op #1 start/end (touch_probe)` bracketing a clean
+text rejection, `Stats` logging resuming normally immediately after, zero `emergency_stop`/
+`Internal error` lines anywhere near it).
+
+### The real touch: bounded, recovered cleanly, no crash
+
+With a `TRUSTED_REFERENCE` established (`PRTOUCH_CONFIRM_BASELINE`, ch0=-253765, consistent with
+every reading taken this session), `PRTOUCH_TEST_TOUCH` was run for real: a genuine 3mm-bounded
+descent from the post-homing Z=10mm rest height (per `[stepper_z]`'s BLTouch-established resting
+position), no trigger detected (expected - 3mm doesn't reach the bed from Z=10), a recovery lift
+back to the start height, `touch_probe`'s own `_fail()` courtesy safety lift on top of that, and
+a clean `command_error("touch_probe did not converge after 1 attempts")`. The printer's state
+never left `"ready"`. This is the intended, correct behavior of a deliberately conservative first
+bounded test.
+
+### New finding: `Timer too close` fires on every raw-step disarm, not just retry cadences
+
+All three disarms in that single sequence (main descent, recovery lift, `_fail()`'s fixed 5mm
+safety lift) each logged `mcu 'mcu': #output: Timer too close` - 3/3, at three different step
+rates (`step_us=5000/2500/500`) and step counts (`600/600/1000`). The operator directly heard a
+real, audible "beeper going on and off" sound during this exact sequence and confirmed by ear it
+was the Z stepper, not the mainboard beeper (which §12 already found has no driving code
+anywhere in the real PRTouch firmware or this printer's config).
+
+This resolves an explicitly open question from §6 (2026-08-10): whether `Timer too close` is
+inherent to any isolated raw step dispatch, or only shows up during rapid retry/disarm/rearm
+cadences. §6's own plan called for an isolated `SAFE_MOVE_Z` test to answer this but was never
+executed before this session. This live attempt answers it anyway, via `touch_probe()`'s own
+three distinct dispatches within one *non-retried* (`retries=1`) call: **`Timer too close` is not
+cadence-dependent - it fired on every single disarm, at every step rate tested, independent of
+retry behavior.** This is new, decisive evidence beyond what §2's original multi-retry incident
+alone could show (that incident couldn't rule out "only shows up on rapid retries" as the cause;
+this one does, since there was no retry).
+
+### Root cause of `Timer too close`, and why it is not host-fixable
+
+§7 already proved, from Creality's own official GPL source
+(`CrealityOfficial/Ender-3_V3_KE_Klipper`, `src/sched.c`), that `Timer too close` is a **deliberate,
+non-fatal debug print** - Creality's real firmware has upstream's `try_shutdown("Timer too
+close")` commented out, replaced with a silent `waketime = now + 2us` clamp and a plain `output()`
+call. It fires whenever `sched_add_timer()` is asked to schedule a timer whose target `waketime`
+has already passed (or is within the clamp's own 2us window) by the time the MCU processes it.
+
+**Ruled out this session**: host-side eagerness. `prtouch_units.py`'s `probe_timeout_seconds()`
+already makes the host wait `distance/speed + margin_s` (2.0s default, 5.0s for `_raw_move`/
+`_raw_lift`) before ever issuing the disarm - multiple *seconds* of margin against a mechanism
+that trips on a *microsecond*-scale window. The host is never the eager party here; whatever is
+tight enough to clamp must be internal to the MCU firmware's own disarm-handling code path, most
+plausibly the disarm's own `sched_add_timer()` call (needed to finalize/settle the pulse-generation
+state even for a `step_cnt=0` stop) computing its target relative to the MCU's clock at that exact
+instant, with normal residual `prtouch_event` ISR activity from the just-finished move (§13's own
+measured ~0.2-2.9us/firing) enough to push "now" past it by the time it actually runs.
+
+This is the same conclusion §12/§13 already reached for the pressure-corruption mechanism, now
+extended to the step-timing side: **the disturbance is inside Creality's proprietary, unbuildable
+MCU firmware** (this project has precompiled `.o` objects from the same board family, not this
+device's own `38d96adc` build, and no source-level access to `command_start_step_prtouch`'s exact
+disarm-path implementation). No host-side timing change can add more margin than already exists
+without changing what's tight in the first place - which lives on the other side of the UART link.
+
+### Is the audible correlation proven?
+
+**PLAUSIBLE, not proven.** Three `Timer too close` clamp events landing in quick succession during
+one touch attempt, each representing a real (if brief) perturbation to MCU-side step-related
+scheduling right at a disarm boundary, is a coherent explanation for "three short beeps in a row."
+But this session had no oscilloscope or cycle-exact instrumentation on the stepper coil current or
+step GPIO to directly confirm the clamp event is what produces the audible artifact, as opposed to
+some other disarm-adjacent behavior. Recorded as **PLAUSIBLE**, consistent with this document's own
+confidence-labeling convention, not inflated to PROVEN.
+
+### Is this dangerous?
+
+No evidence found that it is. It is: (a) explicitly designed by Creality to be non-fatal (clamp +
+log, not shutdown) - proven in §7; (b) mechanistically unrelated to the pressure-sensor corruption
+path (§12's `read_pres_prtouch` bit-bang/`prtouch_event` race is a completely different code path
+from step-disarm scheduling); (c) did not, in this session, cause a shutdown, a corrupted sensor
+reading, or any motion beyond what was correctly commanded - the printer remained `"ready"`
+throughout, the recovery lift traveled the correct distance, and post-touch `READ_PRES` samples
+stayed within the same stable range as every pre-touch sample this session. It also is not new to
+this specific touch attempt - §2's original 2026-08-10 incident already logged five of these
+warnings across normal attempt cycles with fully normal sensor reads and recovery lifts in between
+each one, before a much later, unrelated shutdown.
+
+### Final synthesis
+
+```text
+TIMER_TOO_CLOSE_ROOT_CAUSE: sched_add_timer() on the MCU is asked to schedule a waketime that has
+  already passed by the time it's processed - proven (§7) to be a deliberate, non-fatal Creality
+  firmware behavior (silent 2us clamp + debug print, try_shutdown explicitly commented out), not
+  a NebulaOS host-side bug and not a shutdown trigger by itself.
+CONFIDENCE: PROVEN (direct diff against Creality's own official, unmodified sched.c)
+
+WHY_IT_FIRES_ON_DISARM_SPECIFICALLY: host-side timing ruled out this session (2-5s of margin
+  already exists before disarm is ever sent) - the tight window is internal to the MCU firmware's
+  own disarm-handling sched_add_timer() call, most plausibly interacting with residual
+  prtouch_event ISR activity from the just-completed move.
+CONFIDENCE: STRONG_INFERENCE (host-side elimination is proven; the exact MCU-internal mechanism
+  is not, since command_start_step_prtouch's disarm path was not independently disassembled this
+  session)
+
+CADENCE_DEPENDENCE: DISPROVEN this session - fired on 3/3 disarms in a single non-retried
+  touch_probe() call, at three different step rates/counts. Not limited to rapid retry loops.
+CONFIDENCE: PROVEN (direct observation, no retry loop involved)
+
+AUDIBLE_CORRELATION: PLAUSIBLE, not proven (no oscilloscope/cycle-exact instrumentation available
+  this session to directly confirm the clamp event is what the operator heard).
+
+DANGEROUS: NO evidence found. Non-fatal by Creality's own explicit design, mechanistically
+  separate from the pressure-corruption path, no shutdown/corruption/uncommanded motion observed
+  in this session's real touch attempt, and already present (with normal recovery) in the original
+  2026-08-10 incident's five occurrences.
+
+HOST_SIDE_FIX_POSSIBLE: NO (same conclusion as §12's pressure-corruption mechanism - the
+  disturbance is inside proprietary MCU firmware this project cannot rebuild or patch).
+
+RECOMMENDATION: treat Timer too close during raw-step disarm as a known, expected, non-fatal
+  characteristic of this MCU's PRTouch firmware (Creality's own design choice, not a defect this
+  project introduced or can remove) rather than a blocking condition. The emergency-shutdown bug
+  found and fixed this session was the actual new risk; Timer too close itself was already
+  factored into §13's "SAFE_TO_RESUME_PHYSICAL_QUALIFICATION" assessment and behaved exactly as
+  that assessment predicted - present, logged, non-fatal, fully recovered.
+```

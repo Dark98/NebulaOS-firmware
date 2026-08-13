@@ -8,7 +8,9 @@
 #     baseline_reference/baseline_deviation_max check.
 #   - read_diagnostics()/get_status(): zero-motion, cached, never itself touches the MCU.
 #
-# Run from the repo root: python3 -m unittest klippy_extras.test_prtouch_probe_safety_hardening -v
+# Run from klippy/: python3 -m unittest extras.test_prtouch_probe_safety_hardening -v (this fork's own layout - klippy/extras/
+# is a real Python package named 'extras', not 'klippy_extras' - see NebulaOS-firmware's
+# klippy_extras/ mirror of this same file for that repo's own invocation form)
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 import atexit
@@ -18,9 +20,9 @@ import shutil
 import tempfile
 import unittest
 
-from klippy_extras import prtouch_probe
-from klippy_extras import prtouch_test_support as fake
-from klippy_extras import prtouch_v2
+from . import prtouch_probe
+from . import prtouch_test_support as fake
+from . import prtouch_v2
 
 _TEMP_DIRS = []
 atexit.register(lambda: [shutil.rmtree(d, ignore_errors=True) for d in _TEMP_DIRS])
@@ -58,10 +60,11 @@ def _build(prtouch_overrides=None, prime_trusted_baseline=True):
         pv2.probe.check_sensor_consistency()
         pv2.probe.confirm_bootstrap_baseline()
 
-    # Every no-trigger/guard-failure path in these tests ends in _fail()'s own safety lift
-    # (safe_move_z), which - like any real probe attempt that never fills its buffer - falls
-    # through to the manual_get_steps/manual_get_pres repair-query path. Generic zero-filled
-    # repair data, same convention as test_prtouch_orchestration.py's own _build().
+    # Every no-trigger/guard-failure path in these tests ends in the matching recovery lift
+    # (_recover_after_no_trigger), which - like any real probe attempt that never fills its
+    # buffer - falls through to the manual_get_steps/manual_get_pres repair-query path.
+    # Generic zero-filled repair data, same convention as test_prtouch_orchestration.py's own
+    # _build().
     def _step_repair(call):
         i = call.args[1]
         return {'oid': pv2.mcu.step_oid, 'index': i, 'tri_time': 0,

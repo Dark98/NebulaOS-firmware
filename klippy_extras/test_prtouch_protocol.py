@@ -2,7 +2,9 @@
 # against the real, published Creality reference (reference/prtouch_v2_wrapper.py), using
 # the real production PRTouchV2/PrtouchMCU/PrtouchProbe classes wired to a fake MCU.
 #
-# Run from the repo root: python3 -m unittest klippy_extras.test_prtouch_protocol -v
+# Run from klippy/: python3 -m unittest extras.test_prtouch_protocol -v (this fork's own layout - klippy/extras/
+# is a real Python package named 'extras', not 'klippy_extras' - see NebulaOS-firmware's
+# klippy_extras/ mirror of this same file for that repo's own invocation form)
 # (not from within klippy_extras/, unlike test_prtouch_calibration.py - prtouch_v2.py's
 # `from . import ...` relative imports need a real package, see prtouch_test_support.py's
 # module docstring for why).
@@ -10,8 +12,8 @@
 # This file may be distributed under the terms of the GNU GPLv3 license.
 import unittest
 
-from klippy_extras import prtouch_test_support as fake
-from klippy_extras import prtouch_v2
+from . import prtouch_test_support as fake
+from . import prtouch_v2
 
 
 def _build():
@@ -118,15 +120,32 @@ class RuntimeCommandFieldsTest(unittest.TestCase):
         self.assertEqual(call.by_field, {'oid': pv2.mcu.pres_oid, 'base_cnt': 8})
         self.assertEqual(result['ch0'], -251471)
 
-    def test_zero_arm_stop_matches_reference_stop_pattern(self):
-        # reference's own "stop" idiom (e.g. line 1035-1036): re-send both commands with all
-        # zero fields to halt. Confirms our stop() helper matches the same zero-field shape.
+    def test_stop_step_matches_reference_stop_pattern(self):
+        # reference's own real step-disarm idiom (prtouch_v2_wrapper.py e.g. line 445:
+        # [step_oid, dir, 0, 0, 0, 0, low_spd_nul, send_step_duty, 0] - send_ms=0 is the one
+        # field that matters, since reference/prtouch_v2.c's command_start_step_prtouch
+        # checks send_ms==0 (its args[2]) as the dedicated stop sentinel). stop_step() always
+        # sends all-zero fields (2026-08-14 disarm-protocol mission) - the C source returns
+        # before ever reading dir/low_spd_nul/send_step_duty on this path, so an all-zero
+        # shape is exactly as correct as reference's own low_spd_nul/send_step_duty passthrough,
+        # and removes any risk of a caller's own values leaking into a supposedly-inert field.
         _, mcu, pv2 = _build()
-        pv2.mcu.stop()
+        pv2.mcu.stop_step()
         step_call = mcu.last_call('start_step_prtouch')
-        pres_call = mcu.last_call('start_pres_prtouch')
-        self.assertEqual(step_call.args, [pv2.mcu.step_oid, 0, 0, 0, 0, 0, 5, 16, 0])
-        self.assertEqual(pres_call.args, [pv2.mcu.pres_oid, 0, 0, 0, 0, 0, 0, 0, 0])
+        self.assertEqual(step_call.args, [pv2.mcu.step_oid, 0, 0, 0, 0, 0, 0, 0, 0])
+        self.assertEqual(step_call.by_field['send_ms'], 0,
+                          "send_ms must be 0 - this is the real MCU protocol's stop sentinel")
+
+    def test_start_step_rejects_step_cnt_zero(self):
+        # 2026-08-14 disarm-protocol mission: start_step() must never silently accept a
+        # step_cnt=0 call - on the real protocol that only cleanly disarms when send_ms is
+        # ALSO 0 (see stop_step()), and start_step()'s own send_ms default is 10, so a
+        # step_cnt=0 call through here would previously have fallen through to a degenerate
+        # re-arm instead of a clean stop. This is the regression test for that exact mistake
+        # no longer being possible to make by accident.
+        _, mcu, pv2 = _build()
+        with self.assertRaises(ValueError):
+            pv2.mcu.start_step(0, 0, 0, 0)
 
 
 class ResponseHandlerUnmarshalTest(unittest.TestCase):

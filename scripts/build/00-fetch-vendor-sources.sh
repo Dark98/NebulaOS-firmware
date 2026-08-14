@@ -171,7 +171,22 @@ if [ ! -d "x2000_kernel_6.6/.git" ]; then
 		"$KERNEL_REPO" \
 		x2000_kernel_6.6
 	git -C x2000_kernel_6.6 sparse-checkout set kernel/kernel-6.6
-	git -C x2000_kernel_6.6 checkout "$KERNEL_BRANCH"
+	# Phase 11 (2026-08-15): checkout $KERNEL_PIN directly, not
+	# $KERNEL_BRANCH - a real, previously-latent bug found live doing the
+	# Phase 9-vs-Phase-11 rebuild-and-compare test. openke is a real,
+	# actively-pushed-to branch (kernel changes AND this repo's own docs
+	# both land real commits there - see coreflake1/NebulaOS-kernel's own
+	# README), so checking out the branch NAME lands wherever that branch's
+	# tip happens to be at clone time, not necessarily at KERNEL_PIN -
+	# exactly what happened here: a docs-only commit pushed to openke after
+	# this pin was recorded moved the branch tip past it, and a fresh clone
+	# landed on that newer commit, failing the fail-loud check below (this
+	# check did its job - it's the checkout strategy that was wrong, not
+	# the verification). Checking out the pin directly makes a fresh clone
+	# correct by construction; the verification below stays as defense in
+	# depth for the "already present, skipping clone" branch, where a
+	# previous run could have left the checkout on any ref.
+	git -C x2000_kernel_6.6 checkout "$KERNEL_PIN"
 else
 	echo "== x2000_kernel_6.6 already present, skipping clone =="
 fi

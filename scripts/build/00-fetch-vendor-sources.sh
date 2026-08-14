@@ -152,9 +152,10 @@ clone_pinned() {
 	echo "== $name pinned commit verified ($expected) =="
 }
 
-# X2000 kernel SDK, OpenKE fork (FIRMWARE.md sec 39): coreflake1/NebulaOS is a
-# real GitHub fork of the original upstream (Llixuma/ingenic-linux-kernel6.6-
-# x2000-v1.0-20250221 @ a98c2e1, "initial release"), with every OpenKE change
+# X2000 kernel SDK, OpenKE fork (FIRMWARE.md sec 39): coreflake1/NebulaOS-kernel
+# (renamed 2026-08-14 from coreflake1/NebulaOS) is a real GitHub fork of the
+# original upstream (Llixuma/ingenic-linux-kernel6.6-x2000-v1.0-20250221 @
+# a98c2e1, "initial release"), with every OpenKE change
 # (NS2009 touch, the display panel driver, BT H5 vendor ext, watchdog fix, DTS
 # wiring, arch/mips/Kconfig compression selects) as one real, reviewable commit
 # on the `openke` branch, rather than a patch file applied at build time -

@@ -2,9 +2,11 @@
 
 These scripts reproduce everything documented in `FIRMWARE.md` §8-14: a custom Linux 6.6.18-rt23
 kernel + Buildroot rootfs for the Ender 3 V3 KE's Nebula Pad (Ingenic X2000), with touch, display,
-WiFi, Bluetooth, camera, and a full Klipper/Moonraker/nginx/Mainsail app stack - everything except
-GuppyScreen (deliberately deferred, see the main README) and the real-hardware boot test itself
-(needs the user present, not something a script can do).
+WiFi, Bluetooth, camera, and a full Klipper/Moonraker/nginx/Mainsail/GuppyScreen app stack (Stage 04
+fetches, cross-compiles, and installs GuppyScreen automatically - it was deliberately deferred/manual
+early in this project's history, but that gap was closed 2026-08-07, see `manifests/dependencies.conf`'s
+own `GUPPYSCREEN_PIN` history) - everything except the real-hardware boot test itself (needs the user
+present, not something a script can do).
 
 **Read this before running anything**: these scripts encode the *correct*, clean sequence -  not a
 literal replay of every trial-and-error step taken while first discovering it (several real bugs
@@ -28,8 +30,9 @@ rootfs-overlay deletion gotcha) are all documented there with root causes, not j
   `vendor/` directory is gitignored on purpose (large, mixed-provenance sources, see the main
   README), so nothing under `vendor/` is checked into this repo. The kernel is the one exception to
   "gitignored, nothing checked in": this project's kernel changes live as real commits on the
-  `openke` branch of a real fork, [`coreflake1/NebulaOS`](https://github.com/coreflake1/NebulaOS)
-  (forked from the original upstream, `Llixuma/ingenic-linux-kernel6.6-x2000-v1.0-20250221`) -
+  `openke` branch of a real fork, [`coreflake1/NebulaOS-kernel`](https://github.com/coreflake1/NebulaOS-kernel)
+  (renamed 2026-08-14 from `coreflake1/NebulaOS`; forked from the original upstream,
+  `Llixuma/ingenic-linux-kernel6.6-x2000-v1.0-20250221`) -
   `00-fetch-vendor-sources.sh` clones that branch directly, so the kernel changes travel with their
   own real git history instead of a patch file. What else *is* checked into this repo: the small set
   of files this project actually wrote by hand (`scripts/build/overlay/` - init scripts and configs,
@@ -67,10 +70,10 @@ Buildroot's own overlay dir). No manual step, no real device required.
 
 1. **`00-fetch-vendor-sources.sh`** - clones/downloads every third-party source this build needs
    into `vendor/` at the exact refs this project used: the X2000 kernel SDK, this project's own
-   fork's `openke` branch (`coreflake1/NebulaOS`, forked from `Llixuma/ingenic-linux-kernel6.6-
+   fork's `openke` branch (`coreflake1/NebulaOS-kernel`, forked from `Llixuma/ingenic-linux-kernel6.6-
    x2000-v1.0-20250221`), the Buildroot config (`lone0/buildroot-x2000`), Klipper
-   (`pellcorp/klipper`, SimpleAF's fork), Moonraker (`Arksine/moonraker`, official),
-   `pellcorp/k1-ustreamer`, and Mainsail's latest prebuilt release.
+   (`coreflake1/NebulaOS-klipper`), GuppyScreen (`coreflake1/NebulaOS-guppyscreen`), Moonraker
+   (`Arksine/moonraker`, official), `pellcorp/k1-ustreamer`, and Mainsail's latest prebuilt release.
    - **`scripts/firmware/fetch-cyw43430-wifi-firmware.sh`** - fetches the canonical 7.45.98.125
      WiFi firmware + its own matching CLM blob directly from Infineon's own upstream repo
      (`Infineon/ifx-linux-firmware`, pinned commit, hash-verified) and stages them as

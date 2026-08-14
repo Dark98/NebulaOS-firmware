@@ -23,7 +23,20 @@ ARTIFACT_DIR="$REPO_ROOT/artifacts/buildroot-halley5-v30-image"
 # changes the commit hash a tag points to; the tag NAME survives that
 # unchanged). The previous hardcoded f9dc10f594c... stopped resolving to
 # any object at all after the rewrite.
-BASELINE_TAG="nebulaos-display-baseline-vsync-pwm-sleep-2026-08-03"
+#
+# 2026-08-14 (Phase 11 verification-gate fix): a hardcoded tag NAME goes
+# stale just as surely as a hardcoded SHA - see assert-baseline-config.sh's
+# matching fix and comment for the full incident writeup (a real Phase 9
+# fresh-build run hit this exact staleness: FAIL against a baseline that
+# was never wrong, just 11 days and 5 accepted baselines out of date).
+# Derives the reference from the most recently created
+# nebulaos-canonical-baseline-* tag instead, so this never needs a manual
+# bump again.
+BASELINE_TAG=$(git -C "$REPO_ROOT" tag -l 'nebulaos-canonical-baseline-*' --sort=-creatordate | head -1)
+[ -n "$BASELINE_TAG" ] || {
+	echo "FATAL: no nebulaos-canonical-baseline-* tag found in this checkout - fetch tags with 'git fetch --tags' first." >&2
+	exit 1
+}
 git -C "$REPO_ROOT" rev-parse --verify -q "$BASELINE_TAG" >/dev/null || {
 	echo "FATAL: baseline tag '$BASELINE_TAG' does not exist in this checkout - fetch tags with 'git fetch --tags' first." >&2
 	exit 1

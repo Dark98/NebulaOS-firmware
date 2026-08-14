@@ -158,7 +158,28 @@ post-build)
 	# whole check failed with a confusing FAIL instead of a clear "commit not
 	# found" error). The tag name itself is stable across the rewrite - git
 	# filter-repo updates what it points to, not its name.
-	BASELINE_REF="nebulaos-display-baseline-vsync-pwm-sleep-2026-08-03"
+	#
+	# 2026-08-14 (Phase 11 verification-gate fix): a hardcoded tag NAME goes
+	# stale just as surely as a hardcoded SHA - this check silently compared
+	# against nebulaos-display-baseline-vsync-pwm-sleep-2026-08-03 (2026-08-03)
+	# for 11 days while five newer nebulaos-canonical-baseline-* tags were
+	# accepted (through 2026-08-14-prtouch-qualified), so kernel.config's PASS
+	# broke the moment any later-accepted variant touched it - a real Phase 9
+	# fresh-build run hit exactly this, correctly reporting FAIL against a
+	# baseline that was never wrong, just outdated. Every individual Kconfig
+	# assertion in this same script still passed; only this byte-identical
+	# check against a manually-bumped reference broke.
+	#
+	# Fix: derive the reference from the most recently created
+	# nebulaos-canonical-baseline-* tag instead of one fixed name, so this
+	# check never needs a manual bump again as new baselines are accepted -
+	# see this same comment in baseline-difference-gate.sh, which had the
+	# identical bug and the identical fix.
+	BASELINE_REF=$(git -C "$REPO_ROOT" tag -l 'nebulaos-canonical-baseline-*' --sort=-creatordate | head -1)
+	[ -n "$BASELINE_REF" ] || {
+		echo "FATAL: no nebulaos-canonical-baseline-* tag found in this checkout - fetch tags with 'git fetch --tags' first." >&2
+		exit 1
+	}
 	git -C "$REPO_ROOT" rev-parse --verify -q "$BASELINE_REF" >/dev/null || {
 		echo "FATAL: baseline tag '$BASELINE_REF' does not exist in this checkout - fetch tags with 'git fetch --tags' first." >&2
 		exit 1

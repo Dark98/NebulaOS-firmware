@@ -73,7 +73,14 @@ echo "== build.sh: pulling pinned build environment $IMAGE_REF (engine: $ENGINE)
 # live this would break any tool that wants to write a cache/config file
 # (pip's download cache, git's config lookup). /tmp is writable by anyone
 # and doesn't need to persist across runs.
-exec "$ENGINE" run --rm -it \
+# No -it: found live running this in the background (nohup, no attached
+# terminal) - `-t` fails outright ("cannot attach stdin to a TTY-enabled
+# container because stdin is not a terminal") when there's no real TTY, and
+# this build never actually needs interactive stdin either way. Plain `-i`
+# without `-t` would still block waiting on stdin in a backgrounded/piped
+# invocation with none available - dropping both is correct for a batch
+# build, not just a workaround.
+exec "$ENGINE" run --rm \
 	--user "$(id -u):$(id -g)" \
 	-e HOME=/tmp \
 	-v "$SCRIPT_DIR:$SCRIPT_DIR" \

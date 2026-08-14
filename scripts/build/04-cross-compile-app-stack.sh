@@ -29,22 +29,10 @@ MANIFEST="$REPO_ROOT/manifests/dependencies.conf"
 exec 9>"$REPO_ROOT/.nebulaos-build.lock"
 flock -n 9 || { echo "another build stage already owns $REPO_ROOT/.nebulaos-build.lock" >&2; exit 1; }
 
-# Orphaned-container cleanup (2026-07-23) - a real incident this session: a
-# killed build wrapper left its `docker run` process running independently
-# (SIGKILL can't be trapped, so no shell-level cleanup in the wrapper itself
-# could ever have caught this), needing a manual `docker stop` once noticed.
-# Every docker container this project's scripts spawn carries
-# --label openke-build-pid=<owning PID> - check each one found against a
-# live PID and stop anything left over from a run that's no longer alive,
-# regardless of whether the lock itself was contended just now.
-for cid_pid in $(docker ps --filter "label=openke-build-pid" --format '{{.ID}}={{.Label "openke-build-pid"}}' 2>/dev/null); do
-	cid=${cid_pid%%=*}
-	opid=${cid_pid##*=}
-	if ! kill -0 "$opid" 2>/dev/null; then
-		echo "stopping orphaned container $cid (from dead pid $opid)" >&2
-		docker stop "$cid" >/dev/null 2>&1 || true
-	fi
-done
+# Phase 11 (2026-08-15): the orphaned-container-cleanup loop and per-call
+# `--label openke-build-pid=$$` that used to live here are gone - nothing in
+# this script spawns a nested container of its own any more to leak (see
+# 02-configure-buildroot.sh's own Phase 11 note for the full rationale).
 VENDOR="$REPO_ROOT/vendor"
 BUILDROOT_DIR="$VENDOR/buildroot-x2000"
 OVERLAY="$BUILDROOT_DIR/board/halley5-nebulaos-overlay"
@@ -78,14 +66,12 @@ mkdir -p "$WORK"
 ###    (this fork's own checked-in c_helper.so is a prebuilt MIPS binary of
 ###    unknown toolchain/ABI provenance - don't trust it, rebuild it here).
 echo "== cross-compiling Klipper's chelper C extension =="
-docker run --label "openke-build-pid=$$" --rm \
-	-v "$VENDOR/klipper:/klipper" \
-	-v "$BUILDROOT_DIR/output:/buildroot-output" \
-	-w /klipper/klippy/chelper "$PELLCORP_K1_BASH_BUILD_IMAGE" bash -c '
-	export PATH=/buildroot-output/host/bin:$PATH
+(
+	cd "$VENDOR/klipper/klippy/chelper"
+	export PATH="$BUILDROOT_DIR/output/host/bin:$PATH"
 	make clean
 	make CC=mipsel-buildroot-linux-gnu-gcc
-'
+)
 
 # Production optimization mission, Phase 6 (2026-07-30): c_helper.so shipped
 # with full debug symbols in every rootfs.squashfs built so far - Buildroot's
@@ -98,13 +84,11 @@ docker run --label "openke-build-pid=$$" --rm \
 # pattern's build-ID-preserving intent.
 mkdir -p "$WORK/debug-symbols"
 cp "$VENDOR/klipper/klippy/chelper/c_helper.so" "$WORK/debug-symbols/c_helper.so.debug"
-docker run --label "openke-build-pid=$$" --rm \
-	-v "$VENDOR/klipper:/klipper" \
-	-v "$BUILDROOT_DIR/output:/buildroot-output" \
-	-w /klipper/klippy/chelper "$PELLCORP_K1_BASH_BUILD_IMAGE" bash -c '
-	export PATH=/buildroot-output/host/bin:$PATH
+(
+	cd "$VENDOR/klipper/klippy/chelper"
+	export PATH="$BUILDROOT_DIR/output/host/bin:$PATH"
 	mipsel-buildroot-linux-gnu-strip --strip-unneeded c_helper.so
-'
+)
 
 mkdir -p "$OVERLAY/opt/klipper"
 rm -rf "$OVERLAY/opt/klipper/klippy"
@@ -213,14 +197,10 @@ fi
 # its own log file at all.
 echo "== downloading Moonraker's pure-Python deps with no Buildroot package =="
 mkdir -p "$WORK/pywheels"
-docker run --label "openke-build-pid=$$" --rm --user root -v "$WORK/pywheels:/wheels" "$PELLCORP_K1_BASH_BUILD_IMAGE" bash -c '
-apt-get update >/dev/null 2>&1
-apt-get install -y python3-pip >/dev/null 2>&1
-pip3 download -d /wheels --no-deps \
+pip3 download -d "$WORK/pywheels" --no-deps \
 	inotify-simple==2.0.1 libnacl==2.1.0 apprise==1.9.3 ldap3==2.9.1 \
 	importlib_metadata==8.4.0 preprocess-cancellation==0.2.1 pyasn1 \
 	zipp==3.20.2 wheel==0.42.0
-'
 SITEPKG="$OVERLAY/usr/lib/python3.11/site-packages"
 mkdir -p "$SITEPKG"
 for whl in "$WORK"/pywheels/*.whl; do
@@ -228,23 +208,16 @@ for whl in "$WORK"/pywheels/*.whl; do
 done
 
 echo "== cross-compiling Moonraker's one real C extension: streaming-form-data =="
-docker run --label "openke-build-pid=$$" --rm --user root -v "$WORK/pywheels:/wheels" "$PELLCORP_K1_BASH_BUILD_IMAGE" bash -c '
-apt-get update >/dev/null 2>&1
-apt-get install -y python3-pip >/dev/null 2>&1
-pip3 download -d /wheels --no-deps --no-binary :all: streaming-form-data==1.11.0
-'
+pip3 download -d "$WORK/pywheels" --no-deps --no-binary :all: streaming-form-data==1.11.0
 tar xzf "$WORK/pywheels/streaming-form-data-1.11.0.tar.gz" -C "$WORK"
-docker run --label "openke-build-pid=$$" --rm \
-	-v "$SYSROOT:/sysroot" \
-	-v "$TOOLCHAIN_HOST:/buildroot-host" \
-	-v "$WORK/streaming-form-data-1.11.0:/src" \
-	-w /src "$PELLCORP_K1_BASH_BUILD_IMAGE" bash -c '
-	export PATH=/buildroot-host/bin:$PATH
+(
+	cd "$WORK/streaming-form-data-1.11.0"
+	export PATH="$TOOLCHAIN_HOST/bin:$PATH"
 	mipsel-buildroot-linux-gnu-gcc -shared -fPIC -O2 \
-		-I/sysroot/usr/include/python3.11 \
+		-I"$SYSROOT/usr/include/python3.11" \
 		-o streaming_form_data/_parser.cpython-311-mipsel-linux-gnu.so \
 		streaming_form_data/_parser.c
-'
+)
 
 # Production optimization mission, Phase 6 (2026-07-30): same unstripped-
 # debug-symbols gap as c_helper.so above - this .so is never routed through
@@ -253,13 +226,11 @@ docker run --label "openke-build-pid=$$" --rm \
 mkdir -p "$WORK/debug-symbols"
 cp "$WORK/streaming-form-data-1.11.0/streaming_form_data/_parser.cpython-311-mipsel-linux-gnu.so" \
    "$WORK/debug-symbols/_parser.cpython-311-mipsel-linux-gnu.so.debug"
-docker run --label "openke-build-pid=$$" --rm \
-	-v "$TOOLCHAIN_HOST:/buildroot-host" \
-	-v "$WORK/streaming-form-data-1.11.0:/src" \
-	-w /src "$PELLCORP_K1_BASH_BUILD_IMAGE" bash -c '
-	export PATH=/buildroot-host/bin:$PATH
+(
+	cd "$WORK/streaming-form-data-1.11.0"
+	export PATH="$TOOLCHAIN_HOST/bin:$PATH"
 	mipsel-buildroot-linux-gnu-strip --strip-unneeded streaming_form_data/_parser.cpython-311-mipsel-linux-gnu.so
-'
+)
 
 mkdir -p "$SITEPKG/streaming_form_data"
 cp "$WORK"/streaming-form-data-1.11.0/streaming_form_data/*.py \
@@ -293,57 +264,55 @@ cp "$WORK"/streaming-form-data-1.11.0/streaming_form_data/*.py \
 # libmd, libbsd, then ustreamer itself) with the toolchain swapped.
 echo "== cross-compiling ustreamer (this project's own Buildroot toolchain, not pellcorp/k1-camera-build's incompatible one) =="
 rm -rf "$VENDOR/k1-ustreamer/build"
-docker run --label "openke-build-pid=$$" --rm \
-	-v "$VENDOR/k1-ustreamer:/src" \
-	-v "$TOOLCHAIN_HOST:/buildroot-host" \
-	-w /src "$PELLCORP_K1_BASH_BUILD_IMAGE" bash -c '
+(
 	set -e
-	# Append, not prepend: the Buildroot host/bin dir also carries its own
+	SRC="$VENDOR/k1-ustreamer"
+	# Append, not prepend: Buildroot's own host/bin dir also carries its own
 	# internal automake-1.16/autoconf wrappers (built for its own package
-	# builds), which are broken when found ahead of the container real
-	# system automake/autoconf - they hardcode paths only valid inside the
+	# builds), which are broken when found ahead of the real system
+	# automake/autoconf - they hardcode paths only valid inside the
 	# Buildroot build tree itself. Appending still finds the uniquely-named
 	# mipsel-buildroot-linux-gnu-* cross tools (no name collision with
-	# anything already in the container PATH) without shadowing them.
-	export PATH=$PATH:/buildroot-host/bin
-	export BUILD_PREFIX=/src/build/ustreamer-deps
+	# anything already on PATH) without shadowing them.
+	export PATH="$PATH:$TOOLCHAIN_HOST/bin"
+	export BUILD_PREFIX="$SRC/build/ustreamer-deps"
 	export CC=mipsel-buildroot-linux-gnu-gcc
 	export AR=mipsel-buildroot-linux-gnu-gcc-ar
 	export LD=mipsel-buildroot-linux-gnu-ld
 	export STRIP=mipsel-buildroot-linux-gnu-strip
 	export CFLAGS="-I$BUILD_PREFIX/include/"
 	export LDFLAGS="-L$BUILD_PREFIX/lib/"
-	mkdir -p /src/build
+	mkdir -p "$SRC/build"
 
-	cd /src/jpeg-9d && git clean -xdf
-	cd /src/ustreamer && make clean PKG_CONFIG=true
+	cd "$SRC/jpeg-9d" && git clean -xdf
+	cd "$SRC/ustreamer" && make clean PKG_CONFIG=true
 
-	cd /src/build
+	cd "$SRC/build"
 	tar xf ../libevent-2.1.12-stable.tar.gz && cd libevent-2.1.12-stable
-	./configure --host=mipsel-buildroot-linux-gnu --prefix=$BUILD_PREFIX \
+	./configure --host=mipsel-buildroot-linux-gnu --prefix="$BUILD_PREFIX" \
 		--disable-openssl --disable-samples --disable-libevent-regress
 	make && make install
 
-	cd /src/build
+	cd "$SRC/build"
 	tar xf ../libmd-1.1.0.tar.xz && cd libmd-1.1.0
-	./configure --host=mipsel-buildroot-linux-gnu --prefix=$BUILD_PREFIX
+	./configure --host=mipsel-buildroot-linux-gnu --prefix="$BUILD_PREFIX"
 	make && make install
 
-	cd /src/build
+	cd "$SRC/build"
 	tar xf ../libbsd-0.11.7.tar.xz && cd libbsd-0.11.7
-	./configure --host=mipsel-buildroot-linux-gnu --prefix=$BUILD_PREFIX
+	./configure --host=mipsel-buildroot-linux-gnu --prefix="$BUILD_PREFIX"
 	make && make install
 
-	cd /src/jpeg-9d
-	./configure --host=mipsel-buildroot-linux-gnu --build=x86_64-pc-linux-gnu --prefix=$BUILD_PREFIX
+	cd "$SRC/jpeg-9d"
+	./configure --host=mipsel-buildroot-linux-gnu --build=x86_64-pc-linux-gnu --prefix="$BUILD_PREFIX"
 	make && make install
 
-	cd /src/ustreamer
+	cd "$SRC/ustreamer"
 	export CFLAGS="$CFLAGS -Os -march=mips32r2 -ffunction-sections -fdata-sections"
 	export LDFLAGS="$LDFLAGS -Wl,--gc-sections -s"
 	make PKG_CONFIG=true WITH_PTHREAD_NP=0 WITH_SETPROCTITLE=0
 	mipsel-buildroot-linux-gnu-strip --strip-unneeded src/ustreamer.bin
-'
+)
 mkdir -p "$OVERLAY/usr/bin" "$OVERLAY/usr/lib"
 cp "$VENDOR/k1-ustreamer/ustreamer/src/ustreamer.bin" "$OVERLAY/usr/bin/ustreamer"
 chmod 755 "$OVERLAY/usr/bin/ustreamer"
@@ -377,14 +346,10 @@ cp "$VENDOR"/k1-ustreamer/build/ustreamer-deps/lib/*.so* "$OVERLAY/usr/lib/"
 # toolchain, same reasoning for appending (not prepending) buildroot-host/
 # bin to PATH.
 echo "== cross-compiling v4l2-ctl (this project's own Buildroot toolchain) =="
-docker run --label "openke-build-pid=$$" --rm --user root \
-	-v "$VENDOR/v4l-utils:/src" \
-	-v "$TOOLCHAIN_HOST:/buildroot-host" \
-	-w /src "$PELLCORP_K1_BASH_BUILD_IMAGE" bash -c '
+(
 	set -e
-	apt-get update >/dev/null 2>&1
-	apt-get install -y autoconf automake libtool gettext autopoint pkg-config >/dev/null 2>&1
-	export PATH=$PATH:/buildroot-host/bin
+	cd "$VENDOR/v4l-utils"
+	export PATH="$PATH:$TOOLCHAIN_HOST/bin"
 	export CC=mipsel-buildroot-linux-gnu-gcc
 	export AR=mipsel-buildroot-linux-gnu-gcc-ar
 	export LD=mipsel-buildroot-linux-gnu-ld
@@ -399,7 +364,7 @@ docker run --label "openke-build-pid=$$" --rm --user root \
 	make -C lib/libv4lconvert
 	make -C utils/v4l2-ctl
 	mipsel-buildroot-linux-gnu-strip --strip-unneeded utils/v4l2-ctl/v4l2-ctl
-'
+)
 cp "$VENDOR/v4l-utils/utils/v4l2-ctl/v4l2-ctl" "$OVERLAY/usr/bin/v4l2-ctl"
 chmod 755 "$OVERLAY/usr/bin/v4l2-ctl"
 
@@ -429,52 +394,52 @@ if [ ! -d "$GUPPYSCREEN_SRC" ]; then
 	echo "FATAL: $GUPPYSCREEN_SRC not found - run 00-fetch-vendor-sources.sh first" >&2
 	exit 1
 fi
-echo "== cross-compiling GuppyScreen (ghcr.io/coreflake1/guppydev:latest toolchain image) =="
+echo "== cross-compiling GuppyScreen (Migration A: Bootlin mips32el-musl toolchain, now baked into this image - see build-env/versions.env) =="
 rm -rf "$GUPPYSCREEN_SRC/build"
-docker run --label "openke-build-pid=$$" --rm \
-	-v "$GUPPYSCREEN_SRC:/work" \
-	-e GUPPYSCREEN_VERSION="$GUPPYSCREEN_VERSION" \
-	-e GUPPY_THEME="$GUPPYSCREEN_THEME" \
-	-w /work ghcr.io/coreflake1/guppydev:latest \
-	bash -c '
+(
 	set -e
-	# file(1), used by scripts/build-mips.sh for its own final sanity-check
-	# line, is not present in this toolchain image - confirmed empirically,
-	# same kind of gap as the v4l-utils autoconf/automake install above.
-	# Installed here rather than relied on, so a missing package cannot
-	# turn a genuinely successful MIPS build into a false pipeline abort.
-	apt-get -qq update >/dev/null 2>&1
-	apt-get install -y -qq file >/dev/null 2>&1
+	cd "$GUPPYSCREEN_SRC"
+	export GUPPYSCREEN_VERSION="$GUPPYSCREEN_VERSION"
+	export GUPPY_THEME="$GUPPYSCREEN_THEME"
+	# Scoped to this subshell only, NOT the image's global PATH - see
+	# build-env/Dockerfile's own comment on GUPPYSCREEN_TOOLCHAIN_BIN for
+	# why (this toolchain's own bundled autoreconf/automake is broken and
+	# would shadow the system one v4l2-ctl's autoreconf step needs, if put
+	# on PATH globally).
+	if [ -n "${GUPPYSCREEN_TOOLCHAIN_BIN:-}" ]; then
+		export PATH="$GUPPYSCREEN_TOOLCHAIN_BIN:$PATH"
+	fi
 	# wiki/Building-from-Source.md step 3 ("Build the bundled libraries") -
 	# scripts/build-mips.sh backs up and restores these three native
 	# archives around its own MIPS rebuild, so they must already exist.
-	# Deliberately NOT setting CROSS_COMPILE in this container env for
-	# these three - the top-level Makefile switches CC/AR/etc the moment
-	# CROSS_COMPILE is non-empty (see its own `ifdef CROSS_COMPILE` block),
-	# and these three targets need a plain NATIVE build here (confirmed:
-	# setting it broke `make libhv.a` with "Relocations in generic ELF" -
-	# its own build system does not cross-compile correctly through this
-	# simple CC override, unlike build-mips.sh below, which cross-compiles
-	# libhv/spdlog itself via a proper CMake toolchain file).
+	# Deliberately NOT setting CROSS_COMPILE for these three - the top-level
+	# Makefile switches CC/AR/etc the moment CROSS_COMPILE is non-empty (see
+	# its own `ifdef CROSS_COMPILE` block), and these three targets need a
+	# plain NATIVE build here (confirmed: setting it broke `make libhv.a`
+	# with "Relocations in generic ELF" - its own build system does not
+	# cross-compile correctly through this simple CC override, unlike
+	# build-mips.sh below, which cross-compiles libhv/spdlog itself via a
+	# proper CMake toolchain file).
 	make wpaclient
 	make libhv.a
 	make libspdlog.a
 	# build-mips.sh defaults CROSS_COMPILE to mipsel-linux- itself when
-	# unset - not overridden here, for the same reason as above.
+	# unset - not overridden here, for the same reason as above. Finds the
+	# Migration-A toolchain via this image's own PATH (build-env/Dockerfile
+	# puts /toolchains/mips32el--musl--stable-2024.02-1/bin on PATH
+	# directly, matching what ghcr.io/coreflake1/guppydev used to provide).
 	bash scripts/build-mips.sh
 	# scripts/release.sh, the documented release packaging step for this
 	# project, strips both binaries before shipping them - matches the
 	# previously hand-built binary being replaced here, and there is no
 	# reason to ship debug symbols on the printer.
 	mipsel-linux-strip build/bin/guppyscreen build/bin/guppybeep
-'
-
-# The toolchain image runs as root - reclaim ownership of the build/ tree it
-# left behind so later runs (this repo's own working tree, not the vendor
-# checkout's git-tracked files) can rm -rf it without sudo, same pattern
-# already used elsewhere in this pipeline for docker-root-owned output.
-docker run --rm -v "$GUPPYSCREEN_SRC:/work" -w /work alpine:latest \
-	chown -R "$(id -u):$(id -g)" build
+)
+# Phase 11 (2026-08-15): the alpine:latest chown-fixup container that used
+# to run here is gone - it existed only to reclaim ownership of build/
+# after the old guppydev container wrote it as root. This build now runs
+# as one consistent user throughout, so build/ was never root-owned to
+# begin with.
 
 GUPPY_BIN="$GUPPYSCREEN_SRC/build/bin/guppyscreen"
 GUPPY_BEEP="$GUPPYSCREEN_SRC/build/bin/guppybeep"

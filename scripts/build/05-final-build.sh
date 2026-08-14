@@ -24,22 +24,9 @@ DEPS_MANIFEST="$REPO_ROOT/manifests/dependencies.conf"
 exec 9>"$REPO_ROOT/.nebulaos-build.lock"
 flock -n 9 || { echo "another build stage already owns $REPO_ROOT/.nebulaos-build.lock" >&2; exit 1; }
 
-# Orphaned-container cleanup (2026-07-23) - a real incident this session: a
-# killed build wrapper left its `docker run` process running independently
-# (SIGKILL can't be trapped, so no shell-level cleanup in the wrapper itself
-# could ever have caught this), needing a manual `docker stop` once noticed.
-# Every docker container this project's scripts spawn carries
-# --label openke-build-pid=<owning PID> - check each one found against a
-# live PID and stop anything left over from a run that's no longer alive,
-# regardless of whether the lock itself was contended just now.
-for cid_pid in $(docker ps --filter "label=openke-build-pid" --format '{{.ID}}={{.Label "openke-build-pid"}}' 2>/dev/null); do
-	cid=${cid_pid%%=*}
-	opid=${cid_pid##*=}
-	if ! kill -0 "$opid" 2>/dev/null; then
-		echo "stopping orphaned container $cid (from dead pid $opid)" >&2
-		docker stop "$cid" >/dev/null 2>&1 || true
-	fi
-done
+# Phase 11 (2026-08-15): the orphaned-container-cleanup loop and per-call
+# `--label openke-build-pid=$$` that used to live here are gone - see
+# 02-configure-buildroot.sh's own Phase 11 note.
 BUILDROOT_DIR="$REPO_ROOT/vendor/buildroot-x2000"
 KERNEL_MOUNT="$REPO_ROOT/vendor/x2000_kernel_6.6/kernel/kernel-6.6"
 
@@ -51,7 +38,7 @@ KERNEL_MOUNT="$REPO_ROOT/vendor/x2000_kernel_6.6/kernel/kernel-6.6"
 #
 # 2026-07-26: excludes artifacts/buildroot-halley5-v30-image/ from the main
 # repo's status - this script itself overwrites xImage/rootfs.*/*.config
-# under that exact path a few lines below (see the docker cp step), which
+# under that exact path a few lines below (see the artifact-copy step), which
 # was previously included in both the BEFORE and AFTER snapshots and so
 # self-tripped this check on every build that changes the kernel/buildroot
 # config in a way that produces a different kernel.config/buildroot.config
@@ -67,31 +54,15 @@ source_fingerprint() {
 }
 FINGERPRINT_BEFORE=$(source_fingerprint)
 
-docker run --label "openke-build-pid=$$" --rm --user root \
-	-v "$KERNEL_MOUNT:/kernel_6_6/kernel/kernel-6.6" \
-	-v "$BUILDROOT_DIR:/src" -w /src "$PELLCORP_K1_BASH_BUILD_IMAGE" bash -c '
-apt-get -qq update >/dev/null 2>&1
-apt-get install -y -qq python3 bc cpio rsync unzip bison flex libncurses5-dev file \
-	build-essential libssl-dev libelf-dev >/dev/null 2>&1
-make
-'
+( cd "$BUILDROOT_DIR" && make )
 
 mkdir -p "$REPO_ROOT/artifacts/buildroot-halley5-v30-image"
-# Copying via a root container, not the host user directly - output/images/*
-# is root-owned from the docker --user root build above, and the chown back
-# to the real host user/group below needs root too.
-HOST_UID=$(id -u)
-HOST_GID=$(id -g)
-docker run --label "openke-build-pid=$$" --rm --user root -v "$REPO_ROOT:/repo" "$PELLCORP_K1_BASH_BUILD_IMAGE" bash -c "
-set -e
-cp '/repo/vendor/buildroot-x2000/output/images/xImage' '/repo/artifacts/buildroot-halley5-v30-image/xImage'
-cp '/repo/vendor/buildroot-x2000/output/images/rootfs.ext2' '/repo/artifacts/buildroot-halley5-v30-image/rootfs.ext2'
-cp '/repo/vendor/buildroot-x2000/output/images/rootfs.squashfs' '/repo/artifacts/buildroot-halley5-v30-image/rootfs.squashfs'
-cp '/repo/vendor/buildroot-x2000/.config' '/repo/artifacts/buildroot-halley5-v30-image/buildroot.config'
-cp '/repo/vendor/buildroot-x2000/output/build/linux-custom/.config' '/repo/artifacts/buildroot-halley5-v30-image/kernel.config'
-cp '/repo/vendor/x2000_kernel_6.6/kernel/kernel-6.6/module_drivers/dts/x2000/halley5_v30.dts' '/repo/artifacts/buildroot-halley5-v30-image/halley5_v30.dts'
-chown $HOST_UID:$HOST_GID /repo/artifacts/buildroot-halley5-v30-image/*
-"
+cp "$BUILDROOT_DIR/output/images/xImage" "$REPO_ROOT/artifacts/buildroot-halley5-v30-image/xImage"
+cp "$BUILDROOT_DIR/output/images/rootfs.ext2" "$REPO_ROOT/artifacts/buildroot-halley5-v30-image/rootfs.ext2"
+cp "$BUILDROOT_DIR/output/images/rootfs.squashfs" "$REPO_ROOT/artifacts/buildroot-halley5-v30-image/rootfs.squashfs"
+cp "$BUILDROOT_DIR/.config" "$REPO_ROOT/artifacts/buildroot-halley5-v30-image/buildroot.config"
+cp "$BUILDROOT_DIR/output/build/linux-custom/.config" "$REPO_ROOT/artifacts/buildroot-halley5-v30-image/kernel.config"
+cp "$KERNEL_MOUNT/module_drivers/dts/x2000/halley5_v30.dts" "$REPO_ROOT/artifacts/buildroot-halley5-v30-image/halley5_v30.dts"
 
 FINGERPRINT_AFTER=$(source_fingerprint)
 if [ "$FINGERPRINT_BEFORE" != "$FINGERPRINT_AFTER" ]; then

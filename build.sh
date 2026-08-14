@@ -14,22 +14,20 @@
 # does the actual sequencing; this is a thin, host-dependency-aware wrapper
 # around it, not a reimplementation.
 #
-# Two modes:
+# Phase 11 (2026-08-15, unified-build-environment migration): this used to
+# have two modes - run directly on a host with git/curl/etc already
+# installed, or `--containerized` to get those from a thin wrapper image
+# that then launched TWO MORE nested containers (pellcorp/k1-bash-build,
+# ghcr.io/coreflake1/guppydev) via the host's own Docker socket for the
+# actual work. That nested-container design is gone. There is now exactly
+# ONE container, pinned by digest in manifests/dependencies.conf
+# (BUILD_IMAGE_REPO/BUILD_IMAGE_DIGEST) - it already contains every host
+# build tool the 00-06 pipeline needs (see build-env/Dockerfile), so
+# nothing here or inside those stages ever calls `docker`/`apt-get` again.
 #
-#   ./build.sh
-#     Runs directly on this host. Requires: git, docker, curl, tar, gzip,
-#     unzip, coreutils (sha256sum) - see build-env/Dockerfile for the exact
-#     list this was verified against. All of these are already implicit
-#     requirements of the existing 00-06 pipeline; nothing new here.
-#
-#   ./build.sh --containerized
-#     Builds (or reuses) build-env/Dockerfile and runs the same sequence
-#     inside it, with the current directory and the host's Docker socket
-#     mounted in - for a host that doesn't have git/curl/etc. already
-#     installed, or a CI runner that shouldn't need to. The nested
-#     pellcorp/k1-bash-build and guppydev cross-compile containers are
-#     still started against the HOST daemon either way (via the mounted
-#     socket) - this never runs Docker-in-Docker.
+# Requires on the host: Docker or Podman, and nothing else - not even git,
+# since the container itself is what clones/builds everything once it's
+# running with this checkout mounted in.
 #
 # Does NOT reuse any existing vendor/, build-work/, or artifacts/ state by
 # itself - run this against a genuinely fresh clone for a real clean-room
@@ -37,28 +35,48 @@
 # defeats the point of using this script to prove reproducibility).
 #
 # Exits non-zero if any pin fails to resolve, any variant fails to apply,
-# either baseline assertion fails, or any build stage fails.
+# either baseline assertion fails, or any build stage fails - this script
+# propagates the container's real exit status, it does not swallow it.
 
 set -e
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+MANIFEST="$SCRIPT_DIR/manifests/dependencies.conf"
+[ -f "$MANIFEST" ] || { echo "FATAL: $MANIFEST not found" >&2; exit 1; }
+. "$MANIFEST"
 
-if [ "$1" = "--containerized" ]; then
-	echo "== build.sh: building/using build-env container =="
-	docker build -t nebulaos-build-env "$SCRIPT_DIR/build-env"
-	exec docker run --rm -it \
-		-v "$SCRIPT_DIR:/work" \
-		-v /var/run/docker.sock:/var/run/docker.sock \
-		-w /work \
-		nebulaos-build-env "cd /work && sh build.sh"
-fi
+: "${BUILD_IMAGE_REPO:?FATAL: BUILD_IMAGE_REPO not set in $MANIFEST}"
+: "${BUILD_IMAGE_DIGEST:?FATAL: BUILD_IMAGE_DIGEST not set in $MANIFEST}"
+IMAGE_REF="${BUILD_IMAGE_REPO}@${BUILD_IMAGE_DIGEST}"
 
-for tool in git docker curl tar gzip unzip sha256sum; do
-	command -v "$tool" >/dev/null 2>&1 || {
-		echo "FATAL: '$tool' not found on this host." >&2
-		echo "Either install it, or run './build.sh --containerized' instead (see build-env/Dockerfile)." >&2
-		exit 1
-	}
+ENGINE=""
+for candidate in docker podman; do
+	command -v "$candidate" >/dev/null 2>&1 && { ENGINE="$candidate"; break; }
 done
+[ -n "$ENGINE" ] || {
+	echo "FATAL: neither docker nor podman found on this host - one of them is required to run the pinned build environment ($IMAGE_REF)." >&2
+	exit 1
+}
 
-exec sh "$SCRIPT_DIR/scripts/build/build-qualified-baseline.sh"
+echo "== build.sh: pulling pinned build environment $IMAGE_REF (engine: $ENGINE) =="
+"$ENGINE" pull "$IMAGE_REF"
+
+# -v mounts this checkout at the same absolute path inside the container as
+# outside it, and runs as the invoking host UID (not root) - see
+# build-env/Dockerfile's own header for why: several Buildroot host tools
+# bake the absolute build path into their own RUNPATH, and the whole point
+# of removing the old nested-container design was to stop crossing a path
+# boundary that made two different builds of the identical source disagree
+# on that path for no product-relevant reason.
+# -e HOME=/tmp: an arbitrary host UID has no /etc/passwd entry inside the
+# container, so HOME defaults to "/" (not writable by this UID) - confirmed
+# live this would break any tool that wants to write a cache/config file
+# (pip's download cache, git's config lookup). /tmp is writable by anyone
+# and doesn't need to persist across runs.
+exec "$ENGINE" run --rm -it \
+	--user "$(id -u):$(id -g)" \
+	-e HOME=/tmp \
+	-v "$SCRIPT_DIR:$SCRIPT_DIR" \
+	-w "$SCRIPT_DIR" \
+	"$IMAGE_REF" \
+	"sh scripts/build/build-qualified-baseline.sh"

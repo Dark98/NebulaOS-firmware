@@ -46,14 +46,25 @@
 # in both images identically - checking the actual packaged rootfs.squashfs
 # directly (e.g. via unsquashfs) is the only real way to confirm a removed
 # file is genuinely gone.
+#
+# Phase 11 (2026-08-15, unified-build-environment migration): this script
+# used to wrap every step in `docker run pellcorp/k1-bash-build ...`,
+# crossing a container boundary that meant paths differed between the host
+# view (/repo/vendor/...) and the container's own view (/repo/... mounted
+# from the host root). Now that the whole 00-06 pipeline already runs
+# inside ONE unified nebulaos-build container (or directly on a host that
+# has build-env/'s tools installed), there is no second boundary to cross -
+# every path below is just the real filesystem path, and the root/non-root
+# chown dance that used to follow every docker --user root call is gone
+# because there's no longer a second UID entering the picture. The
+# per-container `--label openke-build-pid=$$` / orphan-container-cleanup
+# logic is gone for the same reason: nothing here spawns a container of its
+# own to leak.
 set -e
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
 
-# Final Pre-Flash Audit mission (2026-08-08): DEPS_MANIFEST provides
-# PELLCORP_K1_BASH_BUILD_IMAGE (the digest-pinned toolchain container ref)
-# - see manifests/dependencies.conf's own comment on that entry.
 DEPS_MANIFEST="$REPO_ROOT/manifests/dependencies.conf"
 [ -f "$DEPS_MANIFEST" ] || { echo "FATAL: $DEPS_MANIFEST not found" >&2; exit 1; }
 . "$DEPS_MANIFEST"
@@ -65,53 +76,28 @@ DEPS_MANIFEST="$REPO_ROOT/manifests/dependencies.conf"
 exec 9>"$REPO_ROOT/.nebulaos-build.lock"
 flock -n 9 || { echo "another build stage already owns $REPO_ROOT/.nebulaos-build.lock" >&2; exit 1; }
 
-# Orphaned-container cleanup (2026-07-23) - a real incident this session: a
-# killed build wrapper left its `docker run` process running independently
-# (SIGKILL can't be trapped, so no shell-level cleanup in the wrapper itself
-# could ever have caught this), needing a manual `docker stop` once noticed.
-# Every docker container this project's scripts spawn carries
-# --label openke-build-pid=<owning PID> - check each one found against a
-# live PID and stop anything left over from a run that's no longer alive,
-# regardless of whether the lock itself was contended just now.
-for cid_pid in $(docker ps --filter "label=openke-build-pid" --format '{{.ID}}={{.Label "openke-build-pid"}}' 2>/dev/null); do
-	cid=${cid_pid%%=*}
-	opid=${cid_pid##*=}
-	if ! kill -0 "$opid" 2>/dev/null; then
-		echo "stopping orphaned container $cid (from dead pid $opid)" >&2
-		docker stop "$cid" >/dev/null 2>&1 || true
-	fi
-done
 BUILDROOT_DIR="$REPO_ROOT/vendor/buildroot-x2000"
 ARTIFACTS="$REPO_ROOT/artifacts/buildroot-halley5-v30-image"
+KERNEL_SRCDIR="$REPO_ROOT/vendor/x2000_kernel_6.6/kernel/kernel-6.6"
 
 if [ ! -d "$BUILDROOT_DIR/.git" ]; then
 	echo "vendor/buildroot-x2000 not found - run 00-fetch-vendor-sources.sh first" >&2
 	exit 1
 fi
 
-# Everything below runs inside a root container, not as the host user - a
-# real bug this session: once any docker --user root build has run (every
-# build does), vendor/buildroot-x2000/ becomes root-owned, and plain host
-# `cp`/`rm` calls here start failing with "Permission denied" on every
-# subsequent run. Doing the file operations here too, not just the make
-# steps, makes this script actually idempotent/re-runnable.
-docker run --label "openke-build-pid=$$" --rm --user root \
-	-v "$REPO_ROOT:/repo" \
-	"$PELLCORP_K1_BASH_BUILD_IMAGE" bash -c '
-set -e
-cp "/repo/artifacts/buildroot-halley5-v30-image/buildroot.config" "/repo/vendor/buildroot-x2000/.config"
-mkdir -p "/repo/vendor/buildroot-x2000/board"
-cp "/repo/artifacts/buildroot-halley5-v30-image/halley5-nebulaos-fragment.config" "/repo/vendor/buildroot-x2000/board/halley5-nebulaos-fragment.config"
-cp "/repo/artifacts/buildroot-halley5-v30-image/halley5-nebulaos-busybox-fragment.config" "/repo/vendor/buildroot-x2000/board/halley5-nebulaos-busybox-fragment.config"
-cat > "/repo/vendor/buildroot-x2000/local.mk" <<EOF
-LINUX_OVERRIDE_SRCDIR = /kernel_6_6/kernel/kernel-6.6
+cp "$ARTIFACTS/buildroot.config" "$BUILDROOT_DIR/.config"
+mkdir -p "$BUILDROOT_DIR/board"
+cp "$ARTIFACTS/halley5-nebulaos-fragment.config" "$BUILDROOT_DIR/board/halley5-nebulaos-fragment.config"
+cp "$ARTIFACTS/halley5-nebulaos-busybox-fragment.config" "$BUILDROOT_DIR/board/halley5-nebulaos-busybox-fragment.config"
+cat > "$BUILDROOT_DIR/local.mk" <<EOF
+LINUX_OVERRIDE_SRCDIR = $KERNEL_SRCDIR
 EOF
-rm -rf "/repo/vendor/buildroot-x2000/board/halley5-nebulaos-overlay"
-mkdir -p "/repo/vendor/buildroot-x2000/board/halley5-nebulaos-overlay"
-cp -r "/repo/scripts/build/overlay/." "/repo/vendor/buildroot-x2000/board/halley5-nebulaos-overlay/"
-mkdir -p "/repo/vendor/buildroot-x2000/board/halley5-nebulaos-overlay/opt/printer_data/comms" \
-         "/repo/vendor/buildroot-x2000/board/halley5-nebulaos-overlay/opt/printer_data/logs" \
-         "/repo/vendor/buildroot-x2000/board/halley5-nebulaos-overlay/opt/printer_data/gcodes"
+rm -rf "$BUILDROOT_DIR/board/halley5-nebulaos-overlay"
+mkdir -p "$BUILDROOT_DIR/board/halley5-nebulaos-overlay"
+cp -r "$REPO_ROOT/scripts/build/overlay/." "$BUILDROOT_DIR/board/halley5-nebulaos-overlay/"
+mkdir -p "$BUILDROOT_DIR/board/halley5-nebulaos-overlay/opt/printer_data/comms" \
+         "$BUILDROOT_DIR/board/halley5-nebulaos-overlay/opt/printer_data/logs" \
+         "$BUILDROOT_DIR/board/halley5-nebulaos-overlay/opt/printer_data/gcodes"
 # Real bug found live on 2026-07-28: this rm -rf/cp only cleans the BOARD
 # overlay staging dir (above), not output/target/ or
 # output/build/buildroot-fs/ext2/target/ - per the IMPORTANT comment near
@@ -125,10 +111,7 @@ mkdir -p "/repo/vendor/buildroot-x2000/board/halley5-nebulaos-overlay/opt/printe
 # the new activate scripts bind_if_not_already() no-ops when its target
 # is already mounted, the OLD (pre-fix, less-validated) activation script -
 # which sorts earlier and ran first - was the one actually deciding every
-# real bind-mount, silently shadowing the fix. (Note for future edits to
-# this comment block: it lives inside a single-quoted docker bash -c
-# string below - no literal apostrophes allowed in it, or the outer shell
-# parse breaks exactly like this one did the first time.) Clean every historically
+# real bind-mount, silently shadowing the fix. Clean every historically
 # renamed/removed overlay-relative path from both real output copies here;
 # add to this list whenever an overlay file is renamed or deleted, the same
 # way dcf7060 does for the seed archives in 04-cross-compile-app-stack.sh.
@@ -137,36 +120,16 @@ for obsolete_rel in \
 	"etc/init.d/S39wifi" \
 	"etc/init.d/S03nebulaos-factory-seed" \
 	"etc/init.d/S04nebulaos-activate"; do
-	rm -f "/repo/vendor/buildroot-x2000/output/target/$obsolete_rel" \
-	      "/repo/vendor/buildroot-x2000/output/build/buildroot-fs/ext2/target/$obsolete_rel" 2>/dev/null || true
+	rm -f "$BUILDROOT_DIR/output/target/$obsolete_rel" \
+	      "$BUILDROOT_DIR/output/build/buildroot-fs/ext2/target/$obsolete_rel" 2>/dev/null || true
 done
-rm -rf "/repo/vendor/buildroot-x2000/board/halley5-nebulaos-wheels"
-mkdir -p "/repo/vendor/buildroot-x2000/board/halley5-nebulaos-wheels"
-cp "/repo/scripts/build/vendor-wheels/"*.whl "/repo/vendor/buildroot-x2000/board/halley5-nebulaos-wheels/"
-cp "/repo/scripts/build/vendor-patches/python-matplotlib/python-matplotlib.mk" "/repo/vendor/buildroot-x2000/package/python-matplotlib/python-matplotlib.mk"
-'
-
-# Hand the overlay tree back to the host user - real bug found 2026-07-23:
-# 04-cross-compile-app-stack.sh writes into this same tree (opt/klipper,
-# opt/moonraker) as the host user, not root, and a root-owned overlay from
-# the cp above makes that fail with "Permission denied" on the very next
-# stage. The rest of vendor/buildroot-x2000/ deliberately stays root-owned
-# (this scripts own docker run above already re-roots itself every time to
-# cope with that) - only the overlay tree actually needs to be writable by
-# the host user.
-docker run --label "openke-build-pid=$$" --rm --user root \
-	-v "$REPO_ROOT:/repo" \
-	"$PELLCORP_K1_BASH_BUILD_IMAGE" \
-	chown -R "$(id -u):$(id -g)" "/repo/vendor/buildroot-x2000/board/halley5-nebulaos-overlay"
+rm -rf "$BUILDROOT_DIR/board/halley5-nebulaos-wheels"
+mkdir -p "$BUILDROOT_DIR/board/halley5-nebulaos-wheels"
+cp "$REPO_ROOT/scripts/build/vendor-wheels/"*.whl "$BUILDROOT_DIR/board/halley5-nebulaos-wheels/"
+cp "$REPO_ROOT/scripts/build/vendor-patches/python-matplotlib/python-matplotlib.mk" "$BUILDROOT_DIR/package/python-matplotlib/python-matplotlib.mk"
 
 echo "== normalizing .config (resolves any derived Kconfig selects) =="
-docker run --label "openke-build-pid=$$" --rm --user root \
-	-v "$REPO_ROOT/vendor/x2000_kernel_6.6/kernel/kernel-6.6:/kernel_6_6/kernel/kernel-6.6" \
-	-v "$BUILDROOT_DIR:/src" -w /src "$PELLCORP_K1_BASH_BUILD_IMAGE" bash -c '
-apt-get -qq update >/dev/null 2>&1
-apt-get install -y -qq python3 bc cpio rsync unzip bison flex libncurses5-dev file build-essential libssl-dev libelf-dev >/dev/null 2>&1
-make olddefconfig
-'
+( cd "$BUILDROOT_DIR" && make olddefconfig )
 
 # Reproducibility fix (2026-07-26, NebulaOS mutable-runtime mission): a real
 # bug found by directly inspecting the built rootfs.squashfs with unsquashfs
@@ -184,18 +147,15 @@ make olddefconfig
 # exactly how this was first missed) makes the fix part of the tracked
 # pipeline instead of a one-off manual step - dirclean is a safe no-op if
 # the package was never built yet (e.g. on a genuinely fresh output/ tree).
-docker run --label "openke-build-pid=$$" --rm --user root \
-	-v "$REPO_ROOT/vendor/x2000_kernel_6.6/kernel/kernel-6.6:/kernel_6_6/kernel/kernel-6.6" \
-	-v "$BUILDROOT_DIR:/src" -w /src "$PELLCORP_K1_BASH_BUILD_IMAGE" bash -c '
-apt-get -qq update >/dev/null 2>&1
-apt-get install -y -qq python3 bc cpio rsync unzip bison flex libncurses5-dev file build-essential libssl-dev libelf-dev >/dev/null 2>&1
-make libopenssl-dirclean 2>/dev/null || true
-# Same class of bug, found again (Memory Resilience Gate, 2026-07-26):
-# adding CONFIG_FEATURE_SWAPON_PRI via the busybox config fragment had no
-# effect on an already-built busybox (confirmed live on a flashed image:
-# swapon rejected the priority option outright) - same stale-stamp
-# mechanism as the libopenssl case above.
-make busybox-dirclean 2>/dev/null || true
-'
+(
+	cd "$BUILDROOT_DIR"
+	make libopenssl-dirclean 2>/dev/null || true
+	# Same class of bug, found again (Memory Resilience Gate, 2026-07-26):
+	# adding CONFIG_FEATURE_SWAPON_PRI via the busybox config fragment had
+	# no effect on an already-built busybox (confirmed live on a flashed
+	# image: swapon rejected the priority option outright) - same
+	# stale-stamp mechanism as the libopenssl case above.
+	make busybox-dirclean 2>/dev/null || true
+)
 
 echo "== buildroot configured =="

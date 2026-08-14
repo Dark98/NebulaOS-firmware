@@ -108,15 +108,18 @@ Buildroot's own overlay dir). No manual step, no real device required.
    and assembles the full app-stack overlay (Klipper/Moonraker source trees, Mainsail's static
    build, this repo's own init scripts/configs already in place from stage 2).
 6. **`05-final-build.sh`** - the final full `make` that bakes everything from stage 4 into the
-   actual `rootfs.ext2`/`uImage`.
+   actual `rootfs.ext2`/`xImage`, and copies the resolved artifacts (`xImage`, `rootfs.ext2`,
+   `rootfs.squashfs`, `build-manifest.txt`, `kernel.config`) into `artifacts/buildroot-halley5-v30-image/`.
 7. **`06-verify.sh`** - the same `debugfs`-based presence checks and `readelf`/`file` architecture
    checks used throughout this project to confirm each piece actually landed in the image and is
    real MIPS32 little-endian code, without needing real hardware.
 
 ## Output
 
-`vendor/buildroot-x2000/output/images/{uImage,rootfs.ext2}` - copy these into `artifacts/
-buildroot-halley5-v30-image/` if you want them alongside this project's own previously-built copies
+`vendor/buildroot-x2000/output/images/{xImage,rootfs.ext2,rootfs.squashfs}` (this stage's own
+`05-final-build.sh` already copies these into `artifacts/buildroot-halley5-v30-image/` for you -
+confirmed against a real fresh-clone build 2026-08-14; this section previously said `uImage`, which
+does not match this project's actual output filename)
 (sha256 sums won't match exactly build-to-build - timestamps and build-path strings end up
 embedded in a few places - but the same real code should be present; that's what `06-verify.sh`
 checks for, not byte-for-byte reproducibility).

@@ -56,9 +56,11 @@ pullable), git, curl, tar, gzip, unzip, coreutils. ~15GB free disk and a few hou
 a reasonably modern machine. Network access throughout (every dependency is fetched fresh, hash-verified
 against `manifests/dependencies.conf`, and fails loudly on any mismatch).
 
-**Output:** `vendor/buildroot-x2000/output/images/{uImage,rootfs.ext2}` (the kernel image and root
-filesystem), plus `artifacts/buildroot-halley5-v30-image/{build-manifest.txt,kernel.config}` (the
-resolved build identity) and GuppyScreen's own compiled binaries. `06-verify.sh` checks these are
+**Output:** `vendor/buildroot-x2000/output/images/{xImage,rootfs.ext2,rootfs.squashfs}` (the kernel
+image and root filesystem, both ext2 and squashfs forms) — `05-final-build.sh` copies these,
+alongside `build-manifest.txt` and `kernel.config` (the resolved build identity), into
+`artifacts/buildroot-halley5-v30-image/`. GuppyScreen's own compiled binaries land in
+`artifacts/guppyscreen-mips/`. `06-verify.sh` checks these are
 real, correctly-architected MIPS32 output without needing real hardware — it does not claim
 byte-for-byte reproducibility build-to-build (timestamps/build-path strings vary), only that the
 same real code landed.

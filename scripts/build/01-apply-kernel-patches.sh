@@ -26,12 +26,20 @@ fi
 
 cd "$KERNEL_DIR"
 
-BRANCH=$(git rev-parse --abbrev-ref HEAD)
-if [ "$BRANCH" != "openke" ]; then
-	echo "vendor/x2000_kernel_6.6 is on branch '$BRANCH', expected 'openke' - re-run 00-fetch-vendor-sources.sh against a clean checkout" >&2
-	exit 1
-fi
-
+# Phase 11 (2026-08-15): used to require `git rev-parse --abbrev-ref HEAD`
+# == "openke" here - broke live during the Phase 9-vs-Phase-11 rebuild-and-
+# compare test the moment 00-fetch-vendor-sources.sh was fixed (same
+# mission) to check out $KERNEL_PIN directly instead of $KERNEL_BRANCH:
+# checking out an exact commit SHA is normal, correct, DETACHED HEAD in
+# git - `--abbrev-ref HEAD` reports the literal string "HEAD" there, not a
+# branch name, so this check started failing a checkout that was actually
+# exactly correct. Removed rather than special-cased: the pin check two
+# lines below already independently verifies the real invariant that
+# matters (are we at the exact accepted commit), with its own hardcoded
+# constant, regardless of which branch (if any) that commit happens to be
+# reachable from - being "on" a named branch was never actually load-
+# bearing for anything this script does after this point.
+#
 # Defense in depth (2026-07-31, NEBULAOS_CAMERA_USB_RT_SOURCE_ANALYSIS.md's
 # vendor-pin audit): 00-fetch-vendor-sources.sh already enforces this exact
 # pin and fails loudly on drift, but this script shouldn't silently trust

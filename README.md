@@ -33,12 +33,13 @@ cd NebulaOS-firmware
 ```
 
 This is the one documented, verified command to reproduce the current qualified NebulaOS baseline
-from a fresh clone — it fetches every pinned dependency, composes the 8 accepted kernel variants,
-builds the kernel/rootfs/app-stack, and verifies the result. See `build.sh`'s own header for the
-`--containerized` variant (for a host without git/curl/etc. already installed).
+from a fresh clone — `build.sh` pulls the single, digest-pinned `ghcr.io/coreflake1/nebulaos-build`
+image (`manifests/dependencies.conf`'s own `BUILD_IMAGE_REPO`/`BUILD_IMAGE_DIGEST`) and runs the
+whole pipeline inside it: fetches every pinned dependency, composes the 8 accepted kernel variants,
+builds the kernel/rootfs/app-stack, and verifies the result.
 
-Under the hood, `build.sh` sequences these stages directly (see `scripts/build/README.md` for what
-each one does):
+Under the hood, `build.sh` runs these stages in sequence, inside that container (see
+`scripts/build/README.md` for what each one does):
 
 ```sh
 cd scripts/build
@@ -51,10 +52,12 @@ cd scripts/build
 ./06-verify.sh
 ```
 
-**Prerequisites:** Docker (with the pinned `pellcorp/k1-bash-build` cross-toolchain image
-pullable), git, curl, tar, gzip, unzip, coreutils. ~15GB free disk and a few hours of build time on
-a reasonably modern machine. Network access throughout (every dependency is fetched fresh, hash-verified
-against `manifests/dependencies.conf`, and fails loudly on any mismatch).
+**Prerequisites:** Docker or Podman — nothing else. The pinned build image already contains every
+host build tool the pipeline needs (see `docs/NEBULAOS_BUILD_ENVIRONMENT.md`); no separate
+`apt-get install`, no nested container, no `/var/run/docker.sock` requirement. ~15GB free disk and
+a few hours of build time on a reasonably modern machine. Network access throughout (every
+dependency is fetched fresh, hash-verified against `manifests/dependencies.conf`, and fails loudly
+on any mismatch).
 
 **Output:** `vendor/buildroot-x2000/output/images/{xImage,rootfs.ext2,rootfs.squashfs}` (the kernel
 image and root filesystem, both ext2 and squashfs forms) — `05-final-build.sh` copies these,

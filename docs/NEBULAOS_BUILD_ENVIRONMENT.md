@@ -114,5 +114,12 @@ reviewed commit — never automated, never silent.
 
 ## Retirement of the old containers
 
-See the Phase 11 final report's own retirement checklist for exactly what changes and when
-`pellcorp/k1-bash-build` and `ghcr.io/coreflake1/guppydev` stop being current build dependencies.
+Done, as of the Final Closure mission (2026-08-15): this image is canonical, `manifests/
+dependencies.conf`'s `PELLCORP_K1_BASH_BUILD_IMAGE` pin is removed, and no script in this repo
+references `pellcorp/k1-bash-build` or `ghcr.io/coreflake1/guppydev` as a live dependency any
+longer — see the Phase 11 report and the Final Closure report for the full evidence chain
+(repeatability comparison, physical hardware qualification) behind that promotion.
+
+`NebulaOS-guppyscreen`'s own separate CI (`.github/workflows/build.yml`) is a distinct, not-yet-
+migrated dependency on `ghcr.io/coreflake1/guppydev:latest` in a different repository - out of
+scope for this image's own promotion, tracked separately.

@@ -52,8 +52,15 @@ that flips a switch, then reboot the printer. Two minutes, no tools, no opening 
    ```
 
    (`/etc/ota_marker.sh` only exists on the **custom** side. If you're currently on **stock** and
-   want to switch to custom, that file won't be there — ask for help getting a copy over first, or
-   use Method 2 below.)
+   want to switch to custom, use stock's own equivalent, built-in tool instead — this is Creality's
+   own pre-existing switcher, not something NebulaOS added, and it does the same job:
+   ```
+   sh -c '. /etc/ota_bin/ota_local_method.sh; local_set_next_boot_device'
+   ```
+   Note this one **toggles** between stock and custom rather than taking an explicit target — it
+   flips to whichever one you're not currently on. If you're on stock, that's exactly what you want
+   here. Verified working this way live, including for the very first stock→custom switch on a
+   freshly-flashed device.)
 
 4. **Reboot:**
    ```
@@ -89,7 +96,9 @@ custom. If you're in a spot where you need this, you're recovering, not casually
 
 ### What you need
 - A USB cable connected from your computer to the Nebula Pad's MicroUSB port.
-- The `ballaswag/ingenic-usbboot` tool, built from source on your computer:
+- The [`ballaswag/ingenic-usbboot`](https://github.com/ballaswag/ingenic-usbboot) tool — credit to
+  that project, this whole recovery path only works because it exists. Built from source on your
+  computer:
   ```
   git clone https://github.com/ballaswag/ingenic-usbboot
   cd ingenic-usbboot

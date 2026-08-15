@@ -1,11 +1,12 @@
 # NebulaOS Firmware
 
-Canonical integration and build repository for [NebulaOS](https://github.com/coreflake1/NebulaOS)
-on the Creality Ender-3 V3 KE.
+This is where NebulaOS actually gets built. NebulaOS is a custom Linux + Klipper stack for the
+Creality Ender-3 V3 KE — real mainline-ish kernel, real Klipper, a proper touchscreen UI, none of
+the stock firmware's binary blobs where we could avoid them.
 
-**This is the repository developers use to build the complete NebulaOS image.** It pins exact
-commits of the three component repos, fetches them fresh on every build, applies the accepted
-kernel variants, and produces the final rootfs + kernel + app-stack image.
+If you want to build the whole OS, this is the repo you want. The kernel, Klipper, and GuppyScreen
+each live in their own repos, but this one pins the exact commit of each, fetches them fresh, and
+puts the whole thing together into something you can flash.
 
 ```
 NebulaOS-kernel  ─┐
@@ -16,15 +17,15 @@ NebulaOS-guppyscreen ┘   (this repo)
 - [`NebulaOS-kernel`](https://github.com/coreflake1/NebulaOS-kernel) — Linux 6.6 kernel fork (`openke` branch)
 - [`NebulaOS-klipper`](https://github.com/coreflake1/NebulaOS-klipper) — Klipper runtime fork (`master` branch)
 - [`NebulaOS-guppyscreen`](https://github.com/coreflake1/NebulaOS-guppyscreen) — touchscreen UI fork (`main` branch)
-- [`NebulaOS`](https://github.com/coreflake1/NebulaOS) — end-user releases, not a source tree
+- [`NebulaOS`](https://github.com/coreflake1/NebulaOS) — releases live here, not source
 
-`manifests/dependencies.conf` is the single authoritative file for every external dependency this
-build needs — kernel, Klipper, GuppyScreen, Buildroot, Moonraker, k1-ustreamer, v4l-utils, Mainsail,
-WiFi firmware, and the build toolchain container — each pinned by exact commit/tag/digest plus a
-SHA256. **The build fetches all of it fresh; it does not expect or use neighboring local
-checkouts of the component repos.**
+Every dependency this build pulls in — kernel, Klipper, GuppyScreen, Buildroot, Moonraker,
+k1-ustreamer, v4l-utils, Mainsail, WiFi firmware, the build container itself — is pinned by exact
+commit/tag/digest and a SHA256 in `manifests/dependencies.conf`. The build always fetches fresh; it
+won't pick up a local checkout of the kernel or Klipper repo sitting next to it, even if you have
+one.
 
-## Quick start
+## Building it
 
 ```sh
 git clone https://github.com/coreflake1/NebulaOS-firmware.git
@@ -32,14 +33,17 @@ cd NebulaOS-firmware
 ./build.sh
 ```
 
-This is the one documented, verified command to reproduce the current qualified NebulaOS baseline
-from a fresh clone — `build.sh` pulls the single, digest-pinned `ghcr.io/coreflake1/nebulaos-build`
-image (`manifests/dependencies.conf`'s own `BUILD_IMAGE_REPO`/`BUILD_IMAGE_DIGEST`) and runs the
-whole pipeline inside it: fetches every pinned dependency, composes the 8 accepted kernel variants,
-builds the kernel/rootfs/app-stack, and verifies the result.
+That's genuinely it. `build.sh` pulls one build container
+(`ghcr.io/coreflake1/nebulaos-build`, digest-pinned) and runs the whole pipeline inside it —
+fetches every dependency, applies the 8 accepted kernel variants, builds the kernel/rootfs/app
+stack, and checks the result actually looks right. You need Docker or Podman and not much else —
+no `apt-get install` beforehand, no nested containers, nothing weird.
 
-Under the hood, `build.sh` runs these stages in sequence, inside that container (see
-`scripts/build/README.md` for what each one does):
+Budget ~15GB of disk and a few hours on a normal machine. It needs the network the whole time,
+since everything gets fetched and hash-checked as it goes.
+
+If you want to see what's actually happening under the hood, `build.sh` runs these in order
+(details in `scripts/build/README.md`):
 
 ```sh
 cd scripts/build
@@ -52,54 +56,64 @@ cd scripts/build
 ./06-verify.sh
 ```
 
-**Prerequisites:** Docker or Podman — nothing else. The pinned build image already contains every
-host build tool the pipeline needs (see `docs/NEBULAOS_BUILD_ENVIRONMENT.md`); no separate
-`apt-get install`, no nested container, no `/var/run/docker.sock` requirement. ~15GB free disk and
-a few hours of build time on a reasonably modern machine. Network access throughout (every
-dependency is fetched fresh, hash-verified against `manifests/dependencies.conf`, and fails loudly
-on any mismatch).
+When it's done, you'll have `xImage`, `rootfs.ext2`, and `rootfs.squashfs` in
+`artifacts/buildroot-halley5-v30-image/`, plus `build-manifest.txt` (records exactly what went
+into this build) and `kernel.config`. GuppyScreen's compiled binary shows up separately in
+`artifacts/guppyscreen-mips/`. The last stage sanity-checks that everything is real, correctly
+architected MIPS32 output — it's not claiming byte-for-byte reproducibility between two separate
+builds (timestamps and a few build-path strings will differ), just that the same code went in and
+came out right.
 
-**Output:** `vendor/buildroot-x2000/output/images/{xImage,rootfs.ext2,rootfs.squashfs}` (the kernel
-image and root filesystem, both ext2 and squashfs forms) — `05-final-build.sh` copies these,
-alongside `build-manifest.txt` and `kernel.config` (the resolved build identity), into
-`artifacts/buildroot-halley5-v30-image/`. GuppyScreen's own compiled binaries land in
-`artifacts/guppyscreen-mips/`. `06-verify.sh` checks these are
-real, correctly-architected MIPS32 output without needing real hardware — it does not claim
-byte-for-byte reproducibility build-to-build (timestamps/build-path strings vary), only that the
-same real code landed.
+## Don't build the other three repos on their own
 
-## What NOT to build directly
+Cloning `NebulaOS-kernel`, `NebulaOS-klipper`, or `NebulaOS-guppyscreen` by itself and trying to
+build it won't get you a working printer image — none of them do that alone. This repo is the one
+that pulls all three together into something flashable.
 
-Don't clone and build `NebulaOS-kernel`, `NebulaOS-klipper`, or `NebulaOS-guppyscreen` on their own
-expecting a working printer image — none of them alone produce one. This repo is the only one that
-pins, fetches, and assembles all three into something flashable.
+## How reproducible is this, really
 
-## Reproducibility
+Every pin in `manifests/dependencies.conf` is an exact commit/tag/digest plus a SHA256, checked on
+every run — that file's comments explain why each one is pinned the way it is, and most of them
+have a real story behind them. The 8 kernel variants we build on top of stock upstream (PREEMPT_RT,
+a WiFi SDIO IRQ priority fix, VSYNC-gated display panning, a pinctrl ownership fix, the final
+backlight controller, PWM state readback, the final touch driver, and disabling WiFi roaming) live
+as small, order-independent scripts under `scripts/build/`, applied by
+`scripts/build/apply-qualified-baseline.sh`.
 
-Every dependency in `manifests/dependencies.conf` is pinned by exact commit/tag/digest and a
-SHA256, verified fail-loud on every run — see that file's own comments for the pin history and
-rationale behind each one. The 8 accepted kernel variants (PREEMPT_RT, WiFi SDIO IRQ priority,
-display VSYNC-gated pan, a pinctrl fix, the backlight final controller, PWM state readback, the
-touch final-qualification driver, and WiFi roamoff-disable) are tracked, order-independent scripts
-under `scripts/build/`, applied by `scripts/build/apply-qualified-baseline.sh`.
+## Wait, is this the same thing as OpenKE?
 
-## Is OpenKE part of NebulaOS?
+No, and it's a fair question since they're related. [OpenKE](https://github.com/coreflake1/guppyscreen)
+is a separate project — its own installer for stock Creality firmware, its own releases — that
+shares an author and some history with NebulaOS, but they're not the same project anymore.
+`NebulaOS-kernel`'s branch is still called `openke` for historical reasons; that's a leftover name,
+not a sign the two projects are still connected.
 
-No. [OpenKE](https://github.com/coreflake1/guppyscreen) is a separate, independently-released
-project (its own installer for stock Creality firmware, its own version train) that shares an
-author and some engineering lineage with NebulaOS, but is not part of it. `NebulaOS-guppyscreen`'s
-kernel-side sibling repo keeps the branch name `openke` for historical reasons — see that repo's own
-README for the distinction.
+## If you're setting one of these up yourself
 
-## Project history
+Beyond just building, this repo is also where we keep the docs for installing, updating, and
+recovering an actual device — written for developers who already have SSH/root on their printer,
+not as a polished installer walkthrough:
 
-This repo was previously developed under the name `ke-mainline-klipper` as a broader research
-workspace. That history — including the real hardware bring-up investigations, root-cause writeups,
-and mission-by-mission progress log — is preserved at [`docs/HISTORY.md`](docs/HISTORY.md) and
-throughout `docs/`, not deleted. `FIRMWARE.md` remains the detailed technical source-of-truth
-document for the build's internals.
+- [`docs/A_B_SLOT_MODEL.md`](docs/A_B_SLOT_MODEL.md) — how the stock/custom partition layout works
+- [`docs/DEVELOPER_INSTALL_FROM_STOCK.md`](docs/DEVELOPER_INSTALL_FROM_STOCK.md) — putting NebulaOS on a printer for the first time
+- [`docs/DEVELOPER_UPDATE.md`](docs/DEVELOPER_UPDATE.md) — updating a printer that's already running NebulaOS
+- [`docs/DEVELOPER_RECOVERY.md`](docs/DEVELOPER_RECOVERY.md) — what to do if something goes wrong
+- [`docs/HOW_TO_SWITCH_STOCK_AND_CUSTOM.md`](docs/HOW_TO_SWITCH_STOCK_AND_CUSTOM.md) — flipping between stock and custom day to day
+- [`docs/BUILD_PROVENANCE.md`](docs/BUILD_PROVENANCE.md) — figuring out exactly what produced a given build
+- [`docs/NEBULAOS_BUILD_ENVIRONMENT.md`](docs/NEBULAOS_BUILD_ENVIRONMENT.md) — what's actually in the build container
+- [`ACKNOWLEDGEMENTS.md`](ACKNOWLEDGEMENTS.md) — the upstream projects and prior work this stands on
+
+The other repos (kernel, Klipper, GuppyScreen, and the [`NebulaOS`](https://github.com/coreflake1/NebulaOS)
+release repo) all link back here instead of keeping their own copies of this stuff — this is the
+one place it's kept up to date.
+
+## History
+
+This repo used to be a broader research workspace called `ke-mainline-klipper`. That history —
+hardware bring-up notes, root-cause writeups, the mission-by-mission log — is still here, in
+[`docs/HISTORY.md`](docs/HISTORY.md) and the rest of `docs/`. `FIRMWARE.md` is the long-form
+technical reference for the build internals, if you want the deep version of any of this.
 
 ## License
 
-See [`LICENSES/`](LICENSES/) for this project's own code and the license terms of everything it
-vendors/fetches.
+See [`LICENSES/`](LICENSES/) for this project's own code and everything it vendors or fetches.

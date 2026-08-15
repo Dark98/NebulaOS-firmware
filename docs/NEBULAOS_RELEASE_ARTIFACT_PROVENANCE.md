@@ -1,14 +1,10 @@
-# NebulaOS Release Artifact Provenance
+# Where the pieces we don't build ourselves come from
 
-Tracks every prebuilt/downloaded binary or archive this build consumes that
-is not itself built from vendored source in this repo. Written 2026-07-31 as
-part of closing the vendor/artifact reproducibility gaps identified in
-`docs/NEBULAOS_CAMERA_USB_RT_SOURCE_ANALYSIS.md` (§2).
-
-For each artifact: exact path, size, SHA-256, known origin, and — where full
-upstream provenance isn't available — an honest statement of the
-reconstruction limitation, rather than a claim that it's reconstructable
-when it isn't.
+This tracks every prebuilt or downloaded binary the build pulls in that isn't compiled from source
+in this repo — things like Mainsail's release zip or the WiFi firmware blobs. For each one, you'll
+find the exact path, size, SHA-256, where it actually comes from, and — where we can't fully
+reconstruct it from upstream — an honest "here's the limitation" instead of pretending it's more
+verifiable than it is.
 
 ## Mainsail release archive
 
@@ -27,7 +23,9 @@ when it isn't.
 |---|---|
 | Path | `artifacts/guppyscreen-mips/guppyscreen`, `artifacts/guppyscreen-mips/guppybeep` (git-tracked, but now a build-time-overwritten snapshot, not the source of truth) |
 | Origin (pre-2026-08-07) | Prebuilt MIPS binaries with no fetch-script entry, no declared source commit, no download URL anywhere in this repo. |
-| Origin (2026-08-07+) | **Fixed.** `GUPPYSCREEN_REPO`/`GUPPYSCREEN_PIN` in `manifests/dependencies.conf` pin the exact source commit (`coreflake1/NebulaOS-guppyscreen`); `00-fetch-vendor-sources.sh` clones and pin-verifies it, `04-cross-compile-app-stack.sh` cross-builds it for MIPS via the project's own documented toolchain image (`ghcr.io/coreflake1/guppydev`) and overwrites these two tracked files with the freshly-built, freshly-stripped result every build. The old hashes above are a historical snapshot only — a real build produces different (but source-traceable) bytes; `05-final-build.sh`'s manifest records both the source commit (`git_commit_guppyscreen`) and the resulting binary hash (`guppyscreen_sha256`/`guppybeep_sha256`) so the two are never ambiguous. |
+| Origin (2026-08-07+) | **Fixed.** `GUPPYSCREEN_REPO`/`GUPPYSCREEN_PIN` in `manifests/dependencies.conf` pin the exact source commit (`coreflake1/NebulaOS-guppyscreen`); `00-fetch-vendor-sources.sh` clones and pin-verifies it, `04-cross-compile-app-stack.sh` cross-builds it for MIPS and overwrites these two tracked files with the freshly-built, freshly-stripped result every build. The old hashes above are a historical snapshot only — a real build produces different (but source-traceable) bytes; `05-final-build.sh`'s manifest records both the source commit (`git_commit_guppyscreen`) and the resulting binary hash (`guppyscreen_sha256`/`guppybeep_sha256`) so the two are never ambiguous. |
+| Toolchain (pre-2026-08-15) | Built via the standalone `ghcr.io/coreflake1/guppydev` container. |
+| Toolchain (2026-08-15+) | Now builds inside the same unified, digest-pinned `ghcr.io/coreflake1/nebulaos-build` image every other build stage uses (`manifests/dependencies.conf`'s `BUILD_IMAGE_REPO`/`BUILD_IMAGE_DIGEST`) — it's the same Bootlin `mips32el--musl` toolchain `guppydev` provided, just living on a non-default `PATH` entry (`GUPPYSCREEN_TOOLCHAIN_BIN`) instead of a separate container. See `docs/NEBULAOS_BUILD_ENVIRONMENT.md`. |
 | Reconstruction | Fully reconstructable from source as of 2026-08-07 — no longer the least-reproducible artifact in the build. |
 
 ## Wi-Fi firmware and calibration

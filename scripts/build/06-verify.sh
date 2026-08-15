@@ -379,13 +379,10 @@ else
 	echo "MISS DTB or dtc not found ($DTB / $DTC) - run 03-build-kernel-and-rootfs.sh first"
 fi
 
-docker run --rm --user root -v "$IMAGES:/img" "$PELLCORP_K1_BASH_BUILD_IMAGE" bash -c '
-apt-get -qq update >/dev/null 2>&1
-apt-get install -y -qq e2fsprogs >/dev/null 2>&1
 
 check() {
 	path="$1"
-	if debugfs -R "stat $path" /img/rootfs.ext2 2>&1 | grep -q "Inode:"; then
+	if debugfs -R "stat $path" ${IMAGES}/rootfs.ext2 2>&1 | grep -q "Inode:"; then
 		echo "OK   $path"
 	else
 		echo "MISS $path"
@@ -394,7 +391,7 @@ check() {
 
 check_absent() {
 	path="$1"
-	if debugfs -R "stat $path" /img/rootfs.ext2 2>&1 | grep -q "Inode:"; then
+	if debugfs -R "stat $path" ${IMAGES}/rootfs.ext2 2>&1 | grep -q "Inode:"; then
 		echo "MISS $path is present but should have been removed as obsolete"
 	else
 		echo "OK   $path is absent"
@@ -479,9 +476,9 @@ echo "=== process launch arguments and config-path consistency (mainline print-c
 # create/read/edit/delete cycle through the real file-manager API); these
 # checks exist to keep it that way, catching a future regression at build
 # time rather than live on a real printer.
-S55_CONTENT=$(debugfs -R "cat /etc/init.d/S55klipper" /img/rootfs.ext2 2>/dev/null)
-S56_CONTENT=$(debugfs -R "cat /etc/init.d/S56moonraker" /img/rootfs.ext2 2>/dev/null)
-S01_CONTENT=$(debugfs -R "cat /etc/init.d/S01persistent-datastore" /img/rootfs.ext2 2>/dev/null)
+S55_CONTENT=$(debugfs -R "cat /etc/init.d/S55klipper" ${IMAGES}/rootfs.ext2 2>/dev/null)
+S56_CONTENT=$(debugfs -R "cat /etc/init.d/S56moonraker" ${IMAGES}/rootfs.ext2 2>/dev/null)
+S01_CONTENT=$(debugfs -R "cat /etc/init.d/S01persistent-datastore" ${IMAGES}/rootfs.ext2 2>/dev/null)
 if echo "$S55_CONTENT" | grep -qE "^CONFIG=/opt/printer_data/config/printer.cfg$"; then
 	echo "OK   S55klipper launches Klipper against the canonical /opt/printer_data/config/printer.cfg"
 else
@@ -536,7 +533,7 @@ check /etc/init.d/S57nebulaos-camera-seed
 # Use double quotes for every string/pattern added below instead - none
 # of them need a literal dollar sign or backtick, so double-quoting is
 # always safe here.
-MOONRAKER_CONF_CONTENT=$(debugfs -R "cat /opt/printer_data/config/moonraker.conf" /img/rootfs.ext2 2>/dev/null)
+MOONRAKER_CONF_CONTENT=$(debugfs -R "cat /opt/printer_data/config/moonraker.conf" ${IMAGES}/rootfs.ext2 2>/dev/null)
 
 check_conf_absent() {
 	pattern="$1"; desc="$2"
@@ -610,7 +607,6 @@ echo "=== factory-seed git archives (auto-updates-camera-complete mission, 2026-
 # checks cannot see this - it needs the actual archive content dumped out
 # of the built image and inspected with real git commands, the same way
 # the moonraker.conf content checks above go beyond existence-only.
-apt-get install -y -qq git >/dev/null 2>&1
 # Real bug found live: the extracted archive keeps the UID it was tarred
 # with on the build host, which does not match this containers root user
 # - git refuses to operate on it at all ("detected dubious ownership"),
@@ -623,7 +619,7 @@ check_seed_archive() {
 	archive_path="$1"; expected_branch="$2"; expected_origin="$3"; label="$4"
 	rm -rf /tmp/seed-check
 	mkdir -p /tmp/seed-check
-	if ! debugfs -R "dump $archive_path /tmp/seed-check.tar" /img/rootfs.ext2 >/dev/null 2>&1; then
+	if ! debugfs -R "dump $archive_path /tmp/seed-check.tar" ${IMAGES}/rootfs.ext2 >/dev/null 2>&1; then
 		echo "MISS $label archive could not be dumped from the image ($archive_path)"
 		return
 	fi
@@ -683,10 +679,10 @@ check_seed_archive /opt/nebulaos-seeds/moonraker.tar.gz master "https://github.c
 # immutable one, not silently reverted to the incompatible upstream blob.
 rm -rf /tmp/chelper-check
 mkdir -p /tmp/chelper-check
-debugfs -R "dump /opt/nebulaos-seeds/klipper.tar.gz /tmp/chelper-check.tar.gz" /img/rootfs.ext2 >/dev/null 2>&1
+debugfs -R "dump /opt/nebulaos-seeds/klipper.tar.gz /tmp/chelper-check.tar.gz" ${IMAGES}/rootfs.ext2 >/dev/null 2>&1
 if tar -xzf /tmp/chelper-check.tar.gz -C /tmp/chelper-check ./klippy/chelper/c_helper.so 2>/dev/null; then
 	SEED_CHELPER_SHA=$(sha256sum /tmp/chelper-check/klippy/chelper/c_helper.so 2>/dev/null | cut -d" " -f1)
-	BASELINE_CHELPER_SHA=$(debugfs -R "cat /opt/klipper/klippy/chelper/c_helper.so" /img/rootfs.ext2 2>/dev/null | sha256sum | cut -d" " -f1)
+	BASELINE_CHELPER_SHA=$(debugfs -R "cat /opt/klipper/klippy/chelper/c_helper.so" ${IMAGES}/rootfs.ext2 2>/dev/null | sha256sum | cut -d" " -f1)
 	if [ -n "$SEED_CHELPER_SHA" ] && [ "$SEED_CHELPER_SHA" = "$BASELINE_CHELPER_SHA" ]; then
 		echo "OK   klipper seed archives c_helper.so matches the proven-working immutable baseline"
 	else
@@ -696,7 +692,7 @@ else
 	echo "MISS could not extract klippy/chelper/c_helper.so from the klipper seed archive for comparison"
 fi
 rm -rf /tmp/chelper-check /tmp/chelper-check.tar.gz
-SEED_MANIFEST_CONTENT=$(debugfs -R "cat /opt/nebulaos-seeds/seed-manifest.json" /img/rootfs.ext2 2>/dev/null)
+SEED_MANIFEST_CONTENT=$(debugfs -R "cat /opt/nebulaos-seeds/seed-manifest.json" ${IMAGES}/rootfs.ext2 2>/dev/null)
 if echo "$SEED_MANIFEST_CONTENT" | grep -q "git_bundle_flattened"; then
 	echo "MISS seed-manifest.json still references the removed git_bundle_flattened format"
 else
@@ -716,17 +712,17 @@ echo "=== printer_data config factory seed (Ender-3 V3 KE, auto-updates-camera-c
 # persistent copy over /opt/printer_data. Confirms the dedicated immutable
 # seed at /opt/nebulaos-seeds/printer_data-config/ actually landed in the
 # packaged image, not just the tracked overlay source.
-if debugfs -R "stat /opt/nebulaos-seeds/printer_data-config/printer.cfg" /img/rootfs.ext2 2>&1 | grep -q "Inode:"; then
+if debugfs -R "stat /opt/nebulaos-seeds/printer_data-config/printer.cfg" ${IMAGES}/rootfs.ext2 2>&1 | grep -q "Inode:"; then
 	echo "OK   /opt/nebulaos-seeds/printer_data-config/printer.cfg is present"
 else
 	echo "MISS /opt/nebulaos-seeds/printer_data-config/printer.cfg is missing from the packaged seed"
 fi
-if debugfs -R "stat /opt/nebulaos-seeds/printer_data-config/moonraker.conf" /img/rootfs.ext2 2>&1 | grep -q "Inode:"; then
+if debugfs -R "stat /opt/nebulaos-seeds/printer_data-config/moonraker.conf" ${IMAGES}/rootfs.ext2 2>&1 | grep -q "Inode:"; then
 	echo "OK   /opt/nebulaos-seeds/printer_data-config/moonraker.conf is present"
 else
 	echo "MISS /opt/nebulaos-seeds/printer_data-config/moonraker.conf is missing from the packaged seed"
 fi
-if debugfs -R "stat /opt/nebulaos-seeds/printer_data-config/frontend-controls.cfg" /img/rootfs.ext2 2>&1 | grep -q "Inode:"; then
+if debugfs -R "stat /opt/nebulaos-seeds/printer_data-config/frontend-controls.cfg" ${IMAGES}/rootfs.ext2 2>&1 | grep -q "Inode:"; then
 	echo "OK   /opt/nebulaos-seeds/printer_data-config/frontend-controls.cfg is present"
 else
 	echo "MISS /opt/nebulaos-seeds/printer_data-config/frontend-controls.cfg is missing from the packaged seed"
@@ -736,29 +732,29 @@ fi
 # seed depends on (the macro/shell-command config, and the script the shell
 # command actually invokes) really landed in the packaged image, not just
 # the tracked overlay source.
-if debugfs -R "stat /opt/nebulaos-seeds/printer_data-config/camera-quality.cfg" /img/rootfs.ext2 2>&1 | grep -q "Inode:"; then
+if debugfs -R "stat /opt/nebulaos-seeds/printer_data-config/camera-quality.cfg" ${IMAGES}/rootfs.ext2 2>&1 | grep -q "Inode:"; then
 	echo "OK   /opt/nebulaos-seeds/printer_data-config/camera-quality.cfg is present"
 else
 	echo "MISS /opt/nebulaos-seeds/printer_data-config/camera-quality.cfg is missing from the packaged seed"
 fi
-if debugfs -R "stat /opt/nebulaos-seeds/printer_data-config/GuppyScreen/scripts/set_camera_quality.py" /img/rootfs.ext2 2>&1 | grep -q "Inode:"; then
+if debugfs -R "stat /opt/nebulaos-seeds/printer_data-config/GuppyScreen/scripts/set_camera_quality.py" ${IMAGES}/rootfs.ext2 2>&1 | grep -q "Inode:"; then
 	echo "OK   /opt/nebulaos-seeds/printer_data-config/GuppyScreen/scripts/set_camera_quality.py is present"
 else
 	echo "MISS /opt/nebulaos-seeds/printer_data-config/GuppyScreen/scripts/set_camera_quality.py is missing from the packaged seed"
 fi
 rm -rf /tmp/printerdata-check
 mkdir -p /tmp/printerdata-check/GuppyScreen /tmp/printerdata-check/simpleaf
-debugfs -R "dump /opt/nebulaos-seeds/printer_data-config/printer.cfg /tmp/printerdata-check/printer.cfg" /img/rootfs.ext2 >/dev/null 2>&1
-debugfs -R "dump /opt/nebulaos-seeds/printer_data-config/moonraker.conf /tmp/printerdata-check/moonraker.conf" /img/rootfs.ext2 >/dev/null 2>&1
-debugfs -R "dump /opt/nebulaos-seeds/printer_data-config/frontend-controls.cfg /tmp/printerdata-check/frontend-controls.cfg" /img/rootfs.ext2 >/dev/null 2>&1
-debugfs -R "dump /opt/nebulaos-seeds/printer_data-config/GuppyScreen/guppy_cmd.cfg /tmp/printerdata-check/GuppyScreen/guppy_cmd.cfg" /img/rootfs.ext2 >/dev/null 2>&1
+debugfs -R "dump /opt/nebulaos-seeds/printer_data-config/printer.cfg /tmp/printerdata-check/printer.cfg" ${IMAGES}/rootfs.ext2 >/dev/null 2>&1
+debugfs -R "dump /opt/nebulaos-seeds/printer_data-config/moonraker.conf /tmp/printerdata-check/moonraker.conf" ${IMAGES}/rootfs.ext2 >/dev/null 2>&1
+debugfs -R "dump /opt/nebulaos-seeds/printer_data-config/frontend-controls.cfg /tmp/printerdata-check/frontend-controls.cfg" ${IMAGES}/rootfs.ext2 >/dev/null 2>&1
+debugfs -R "dump /opt/nebulaos-seeds/printer_data-config/GuppyScreen/guppy_cmd.cfg /tmp/printerdata-check/GuppyScreen/guppy_cmd.cfg" ${IMAGES}/rootfs.ext2 >/dev/null 2>&1
 # SimpleAF backend integration (2026-07-29, see docs/
 # NEBULAOS_SIMPLEAF_BACKEND_INTEGRATION.md) - these 8 files are now what
 # printer.cfg actually includes for the print-control/workflow closure;
 # frontend-controls.cfg is dumped above only because it is still shipped on
 # disk as an unused reference, not because printer.cfg includes it any more.
 for simpleaf_f in homing.cfg useful_macros.cfg fan_control.cfg client.cfg start_end.cfg Line_Purge.cfg Smart_Park.cfg bltouch_macro.cfg; do
-	debugfs -R "dump /opt/nebulaos-seeds/printer_data-config/simpleaf/$simpleaf_f /tmp/printerdata-check/simpleaf/$simpleaf_f" /img/rootfs.ext2 >/dev/null 2>&1
+	debugfs -R "dump /opt/nebulaos-seeds/printer_data-config/simpleaf/$simpleaf_f /tmp/printerdata-check/simpleaf/$simpleaf_f" ${IMAGES}/rootfs.ext2 >/dev/null 2>&1
 done
 if [ -s /tmp/printerdata-check/printer.cfg ] && grep -q "^#\*# <---------------------- SAVE_CONFIG" /tmp/printerdata-check/printer.cfg 2>/dev/null; then
 	echo "MISS packaged printer.cfg seed contains a real SAVE_CONFIG calibration block"
@@ -881,13 +877,13 @@ fi
 rm -rf /tmp/printerdata-check
 # Confirms the actual fix logic landed in the packaged init scripts, not
 # just the seed content sitting there unused.
-S02_CONTENT=$(debugfs -R "cat /etc/init.d/S02nebulaos-namespace" /img/rootfs.ext2 2>/dev/null)
+S02_CONTENT=$(debugfs -R "cat /etc/init.d/S02nebulaos-namespace" ${IMAGES}/rootfs.ext2 2>/dev/null)
 if echo "$S02_CONTENT" | grep -q "seed_printer_data_config"; then
 	echo "OK   S02nebulaos-namespace contains the printer_data config seeding logic"
 else
 	echo "MISS S02nebulaos-namespace is missing the printer_data config seeding logic"
 fi
-S05_CONTENT=$(debugfs -R "cat /etc/init.d/S05nebulaos-activate" /img/rootfs.ext2 2>/dev/null)
+S05_CONTENT=$(debugfs -R "cat /etc/init.d/S05nebulaos-activate" ${IMAGES}/rootfs.ext2 2>/dev/null)
 if echo "$S05_CONTENT" | grep -q "config/printer.cfg"; then
 	echo "OK   S05nebulaos-activate validates printer_data against the real required files, not just the config directory"
 else
@@ -954,7 +950,7 @@ check /etc/init.d/S59nebulaos-update-supervisor
 # "Fast link dest" only for symlinks, so its presence (and pointing at
 # busybox) is what would indicate the fix did not take.
 check /sbin/ip
-stat_out=$(debugfs -R "stat /sbin/ip" /img/rootfs.ext2 2>&1)
+stat_out=$(debugfs -R "stat /sbin/ip" ${IMAGES}/rootfs.ext2 2>&1)
 case "$stat_out" in
 	*"Fast link dest"*busybox*)
 		echo "MISS /sbin/ip is still the busybox applet symlink"
@@ -963,9 +959,8 @@ case "$stat_out" in
 		echo "OK   /sbin/ip is a real binary, not the busybox symlink"
 		;;
 esac
-'
 
-echo "=== architecture spot-checks (host objdump has no MIPS backend - using the k1-bash-build toolchain) ==="
+echo "=== architecture spot-checks (host objdump has no MIPS backend - a future check here would use the Buildroot-generated mipsel-buildroot-linux-gnu-objdump, per Phase 11's unified-container migration; pellcorp/k1-bash-build is retired) ==="
 # Production optimization mission, Phase 9 (2026-07-30): this used to spot-
 # check hci_uart.ko's architecture - the only loadable kernel module this
 # image ever shipped. Bluetooth is now removed entirely (CONFIG_BT is not
@@ -975,5 +970,35 @@ echo "=== architecture spot-checks (host objdump has no MIPS backend - using the
 # spot-check. Left as an empty, documented section rather than deleted
 # outright, so a future loadable module addition has an obvious place to
 # add its own check back.
+
+echo "== xImage/uImage terminology check =="
+# FIRMWARE.md sec 31 ("REAL BOOT SUCCESS..."): this project's kernel image
+# was called "uImage" in early docs/scripts by convention/habit, but the
+# real built file is (and has always been) named xImage, and its header
+# does NOT match a standard U-Boot legacy "uImage" (compressed vmlinux.bin)
+# layout - see FIRMWARE.md sec 29-31's root-cause trace and the "Correction"
+# note. scripts/build/README.md had a genuinely stale "uImage" reference
+# from before that correction, found and fixed 2026-08-14/15. This check
+# exists so a future doc/script edit that reintroduces "uImage" as the name
+# of the actual build artifact gets caught here rather than silently
+# drifting back out of sync with what 05-final-build.sh actually produces
+# (xImage, see IMAGES/xImage and artifacts/buildroot-halley5-v30-image/
+# xImage above).
+if [ -f "$IMAGES/xImage" ]; then
+	echo "PASS $IMAGES/xImage exists (correct artifact name)"
+else
+	echo "MISS $IMAGES/xImage not found - run 05-final-build.sh first"
+fi
+if [ -f "$IMAGES/uImage" ]; then
+	echo "MISS $IMAGES/uImage exists - this project's kernel image is xImage, not uImage (see FIRMWARE.md sec 29-31); a stray uImage here means something built the wrong target"
+fi
+# Deliberately not grepping docs/ for stray "uImage" text here: docs/HISTORY.md
+# and FIRMWARE.md are append-only dated journals that correctly say "uImage"
+# in entries written before the sec 29-31 naming correction - a mechanical
+# grep can't tell historical record from stale current claim, and got this
+# wrong on a first pass (flagged docs/HISTORY.md's legitimate history as a
+# MISS). That distinction needs a human read, which is how scripts/build/
+# README.md's real stale reference was actually found and fixed
+# (2026-08-14/15) - not something to re-attempt here.
 
 echo "== verification complete - review any MISS lines above =="

@@ -4,13 +4,23 @@
 # pass, since they're all just kernel config + device-tree, nothing
 # cross-compiled outside Buildroot's own package builds.
 #
-# IMPORTANT: always mount the buildroot-x2000 directory at /src, exactly as
-# here. A real bug this session (FIRMWARE.md sec 14): several of Buildroot's
-# own host tools (e.g. glib-compile-schemas) get built with their RUNPATH
-# hardcoded to whatever mount path was used *the first time* they were
-# built - a later stage that mounts at a different path will fail with
-# "cannot open shared object file" even though nothing about the build
-# itself changed. Pick one path and never deviate.
+# IMPORTANT: never move/rename this checkout mid-build. A real bug this
+# session (FIRMWARE.md sec 14): several of Buildroot's own host tools (e.g.
+# glib-compile-schemas) get built with their RUNPATH hardcoded to whatever
+# absolute path buildroot-x2000/ was actually AT the first time they were
+# built - a later stage run against a relocated/renamed checkout will fail
+# with "cannot open shared object file" even though nothing about the build
+# itself changed. Pick a checkout location and never move it mid-build.
+# (Phase 11 note, 2026-08-15: before the unified-build-environment
+# migration this was framed as "always mount at /src inside the container" -
+# same underlying constraint, just expressed as a container-mount-path
+# requirement back when a container boundary existed here. The real
+# constraint was always "one consistent absolute path for the life of one
+# build," not the specific string `/src` - flattening away the container
+# boundary means REPO_ROOT below now legitimately differs between a Phase
+# 9-era build (container path) and this build (real host path), which is
+# exactly the BUILD_PATH_EMBEDDING-class artifact difference the Phase 11
+# comparison tooling expects and accounts for, not a regression.)
 #
 # IMPORTANT: this always force-cleans and rebuilds the kernel from scratch
 # (`make linux-dirclean` before `make`), rather than relying on plain `make`
@@ -55,14 +65,15 @@
 # `gcc-final-reinstall` re-runs just the install steps (cheap - the compiler
 # itself doesn't need rebuilding), unlike `gcc-final-dirclean` which would
 # force a full toolchain rebuild for no reason.
+#
+# Phase 11 (2026-08-15): flattened out of pellcorp/k1-bash-build - see
+# 02-configure-buildroot.sh's own Phase 11 note for why (one unified
+# container now, no per-stage container boundary, no per-stage apt-get).
 set -e
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
 
-# Final Pre-Flash Audit mission (2026-08-08): DEPS_MANIFEST provides
-# PELLCORP_K1_BASH_BUILD_IMAGE (the digest-pinned toolchain container ref)
-# - see manifests/dependencies.conf's own comment on that entry.
 DEPS_MANIFEST="$REPO_ROOT/manifests/dependencies.conf"
 [ -f "$DEPS_MANIFEST" ] || { echo "FATAL: $DEPS_MANIFEST not found" >&2; exit 1; }
 . "$DEPS_MANIFEST"
@@ -71,22 +82,6 @@ DEPS_MANIFEST="$REPO_ROOT/manifests/dependencies.conf"
 exec 9>"$REPO_ROOT/.nebulaos-build.lock"
 flock -n 9 || { echo "another build stage already owns $REPO_ROOT/.nebulaos-build.lock" >&2; exit 1; }
 
-# Orphaned-container cleanup (2026-07-23) - a real incident this session: a
-# killed build wrapper left its `docker run` process running independently
-# (SIGKILL can't be trapped, so no shell-level cleanup in the wrapper itself
-# could ever have caught this), needing a manual `docker stop` once noticed.
-# Every docker container this project's scripts spawn carries
-# --label openke-build-pid=<owning PID> - check each one found against a
-# live PID and stop anything left over from a run that's no longer alive,
-# regardless of whether the lock itself was contended just now.
-for cid_pid in $(docker ps --filter "label=openke-build-pid" --format '{{.ID}}={{.Label "openke-build-pid"}}' 2>/dev/null); do
-	cid=${cid_pid%%=*}
-	opid=${cid_pid##*=}
-	if ! kill -0 "$opid" 2>/dev/null; then
-		echo "stopping orphaned container $cid (from dead pid $opid)" >&2
-		docker stop "$cid" >/dev/null 2>&1 || true
-	fi
-done
 BUILDROOT_DIR="$REPO_ROOT/vendor/buildroot-x2000"
 KERNEL_MOUNT="$REPO_ROOT/vendor/x2000_kernel_6.6/kernel/kernel-6.6"
 
@@ -95,50 +90,44 @@ if [ ! -f "$BUILDROOT_DIR/.config" ]; then
 	exit 1
 fi
 
-docker run --label "openke-build-pid=$$" --rm --user root \
-	-v "$KERNEL_MOUNT:/kernel_6_6/kernel/kernel-6.6" \
-	-v "$BUILDROOT_DIR:/src" -w /src "$PELLCORP_K1_BASH_BUILD_IMAGE" bash -c '
 # Stale-config purge (2026-07-31, per the NEBULAOS_CAMERA_USB_RT_SOURCE
-# _ANALYSIS.md vendor-pin audit): a real, previously-undetected gotcha was found on this
-# exact checkout - vendor/x2000_kernel_6.6/kernel/kernel-6.6/.config and
-# .config.old, dated well before a real Kconfig fragment fix (the BCMDHD-
-# disable change), sitting stale in the mounted kernel source tree, root-owned
-# from a prior --user root run (a plain host-side `rm` cannot touch them - has
-# to happen in here). Whether `make linux-dirclean` below reliably wipes an
-# override-srcdir kernels own in-tree .config/.config.old/include/config on
+# _ANALYSIS.md vendor-pin audit): a real, previously-undetected gotcha was
+# found on this exact checkout - vendor/x2000_kernel_6.6/kernel/kernel-6.6/
+# .config and .config.old, dated well before a real Kconfig fragment fix
+# (the BCMDHD-disable change), sitting stale in the mounted kernel source
+# tree. Whether `make linux-dirclean` below reliably wipes an
+# override-srcdir kernel's own in-tree .config/.config.old/include/config on
 # every host/Buildroot version combination is not something this project
-# trusts blindly (this files own header already documents three separate,
-# real instances of Buildroots stamp/config invalidation not doing what
-# youd assume) - so wipe them explicitly here first, unconditionally, before
-# dirclean even runs. This guarantees the kernel source tree never carries
-# forward a stale Kconfig resolution from a previous, possibly-different
-# build.
-rm -f /kernel_6_6/kernel/kernel-6.6/.config /kernel_6_6/kernel/kernel-6.6/.config.old
-rm -rf /kernel_6_6/kernel/kernel-6.6/include/config /kernel_6_6/kernel/kernel-6.6/include/generated
-apt-get -qq update >/dev/null 2>&1
-apt-get install -y -qq python3 bc cpio rsync unzip bison flex libncurses5-dev file \
-	build-essential libssl-dev libelf-dev libffi-dev zlib1g-dev libsqlite3-dev \
-	libexpat1-dev libbz2-dev liblzma-dev libreadline-dev libgdbm-dev uuid-dev \
-	pkg-config autoconf automake libtool gettext texinfo help2man \
-	libjpeg-dev libpng-dev libtiff-dev libwebp-dev libopenjp2-7-dev >/dev/null 2>&1
-make linux-dirclean
-make wpa_supplicant-dirclean
-# Same staleness class as the two dircleans above (FIRMWARE.md sec 28): a
-# plain incremental make only rebuilds a package whose stamp is missing or
-# whose config hash changed, and toggling a Kconfig option alone does not
-# invalidate an already-built package stamp. Hit this for real chasing a
-# matplotlib build failure - host-python3 kept silently reusing its original
-# SSL-less build across multiple BR2_PACKAGE_HOST_PYTHON3_SSL config-flip
-# rebuilds, so pip inside it could never actually reach the network no
-# matter what else changed. Fixed with one `make host-python3-dirclean`
-# (not kept here permanently - a real, one-time transition, not an ongoing
-# one like the two dircleans above; host-python3 does not need forcing on
-# every build once it is correctly built once). If the host-python3
-# BR2_PACKAGE_HOST_PYTHON3_* options change again later, this needs a
-# manual `make host-python3-dirclean` before the next build, same as any
-# other already-built package whose Kconfig options changed.
-make gcc-final-reinstall
-make
-'
+# trusts blindly (this file's own header already documents three separate,
+# real instances of Buildroot's stamp/config invalidation not doing what
+# you'd assume) - so wipe them explicitly here first, unconditionally,
+# before dirclean even runs. This guarantees the kernel source tree never
+# carries forward a stale Kconfig resolution from a previous, possibly-
+# different build.
+rm -f "$KERNEL_MOUNT/.config" "$KERNEL_MOUNT/.config.old"
+rm -rf "$KERNEL_MOUNT/include/config" "$KERNEL_MOUNT/include/generated"
+
+(
+	cd "$BUILDROOT_DIR"
+	make linux-dirclean
+	make wpa_supplicant-dirclean
+	# Same staleness class as the two dircleans above (FIRMWARE.md sec 28): a
+	# plain incremental make only rebuilds a package whose stamp is missing
+	# or whose config hash changed, and toggling a Kconfig option alone does
+	# not invalidate an already-built package stamp. Hit this for real
+	# chasing a matplotlib build failure - host-python3 kept silently
+	# reusing its original SSL-less build across multiple
+	# BR2_PACKAGE_HOST_PYTHON3_SSL config-flip rebuilds, so pip inside it
+	# could never actually reach the network no matter what else changed.
+	# Fixed with one `make host-python3-dirclean` (not kept here
+	# permanently - a real, one-time transition, not an ongoing one like the
+	# two dircleans above; host-python3 does not need forcing on every build
+	# once it is correctly built once). If the host-python3
+	# BR2_PACKAGE_HOST_PYTHON3_* options change again later, this needs a
+	# manual `make host-python3-dirclean` before the next build, same as any
+	# other already-built package whose Kconfig options changed.
+	make gcc-final-reinstall
+	make
+)
 
 echo "== kernel + base rootfs built: $BUILDROOT_DIR/output/images/{xImage,rootfs.ext2} =="

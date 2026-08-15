@@ -27,6 +27,10 @@ REPO_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
 KERNEL_DIR="$REPO_ROOT/vendor/x2000_kernel_6.6"
 ARTIFACT_DIR="$REPO_ROOT/artifacts/buildroot-halley5-v30-image"
 
+DEPS_MANIFEST="$REPO_ROOT/manifests/dependencies.conf"
+[ -f "$DEPS_MANIFEST" ] || { echo "FATAL: $DEPS_MANIFEST not found" >&2; exit 1; }
+. "$DEPS_MANIFEST"
+
 FAILED=0
 check() {
 	desc="$1"
@@ -170,20 +174,26 @@ post-build)
 	# assertion in this same script still passed; only this byte-identical
 	# check against a manually-bumped reference broke.
 	#
-	# Fix: derive the reference from the most recently created
+	# Fix (2026-08-14): derived the reference from the most recently created
 	# nebulaos-canonical-baseline-* tag instead of one fixed name, so this
-	# check never needs a manual bump again as new baselines are accepted -
-	# see this same comment in baseline-difference-gate.sh, which had the
-	# identical bug and the identical fix.
-	BASELINE_REF=$(git -C "$REPO_ROOT" tag -l 'nebulaos-canonical-baseline-*' --sort=-creatordate | head -1)
-	[ -n "$BASELINE_REF" ] || {
-		echo "FATAL: no nebulaos-canonical-baseline-* tag found in this checkout - fetch tags with 'git fetch --tags' first." >&2
-		exit 1
-	}
+	# check never needed a manual bump as new baselines were accepted - see
+	# this same comment history in baseline-difference-gate.sh.
+	#
+	# Final Closure mission, Phase B (2026-08-15): "newest tag wins" is
+	# better than a stale hardcoded name, but still implicit - a new
+	# nebulaos-canonical-baseline-* tag silently becomes this check's
+	# reference the moment it's pushed, with no deliberate promotion step
+	# and no record in this script's own output of which tag a given run
+	# actually verified against. One explicit value instead, in
+	# manifests/dependencies.conf: QUALIFIED_BASELINE_TAG. Advancing the
+	# qualified baseline is now a deliberate edit to that file, in its own
+	# reviewed commit - not just pushing a tag.
+	BASELINE_REF="${QUALIFIED_BASELINE_TAG:?QUALIFIED_BASELINE_TAG not set in $DEPS_MANIFEST}"
 	git -C "$REPO_ROOT" rev-parse --verify -q "$BASELINE_REF" >/dev/null || {
-		echo "FATAL: baseline tag '$BASELINE_REF' does not exist in this checkout - fetch tags with 'git fetch --tags' first." >&2
+		echo "FATAL: QUALIFIED_BASELINE_TAG='$BASELINE_REF' (from $DEPS_MANIFEST) does not exist in this checkout - fetch tags with 'git fetch --tags' first, or correct the manifest." >&2
 		exit 1
 	}
+	echo "  == qualified baseline in use: $BASELINE_REF (from $DEPS_MANIFEST) =="
 	for f in kernel.config halley5_v30.dts buildroot.config; do
 		if git -C "$REPO_ROOT" diff --quiet "$BASELINE_REF" -- "artifacts/buildroot-halley5-v30-image/$f" 2>/dev/null; then
 			echo "  PASS: $f byte-identical to pinned baseline tag $BASELINE_REF"

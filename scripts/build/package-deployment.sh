@@ -41,8 +41,7 @@ echo "== decompiling DTB for package inclusion =="
 DTB_SRC="$REPO_ROOT/vendor/buildroot-x2000/output/build/linux-custom/module_drivers/dts/x2000/halley5_v30.dtb"
 if [ -f "$DTB_SRC" ]; then
 	cp "$DTB_SRC" "$PKG_DIR/halley5_v30.dtb"
-	docker run --rm -v "$PKG_DIR:/pkg" "$PELLCORP_K1_BASH_BUILD_IMAGE" \
-		sh -c 'command -v dtc >/dev/null 2>&1 && dtc -I dtb -O dts /pkg/halley5_v30.dtb -o /pkg/halley5_v30.decompiled.dts 2>/dev/null || echo "dtc not available in build image" >&2' \
+	{ command -v dtc >/dev/null 2>&1 && dtc -I dtb -O dts "$PKG_DIR/halley5_v30.dtb" -o "$PKG_DIR/halley5_v30.decompiled.dts" 2>/dev/null || echo "dtc not available in this environment" >&2; } \
 		|| echo "WARNING: DTB decompile failed - halley5_v30.dtb (binary) still included, halley5_v30.dts (source) is the authoritative reference"
 else
 	echo "WARNING: $DTB_SRC not found - shipping source DTS only"

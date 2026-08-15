@@ -1,0 +1,75 @@
+name: Build environment (candidate image)
+
+# Builds build-env/Dockerfile and publishes a CANDIDATE image to GHCR.
+# A published image here is NEVER automatically canonical - promoting one
+# to canonical means a human deliberately updates BUILD_IMAGE_DIGEST in
+# manifests/dependencies.conf in its own reviewed commit, after a real
+# Phase 9-vs-Phase-11-style rebuild-and-compare has passed. This workflow
+# never touches dependencies.conf, never moves a release tag, and never
+# tags anything :latest (reproducible builds must reference an image by
+# digest, not a floating tag - see manifests/dependencies.conf's own
+# comment on why PELLCORP_K1_BASH_BUILD_IMAGE was pinned by digest for the
+# same reason).
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches:
+      - "**"
+    paths:
+      - "build-env/**"
+      - ".github/workflows/build-environment.yml"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Determine candidate tag
+        id: tag
+        run: echo "tag=candidate-$(date -u +%Y-%m-%d)-${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push candidate
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: build-env
+          push: true
+          tags: |
+            ghcr.io/coreflake1/nebulaos-build:${{ steps.tag.outputs.tag }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/coreflake1/NebulaOS-firmware
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.created=${{ github.event.repository.updated_at }}
+            org.opencontainers.image.version=${{ steps.tag.outputs.tag }}
+
+      - name: Record the immutable digest
+        run: |
+          echo "## Candidate build environment image" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`ghcr.io/coreflake1/nebulaos-build@${{ steps.build.outputs.digest }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "This is a CANDIDATE image. It does not become canonical until a real" >> "$GITHUB_STEP_SUMMARY"
+          echo "fresh-clone rebuild-and-compare against the current reference artifacts" >> "$GITHUB_STEP_SUMMARY"
+          echo "passes, and a human deliberately updates BUILD_IMAGE_DIGEST in" >> "$GITHUB_STEP_SUMMARY"
+          echo "manifests/dependencies.conf to point at it, in its own reviewed commit." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify environment (self-check)
+        run: |
+          docker run --rm -v "$PWD:$PWD" -w "$PWD" \
+            "ghcr.io/coreflake1/nebulaos-build@${{ steps.build.outputs.digest }}" \
+            sh build-env/verify-environment.sh

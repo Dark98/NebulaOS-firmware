@@ -141,4 +141,4 @@ make gcc-final-reinstall
 make
 '
 
-echo "== kernel + base rootfs built: $BUILDROOT_DIR/output/images/{uImage,rootfs.ext2} =="
+echo "== kernel + base rootfs built: $BUILDROOT_DIR/output/images/{xImage,rootfs.ext2} =="

@@ -1,18 +1,25 @@
 # Recovering a NebulaOS printer
 
-**Developer / advanced testing documentation.** These procedures expose raw firmware images, partitions, A/B boot slots, SSH/root access, and recovery mechanisms. They document the current NebulaOS development workflow and are not presented as a supported consumer installer.
+If a development build goes sideways, don't jump straight to USB recovery — there are a few easier
+ways back, roughly in order of how bad things have to get before you need them.
 
-Ranked from least to most invasive, derived from what's actually been exercised — not assumed.
+## 1. It just fixes itself
 
-## 1. Automatic fallback
+Most of the time, you don't need to do anything. This is covered in full in
+`docs/A_B_SLOT_MODEL.md`, but the short version: the moment a NebulaOS boot starts, it sets the
+boot marker back to stock. Only once Klipper and Moonraker are confirmed actually healthy does it
+flip the marker forward again. So if a boot crashes or hangs, the next reboot lands you back on
+stock on its own.
 
-**Evidence: `LIVE_HARDWARE_VERIFIED`.** No user action. Covered in full in `docs/A_B_SLOT_MODEL.md` — summarized here: `S00revert-safety` unconditionally resets the OTA marker to stock the instant a custom boot starts; only `S99confirm-good`, after confirming Moonraker/Klipper are genuinely healthy, flips it back forward. A boot that never gets that far leaves the marker on stock, so the *next* reboot lands there automatically.
+The one thing to know: this safety net lives *inside* NebulaOS itself. If the kernel never gets far
+enough to start userspace, it never gets the chance to run, and you're in the "the device won't
+come up at all" case instead — that's when you'd reach for USB recovery below. We haven't
+specifically tested that exact failure case (deliberately flashing something broken enough to hit
+it), so treat it as the one real unknown here.
 
-> **Known limitation:** automatic fallback depends on userspace reaching far enough to run `S00revert-safety` at all. A kernel that never boots, or a rootfs that fails before init can start, may fail *before* this protection can execute — in which case the marker stays wherever it was left, and if that was already `"ota:kernel2"`, there is no proven automatic recovery through this path. `NOT_PROVEN` against an intentionally broken kernel/rootfs; not addressed by any mechanism in this repo today. Recorded here rather than implied solved.
+## 2. Switch slots over SSH
 
-## 2. Manual SSH slot switch
-
-**Evidence: `LIVE_HARDWARE_VERIFIED`.** Requires the currently-running OS to still have working SSH/network. Two minutes, no tools.
+If the currently-running OS still has working SSH, this takes about two minutes and no tools.
 
 From custom:
 ```sh
@@ -28,74 +35,95 @@ local_set_next_boot_device
 reboot
 ```
 
-Switching slots erases nothing on either side — see the persistence table below and `A_B_SLOT_MODEL.md`'s note on shared, non-duplicated storage.
+This doesn't erase anything on either side — see the persistence table below.
 
-## 3. USB recovery to stock
+## 3. USB recovery — the panic button
 
-**Evidence: `LIVE_HARDWARE_VERIFIED`. Advanced / emergency — not a routine path.** Use only when SSH/network is unreachable on the currently-booted OS.
+This is what you reach for when networking is dead and you can't get to the custom slot any other
+way. It's specifically a way to force the device back to stock, not a general-purpose installer, so
+don't expect it to do anything fancier than that.
 
-This is a **panic button back to stock**, not a general installer — the tool it uses is built specifically to force the device back to stock, not to select an arbitrary target.
-
-**Requirements:**
-- A computer (Linux — the build/run commands below are the only ones documented and tested; no Windows/Mac procedure is documented for this tool)
-- A USB cable to the Nebula Pad's MicroUSB port
-- Possibly opening the case, to reach two small buttons next to the MicroUSB port
-- `sudo` (plain USB access without it fails with a permissions error)
-- `ballaswag/ingenic-usbboot`, built from source:
+You'll need:
+- A Linux computer (this is the only platform these commands are documented against)
+- A USB cable into the Nebula Pad's MicroUSB port
+- Possibly opening the case to reach two small buttons next to that port
+- `sudo` (plain USB access without it just fails with a permissions error)
+- [`ballaswag/ingenic-usbboot`](https://github.com/ballaswag/ingenic-usbboot), built from source — credit to that project for making this recovery path possible at all:
   ```sh
   git clone https://github.com/ballaswag/ingenic-usbboot
   cd ingenic-usbboot
   make
   ```
-  The compiled binary is `usbboot`, not `ingenic-usbboot` — that's just the repo name. This is a third-party tool; **no version or checksum is pinned by this project.**
+  The compiled binary ends up named `usbboot`, not `ingenic-usbboot` — that's just the repo's name.
+  This is a third-party tool and we don't pin a specific version of it.
 
-**Procedure** (real mistakes made during live testing are preserved below because they affect safety, not just history):
+Here's the actual procedure, including a couple of gotchas we hit doing this for real:
 
-1. Power off. Hold both buttons for 3 seconds, release reset first, then boot. This enters mask-ROM USB recovery mode — nothing runs yet.
-2. Optional sanity check: `lsusb`, look for `ID a108:eaef Ingenic Semiconductor Co.,Ltd Ingenic USB BOOT DEVICE`.
-3. **u-boot must be loaded before the marker swap** — the raw mask-ROM stage does not support the marker-swap request at all; running it first fails with `Could not open USB device` or a transfer error.
+1. Power off. Hold both buttons for 3 seconds, release the reset button first, then boot. This puts
+   the board into mask-ROM USB recovery mode — nothing's running yet, it's just waiting for
+   instructions.
+2. Optional sanity check: `lsusb`, look for `ID a108:eaef Ingenic Semiconductor Co.,Ltd Ingenic USB
+   BOOT DEVICE`.
+3. **Load u-boot before you try to swap the marker** — the raw mask-ROM stage doesn't support that
+   request at all, and running it first just fails with `Could not open USB device` or a transfer
+   error.
    ```sh
    sudo ./usbboot --uboot
    sudo ./usbboot --swap-ota
    ```
-   There is no `--force-swap-ota` flag — `--swap-ota` **toggles**, it does not target a specific side. It prints the state before and after switching; read that output.
-4. **Don't trust the printed status alone.** Two consecutive real invocations both printed the same "before/after" text despite having different actual starting states — the raw USB-boot session does not reliably preserve state between separate tool invocations the way the printed text implies. Verify the real bytes instead:
+   There's no `--force-swap-ota` flag — `--swap-ota` toggles between the two, it doesn't let you
+   pick a side. It prints the state before and after, so read that output.
+4. **Don't trust that printed output on its own.** We saw two consecutive runs both print the exact
+   same "before/after" text despite actually starting from different states — the raw USB-boot
+   session doesn't reliably remember what happened in a previous invocation. Check the real bytes
+   instead:
    ```sh
    sudo ./usbboot --uboot
    sudo ./usbboot -o 0x100000 -s 0x1000 --dump-partition ./ota.out
    xxd ./ota.out | head -3
    ```
-   Confirm `ota:kernel` (stock) in the output. If it still shows `ota:kernel2`, run `--swap-ota` again and re-dump until the real bytes confirm stock.
-5. Power-cycle normally (or press reset) to leave recovery mode and boot for real. It comes up on stock.
+   You want to see `ota:kernel` (stock) in there. If it still says `ota:kernel2`, run `--swap-ota`
+   again and re-check until the actual bytes confirm you're on stock.
+5. Power-cycle normally (or hit reset) to leave recovery mode and boot for real. It'll come up on
+   stock.
 
-**What this changes:** only the OTA marker partition (`mmcblk0p1`), via the tool's own `--dump-partition`/marker-write path — it does not flash a kernel or rootfs, and does not touch the bootloader or partition table in this documented use.
+This only touches the OTA marker partition — it doesn't flash a kernel or rootfs, and it doesn't
+touch the bootloader or partition table.
 
-## 4. Manual repair via SSH
+## 4. Manual repair over SSH
 
-If SSH is reachable on either slot, ordinary root access and shell tooling are available — but there is **no canonical, dedicated repair script** in this repo beyond what's already covered above (slot switch, component-update rollback). `NOT_PROVEN` / not invented here as a named procedure.
+If you can still SSH into either slot, you've got ordinary root access and normal shell tooling —
+but there's no dedicated "repair script" beyond what's already covered above. We haven't built one,
+and this doc isn't going to pretend one exists.
 
-## 5. Complete factory restore
+## 5. Full factory restore
 
-**Evidence: `NOT_PROVEN`, `EXTERNAL_TO_NEBULAOS`.** Creality publishes its own official recovery images and USB flashing tooling that reinstalls the entire board (bootloader, kernel, rootfs) to a factory-original state, using the same USB mask-ROM mode as §3. This project does not provide, redistribute, or pin any version of that tooling, and has never executed this procedure as part of its own qualification record. If you need this, treat it as Creality's own procedure, not a NebulaOS one — do not present it elsewhere in this project's docs as a tested NebulaOS recovery path.
+Creality has its own official recovery images and USB flashing tooling that reinstalls everything —
+bootloader, kernel, rootfs, the works — back to a genuinely factory-fresh state, using the same USB
+mask-ROM mode as step 3 above. That's Creality's own tooling, though, not something NebulaOS
+provides, pins, or has actually run as part of any of our own testing. If you need it, treat it as
+Creality's procedure, not a documented NebulaOS recovery path.
 
-## Data persistence across slots
+## What actually survives a slot switch
 
-| Data | Behavior | Evidence |
-|---|---|---|
-| `printer.cfg`, macros, `moonraker.conf` | `PERSISTENT_ACROSS_SLOT_SWITCH` | `DOCUMENTED_NOT_REVERIFIED` — dedicated, never-touched directory tree by design |
-| Z offset / calibration, bed mesh | `PERSISTENT_ACROSS_SLOT_SWITCH` | `DOCUMENTED_NOT_REVERIFIED` — via `SAVE_CONFIG` into `printer.cfg`; the slot-switch scenario itself not directly re-tested |
-| WiFi credentials (NebulaOS's own) | `PERSISTENT_ACROSS_SLOT_SWITCH` | `LIVE_HARDWARE_VERIFIED` — explicitly confirmed untouched during a real persistent-state reset |
-| Moonraker config/state | `PERSISTENT_ACROSS_SLOT_SWITCH` | `LIVE_HARDWARE_VERIFIED` |
-| GuppyScreen config/theme | `PERSISTENT_ACROSS_SLOT_SWITCH` | `LIVE_HARDWARE_VERIFIED` — verified across a real flash during the Final Closure mission (2026-08-15) |
-| User G-code uploads | `PERSISTENT_ACROSS_SLOT_SWITCH` | `LIVE_HARDWARE_VERIFIED` — explicitly included in a real backup |
-| Logs | `REGENERATED` | `DOCUMENTED_NOT_REVERIFIED` — 7-day rotation |
-| Mainsail config | `UNKNOWN` | `NOT_PROVEN` for this project specifically |
-| Camera config, timelapses | `UNKNOWN` | `NOT_PROVEN` |
+| Data | What happens |
+|---|---|
+| `printer.cfg`, macros, `moonraker.conf` | Survives — lives in a dedicated directory this whole mechanism never touches |
+| Z offset / calibration, bed mesh | Survives — saved into `printer.cfg` via `SAVE_CONFIG`, though we haven't specifically re-tested this exact scenario |
+| NebulaOS's own WiFi credentials | Survives — confirmed on real hardware during a full persistent-state reset |
+| Moonraker config/state | Survives — confirmed on real hardware |
+| GuppyScreen config/theme | Survives — confirmed across a real flash during the Final Closure testing |
+| G-code uploads | Survives — confirmed as part of a real backup |
+| Logs | Don't survive, but that's expected — they rotate out every 7 days anyway |
+| Mainsail config | Honestly not sure — haven't specifically checked this one |
+| Camera config, timelapses | Same — not verified either way |
 
-Stock's own configuration (if any) lives in a **separate namespace** on the same shared `/usr/data` partition — switching to stock never exposes or overwrites NebulaOS's data, and vice versa. See `A_B_SLOT_MODEL.md`.
+Stock keeps its own config in a separate area of the same shared `/usr/data` partition, so switching
+to stock never touches NebulaOS's data and vice versa — see `A_B_SLOT_MODEL.md` for how that's
+arranged.
 
-## Related documents
+## Related docs
 
-- `docs/A_B_SLOT_MODEL.md` — the partition/marker mechanics behind everything above
-- `docs/HOW_TO_SWITCH_STOCK_AND_CUSTOM.md` — the same §2/§3 procedures, written for a less technical reader
+- `docs/A_B_SLOT_MODEL.md` — the partition/marker mechanics behind all of this
+- `docs/HOW_TO_SWITCH_STOCK_AND_CUSTOM.md` — steps 2 and 3 above, written for a less technical reader
 - `docs/DEVELOPER_UPDATE.md` — what to do instead if the device is healthy and you just want a newer version

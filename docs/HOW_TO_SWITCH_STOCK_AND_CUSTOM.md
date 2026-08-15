@@ -96,7 +96,9 @@ custom. If you're in a spot where you need this, you're recovering, not casually
 
 ### What you need
 - A USB cable connected from your computer to the Nebula Pad's MicroUSB port.
-- The `ballaswag/ingenic-usbboot` tool, built from source on your computer:
+- The [`ballaswag/ingenic-usbboot`](https://github.com/ballaswag/ingenic-usbboot) tool — credit to
+  that project, this whole recovery path only works because it exists. Built from source on your
+  computer:
   ```
   git clone https://github.com/ballaswag/ingenic-usbboot
   cd ingenic-usbboot

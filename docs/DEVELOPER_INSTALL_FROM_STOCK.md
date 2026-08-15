@@ -1,22 +1,17 @@
 # Installing a developer build from stock
 
-**Developer / advanced testing documentation.** These procedures expose raw firmware images, partitions, A/B boot slots, SSH/root access, and recovery mechanisms. They document the current NebulaOS development workflow and are not presented as a supported consumer installer.
+NebulaOS uses the KE's existing stock/custom A/B layout, which is genuinely convenient here: we
+don't need to touch or overwrite the stock system to get a NebulaOS build onto the printer.
+NebulaOS just goes into the second, custom slot that's normally sitting empty.
 
-See `docs/A_B_SLOT_MODEL.md` first if you haven't — this document assumes you already understand the two-slot layout and the OTA marker.
+Read `docs/A_B_SLOT_MODEL.md` first if you haven't already — this doc assumes you already know how
+the two slots and the OTA marker work.
 
-## Evidence status
+This also assumes you already have root/SSH access on the printer's stock firmware. Getting that in
+the first place is out of scope here — every Creality K1/KE mod project makes the same assumption,
+and if you're reading this, you probably already have it sorted.
 
-`SCRIPT_VERIFIED` for every individual step below (each command is real, current, and matches the actual scripts in this repo as of this writing). The sequence as a whole is `HISTORICALLY_HARDWARE_VERIFIED` with one specific, real gap:
-
-> The flashing mechanism and first-boot sequence have been exercised on real hardware, including a full persistent-state reset scenario (the 2026-08-08 virgin-flash mission) that reproduces everything a first install does *except* one thing: that device had already had NebulaOS's custom slot (`mmcblk0p6`/`p8`) written and booted before. No run in this project's own qualification archive begins from a printer whose custom slot has literally never been written. The write mechanism itself has no code path that distinguishes "first ever write" from "re-write" — there's no specific reason to expect it behaves differently — but that expectation has not been verified end-to-end from a genuinely virgin slot.
-
-This is a real, open item, not hidden here. It does not block development use; it means "first install" specifically hasn't had its own dedicated hardware run.
-
-## Prerequisite: root/SSH access on stock
-
-This procedure assumes the printer already has SSH and root access on its stock Creality firmware. **Obtaining that is out of scope for this document and for NebulaOS as a project** — it's the same standing assumption other Creality K1/KE-family mod projects make. If you don't already have this, this isn't the place to start.
-
-## The sequence
+## The install, step by step
 
 ```
 stock printer, root/SSH already available
@@ -44,32 +39,61 @@ stock printer, root/SSH already available
    (see docs/A_B_SLOT_MODEL.md - this is the same sequence every boot goes through)
 ```
 
-### Why `/usr/data` for staging, not `/tmp`
+A couple of things worth knowing before you start:
 
-`/tmp` is a small `tmpfs` on this board and can genuinely run out of space partway through a multi-hundred-megabyte transfer (`rootfs.squashfs` alone is well over 100 MB). `/usr/data` is the real, ~6 GB persistent partition — stage there.
+**Stage things in `/usr/data`, not `/tmp`.** `/tmp` on this board is a small `tmpfs`, and
+`rootfs.squashfs` alone is well over 100 MB — it's easy to run out of space mid-transfer.
+`/usr/data` is the real, ~6 GB persistent partition, so use that instead.
 
-### Step 4/5 in detail — what `flash-spare-slot.sh` actually checks
+**Run `--check-only` first.** It doesn't write anything. It figures out which slot you're actually
+booted from, checks the partition mapping and sizes, verifies the build manifest if you gave it
+one, and refuses to continue if the target would overwrite the slot you're currently running. The
+real flash (step 5) runs that exact same check again immediately before it writes anything — so an
+earlier check-only pass is never treated as a stale green light.
 
-Both the check-only and real run execute the identical preflight (the real run repeats it immediately before writing, specifically so a check-only pass earlier in time is never treated as still-valid authorization):
+What the checks actually cover:
 
-1. **Slot mapping** — verifies both slots' partlabel symlinks (`/dev/disk/by-partlabel/{kernel,kernel2,rootfs,rootfs2}`) resolve to the exact hardcoded device nodes, and that the label and the device agree on major:minor — catches an unexpected GPT before trusting anything else.
-2. **Active slot** — resolves the real, live boot device from `/proc/cmdline`'s own `root=` value (not `/proc/mounts`' aliased `/dev/root`, which can't distinguish the two slots at all).
-3. **Target slot** — always slot 2 (custom), not user-selectable.
-4. **Live-target collision** — refuses outright if target and active slot are the same. This is the check that exists because of a real prior incident (see `A_B_SLOT_MODEL.md`).
-5. **Image sizes** — checked against the real, fixed partition capacities (8,388,608 bytes kernel / 524,288,000 bytes rootfs), not recomputed from `/proc/partitions` at runtime.
-6. **Manifest/hash verification** — if `build-manifest.txt` is given, both files' sizes and SHA-256 are checked against its recorded `xImage_size`/`xImage_sha256`/`rootfs_squashfs_size`/`rootfs_squashfs_sha256` fields. This argument is optional; every real qualification run on record provided it.
+1. **Slot mapping** — makes sure `/dev/disk/by-partlabel/{kernel,kernel2,rootfs,rootfs2}` all
+   resolve to the device nodes we expect, so an unexpected partition table gets caught early.
+2. **Active slot** — reads the real, live boot device straight out of `/proc/cmdline`'s `root=`
+   value, not `/proc/mounts`, since the latter can't actually tell the two slots apart.
+3. **Target slot** — always slot 2. You can't pick a different target; that's the point.
+4. **Live-target collision** — refuses if the target and the active slot turn out to be the same
+   device. This check exists because of a real incident — an earlier version of the script got this
+   wrong once, and it wasn't fun to recover from.
+5. **Image sizes** — checked against the partitions' real, fixed capacities.
+6. **Manifest/hash verification** — if you pass `build-manifest.txt`, it checks both files' sizes
+   and SHA-256 against what the manifest recorded. It's optional, but every real install we've done
+   has used it.
 
-Only after both preflight passes succeed does the real write happen: `dd` to the target device, then a read-back of exactly the written byte count (never the whole partition, so a shorter new image can't accidentally compare against leftover trailing data from a larger old one), MD5-compared against the source file.
+Once both checks pass, the actual write happens — `dd` to the target device, then a read-back of
+exactly the bytes that were written (not the whole partition, so a smaller new image can't
+accidentally get compared against leftover data from a bigger old one), and an MD5 check against
+the source file.
 
-**The script does not flip the OTA marker.** That's step 6 above, a separate and deliberate action — writing new images to the inactive slot and actually booting them are two different decisions.
+**The flash script doesn't flip the boot marker for you.** That's step 6, on purpose — writing a
+new image to the spare slot and actually deciding to boot it are two separate steps, and keeping
+them separate means a bad flash never gets booted by accident.
 
-## What this does and doesn't touch
+## What this touches, and what it never touches
 
-Only `mmcblk0p6` (kernel2) and `mmcblk0p8` (rootfs2) are written. Stock's own `mmcblk0p5`/`p7` are never touched — enforced in code, not just intent (see `A_B_SLOT_MODEL.md`). `/usr/data` (persistent storage, shared between both OSes) is untouched by this entire sequence.
+Only `mmcblk0p6` (kernel2) and `mmcblk0p8` (rootfs2) get written. Stock's own `mmcblk0p5`/`p7` are
+never touched — that's enforced by the script, not just something we're careful about. `/usr/data`,
+the shared persistent partition, isn't touched by any of this either.
 
-## Related documents
+## One honest caveat
 
-- `docs/A_B_SLOT_MODEL.md` — the partition layout and marker mechanics this procedure relies on
-- `docs/DEVELOPER_UPDATE.md` — updating an already-installed NebulaOS
-- `docs/DEVELOPER_RECOVERY.md` — what to do if this doesn't boot correctly
-- `docs/HOW_TO_SWITCH_STOCK_AND_CUSTOM.md` — the day-to-day switching guide once both slots are populated
+We've exercised this exact flashing path on real hardware, including resetting all the persistent
+state to simulate a first boot. What we haven't specifically tested is a printer whose custom slot
+has *literally* never been written before — every real run on record had already had something
+flashed to slot 2 at some point earlier. There's no code path that treats "first write ever"
+differently from "overwrite," so there's no real reason to expect different behavior, but it hasn't
+been directly verified end to end from a truly virgin slot. Worth knowing if you're the one doing
+that for the first time.
+
+## Related docs
+
+- `docs/A_B_SLOT_MODEL.md` — the partition layout and marker mechanics behind all of this
+- `docs/DEVELOPER_UPDATE.md` — updating a printer that's already running NebulaOS
+- `docs/DEVELOPER_RECOVERY.md` — what to do if this doesn't boot right
+- `docs/HOW_TO_SWITCH_STOCK_AND_CUSTOM.md` — the day-to-day switching guide once both slots have something on them

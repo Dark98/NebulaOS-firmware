@@ -1,9 +1,8 @@
 # The NebulaOS build environment
 
-Explains the unified build container (`ghcr.io/coreflake1/nebulaos-build`), why it exists, exactly
-what it does and doesn't contain, its reproducibility characteristics, and the migration gate that
-has to pass before it becomes canonical. Written during the Phase 11 unified-build-environment
-migration (2026-08-15).
+This covers the unified build container (`ghcr.io/coreflake1/nebulaos-build`) — why it exists,
+what's actually in it, what deliberately isn't, and what has to pass before a new version of it
+becomes the one everyone builds against.
 
 ## What does `nebulaos-build` contain?
 

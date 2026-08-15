@@ -971,4 +971,34 @@ echo "=== architecture spot-checks (host objdump has no MIPS backend - using the
 # outright, so a future loadable module addition has an obvious place to
 # add its own check back.
 
+echo "== xImage/uImage terminology check =="
+# FIRMWARE.md sec 31 ("REAL BOOT SUCCESS..."): this project's kernel image
+# was called "uImage" in early docs/scripts by convention/habit, but the
+# real built file is (and has always been) named xImage, and its header
+# does NOT match a standard U-Boot legacy "uImage" (compressed vmlinux.bin)
+# layout - see FIRMWARE.md sec 29-31's root-cause trace and the "Correction"
+# note. scripts/build/README.md had a genuinely stale "uImage" reference
+# from before that correction, found and fixed 2026-08-14/15. This check
+# exists so a future doc/script edit that reintroduces "uImage" as the name
+# of the actual build artifact gets caught here rather than silently
+# drifting back out of sync with what 05-final-build.sh actually produces
+# (xImage, see IMAGES/xImage and artifacts/buildroot-halley5-v30-image/
+# xImage above).
+if [ -f "$IMAGES/xImage" ]; then
+	echo "PASS $IMAGES/xImage exists (correct artifact name)"
+else
+	echo "MISS $IMAGES/xImage not found - run 05-final-build.sh first"
+fi
+if [ -f "$IMAGES/uImage" ]; then
+	echo "MISS $IMAGES/uImage exists - this project's kernel image is xImage, not uImage (see FIRMWARE.md sec 29-31); a stray uImage here means something built the wrong target"
+fi
+# Deliberately not grepping docs/ for stray "uImage" text here: docs/HISTORY.md
+# and FIRMWARE.md are append-only dated journals that correctly say "uImage"
+# in entries written before the sec 29-31 naming correction - a mechanical
+# grep can't tell historical record from stale current claim, and got this
+# wrong on a first pass (flagged docs/HISTORY.md's legitimate history as a
+# MISS). That distinction needs a human read, which is how scripts/build/
+# README.md's real stale reference was actually found and fixed
+# (2026-08-14/15) - not something to re-attempt here.
+
 echo "== verification complete - review any MISS lines above =="

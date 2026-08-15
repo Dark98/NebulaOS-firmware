@@ -89,6 +89,21 @@ cp "$ARTIFACTS/buildroot.config" "$BUILDROOT_DIR/.config"
 mkdir -p "$BUILDROOT_DIR/board"
 cp "$ARTIFACTS/halley5-nebulaos-fragment.config" "$BUILDROOT_DIR/board/halley5-nebulaos-fragment.config"
 cp "$ARTIFACTS/halley5-nebulaos-busybox-fragment.config" "$BUILDROOT_DIR/board/halley5-nebulaos-busybox-fragment.config"
+# Phase 11 (2026-08-15): CONFIG_EXTRA_FIRMWARE_DIR in the tracked fragment
+# is a literal "/src/board/halley5-nebulaos-overlay/lib/firmware" - valid
+# only under the old nested pellcorp/k1-bash-build container, which always
+# mounted this project at the fixed path /src regardless of the host
+# checkout location. Now that the pipeline runs natively (real host paths
+# throughout, no fixed mount point), that path doesn't exist and the kernel
+# build fails outright once it reaches drivers/base/firmware_loader. Fixing
+# up the *copy* here (not the tracked artifacts/ file, which stays as the
+# real historical record of what the old container-based build actually
+# used, and which assert-baseline-config.sh/baseline-difference-gate.sh
+# diff verbatim against the accepted baseline tag) to point at where the
+# overlay's firmware actually lands post-copy below: real host path, so it
+# works from any checkout location.
+sed -i "s#/src/board/halley5-nebulaos-overlay#$BUILDROOT_DIR/board/halley5-nebulaos-overlay#" \
+	"$BUILDROOT_DIR/board/halley5-nebulaos-fragment.config"
 cat > "$BUILDROOT_DIR/local.mk" <<EOF
 LINUX_OVERRIDE_SRCDIR = $KERNEL_SRCDIR
 EOF

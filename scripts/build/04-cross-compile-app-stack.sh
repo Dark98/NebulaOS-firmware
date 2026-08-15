@@ -355,7 +355,21 @@ echo "== cross-compiling v4l2-ctl (this project's own Buildroot toolchain) =="
 	export LD=mipsel-buildroot-linux-gnu-ld
 	export STRIP=mipsel-buildroot-linux-gnu-strip
 
-	autoreconf -fiv
+	# Phase 11 (2026-08-15): plain `autoreconf -fiv` alone is not enough on
+	# this image - v4l-utils uses two non-default-named gettext catalogs
+	# (SUBDIRS = v4l-utils-po libdvbv5-po, not the default "po"), and this
+	# image's gettext package (Ubuntu 22.04, 0.21-4ubuntu4) does not ship
+	# /usr/bin/autopoint at all (only gettextize) - confirmed via `dpkg -L
+	# gettext`. autoreconf's own internal "running: autopoint --force" step
+	# is then a silent no-op (no autopoint binary to run, no error printed
+	# either), so v4l-utils-po/Makefile.in.in never gets generated and
+	# configure fails outright ("cannot find input file"). v4l-utils ships
+	# its own bootstrap.sh precisely for this - it touches placeholder
+	# Makefile.in.in files, runs autoreconf, then explicitly runs
+	# `gettextize --po-dir=v4l-utils-po` / `--po-dir=libdvbv5-po` (gettextize
+	# IS present here). Running upstream's own bootstrap rather than
+	# hand-reimplementing its gettextize/sed steps here.
+	bash bootstrap.sh
 	./configure --host=mipsel-buildroot-linux-gnu \
 		--disable-libdvbv5 --disable-qv4l2 --disable-qvidcap \
 		--disable-gconv --disable-bpf --disable-v4l2-ctl-libv4l \

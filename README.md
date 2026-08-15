@@ -91,6 +91,20 @@ author and some engineering lineage with NebulaOS, but is not part of it. `Nebul
 kernel-side sibling repo keeps the branch name `openke` for historical reasons — see that repo's own
 README for the distinction.
 
+## Developer documentation
+
+Beyond building (above), this repo is also the canonical source for installing, updating, switching, and recovering a real device — developer/advanced-testing procedures, not consumer instructions:
+
+- [`docs/A_B_SLOT_MODEL.md`](docs/A_B_SLOT_MODEL.md) — the partition layout and boot-slot mechanism
+- [`docs/DEVELOPER_INSTALL_FROM_STOCK.md`](docs/DEVELOPER_INSTALL_FROM_STOCK.md) — first install
+- [`docs/DEVELOPER_UPDATE.md`](docs/DEVELOPER_UPDATE.md) — component vs. whole-image updates
+- [`docs/DEVELOPER_RECOVERY.md`](docs/DEVELOPER_RECOVERY.md) — the recovery ladder, incl. known limitations
+- [`docs/HOW_TO_SWITCH_STOCK_AND_CUSTOM.md`](docs/HOW_TO_SWITCH_STOCK_AND_CUSTOM.md) — day-to-day slot switching
+- [`docs/BUILD_PROVENANCE.md`](docs/BUILD_PROVENANCE.md) — identifying exactly what produced a given build
+- [`docs/NEBULAOS_BUILD_ENVIRONMENT.md`](docs/NEBULAOS_BUILD_ENVIRONMENT.md) — the build container itself
+
+The other four component repos (kernel, Klipper, GuppyScreen, and the [`NebulaOS`](https://github.com/coreflake1/NebulaOS) release repo) link back here for all of the above rather than maintaining their own copies — this repo is the one place these procedures are canonical.
+
 ## Project history
 
 This repo was previously developed under the name `ke-mainline-klipper` as a broader research

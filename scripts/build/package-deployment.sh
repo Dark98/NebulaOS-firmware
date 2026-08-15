@@ -13,14 +13,13 @@ REPO_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
 ARTIFACT_DIR="$REPO_ROOT/artifacts/buildroot-halley5-v30-image"
 PACKAGE_ROOT="${1:-$REPO_ROOT/build-work/deploy-packages}"
 
-# Final Pre-Flash Audit mission (2026-08-08): DEPS_MANIFEST provides
-# PELLCORP_K1_BASH_BUILD_IMAGE (the digest-pinned toolchain container ref,
-# used below for the DTB decompile) - see manifests/dependencies.conf's
-# own comment on that entry.
-DEPS_MANIFEST="$REPO_ROOT/manifests/dependencies.conf"
-[ -f "$DEPS_MANIFEST" ] || { echo "FATAL: $DEPS_MANIFEST not found" >&2; exit 1; }
-. "$DEPS_MANIFEST"
-
+# Final Closure mission (2026-08-15): used to source manifests/
+# dependencies.conf here for PELLCORP_K1_BASH_BUILD_IMAGE, needed for the
+# DTB decompile below - that decompile now runs against a native `dtc` (see
+# build-env/Dockerfile), no container reference needed, and no other field
+# from that manifest is read anywhere in this file (confirmed: no other
+# manifest variable appears below). Removed rather than left as unused,
+# silently-passing dead weight.
 for required in "$ARTIFACT_DIR/xImage" "$ARTIFACT_DIR/rootfs.squashfs" "$ARTIFACT_DIR/build-manifest.txt" "$REPO_ROOT/baseline-difference.txt"; do
 	[ -f "$required" ] || { echo "FATAL: $required not found - run 05-final-build.sh and baseline-difference-gate.sh first" >&2; exit 1; }
 done

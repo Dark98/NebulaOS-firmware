@@ -18,12 +18,18 @@ rootfs-overlay deletion gotcha) are all documented there with root causes, not j
 
 ## Prerequisites
 
-- Docker, with the `pellcorp/k1-bash-build` image pullable (the same MIPS cross-toolchain image
-  used throughout this whole project - has both a Buildroot-independent
-  `mips-gcc720-glibc229` toolchain *and* is the container these scripts run Buildroot's own build
-  inside). Pinned by immutable digest in `manifests/dependencies.conf`'s own
-  `PELLCORP_K1_BASH_BUILD_IMAGE` - every build script pulls that exact image, not a mutable
-  `:latest` tag (Final Pre-Flash Audit mission, 2026-08-08).
+- Docker or Podman - `./build.sh` pulls the single, digest-pinned
+  `ghcr.io/coreflake1/nebulaos-build` image (`manifests/dependencies.conf`'s own
+  `BUILD_IMAGE_REPO`/`BUILD_IMAGE_DIGEST`, never a mutable `:latest` tag) and runs the whole
+  `00`-`06` pipeline inside it. That image already contains every host build tool these scripts
+  need (see `build-env/Dockerfile`) - no separate `apt-get install`, no nested container, no
+  `/var/run/docker.sock` requirement. The Buildroot-generated `mipsel-buildroot-linux-gnu-*`
+  toolchain that actually builds the kernel/rootfs/native app stack is unrelated to this image -
+  Buildroot builds that itself, from source, during Stage 03 (see `docs/
+  NEBULAOS_BUILD_ENVIRONMENT.md` for the full "what's in/out of the image and why" breakdown).
+  This replaces the old `pellcorp/k1-bash-build` + `ghcr.io/coreflake1/guppydev` nested-container
+  setup (Migration A + Final Closure mission, 2026-08-15) - retained for history in `FIRMWARE.md`,
+  no longer how a build actually runs.
 - ~15GB free disk (kernel source, Buildroot's own internal toolchain build, and the final images
   add up) and a few hours of build time on a reasonably modern machine.
 - Internet access for the `git clone`/`curl` steps in `00-fetch-vendor-sources.sh` - this project's

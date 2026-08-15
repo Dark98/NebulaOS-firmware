@@ -11,11 +11,12 @@ set -e
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
 
-# Final Pre-Flash Audit mission (2026-08-08): DEPS_MANIFEST provides
-# PELLCORP_K1_BASH_BUILD_IMAGE (the digest-pinned toolchain container ref)
-# - see manifests/dependencies.conf's own comment on that entry. Named
-# DEPS_MANIFEST, not MANIFEST, to not collide with this script's own,
-# unrelated later use of $MANIFEST for the build's own output manifest.
+# Final Closure mission (2026-08-15): DEPS_MANIFEST provides BUILD_IMAGE_REPO/
+# BUILD_IMAGE_DIGEST (the digest-pinned unified build container - see
+# manifests/dependencies.conf's own comment on that entry) plus every other
+# pin recorded below. Named DEPS_MANIFEST, not MANIFEST, to not collide with
+# this script's own, unrelated later use of $MANIFEST for the build's own
+# output manifest.
 DEPS_MANIFEST="$REPO_ROOT/manifests/dependencies.conf"
 [ -f "$DEPS_MANIFEST" ] || { echo "FATAL: $DEPS_MANIFEST not found" >&2; exit 1; }
 . "$DEPS_MANIFEST"
@@ -119,6 +120,12 @@ artifact_sha256() {
 }
 {
 	echo "built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+	# Final Closure mission (2026-08-15): which factory produced this
+	# artifact, not just which sources went into it - see Phase L. Read
+	# directly from dependencies.conf (already sourced as DEPS_MANIFEST
+	# above), so this can never silently drift from the pin actually used.
+	echo "build_image_repo=${BUILD_IMAGE_REPO:-absent}"
+	echo "build_image_digest=${BUILD_IMAGE_DIGEST:-absent}"
 	git_field git_commit_main ""
 	git_field git_commit_kernel vendor/x2000_kernel_6.6
 	git_field git_commit_buildroot vendor/buildroot-x2000

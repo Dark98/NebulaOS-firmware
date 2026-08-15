@@ -17,6 +17,11 @@ set -eu
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
 ARTIFACT_DIR="$REPO_ROOT/artifacts/buildroot-halley5-v30-image"
+
+DEPS_MANIFEST="$REPO_ROOT/manifests/dependencies.conf"
+[ -f "$DEPS_MANIFEST" ] || { echo "FATAL: $DEPS_MANIFEST not found" >&2; exit 1; }
+. "$DEPS_MANIFEST"
+
 # 2026-08-07: reference by TAG NAME, not a hardcoded SHA - see
 # assert-baseline-config.sh's own comment on why (the 2026-08-07
 # canonical-repository mission's history rewrite, git filter-repo,
@@ -29,18 +34,20 @@ ARTIFACT_DIR="$REPO_ROOT/artifacts/buildroot-halley5-v30-image"
 # matching fix and comment for the full incident writeup (a real Phase 9
 # fresh-build run hit this exact staleness: FAIL against a baseline that
 # was never wrong, just 11 days and 5 accepted baselines out of date).
-# Derives the reference from the most recently created
-# nebulaos-canonical-baseline-* tag instead, so this never needs a manual
-# bump again.
-BASELINE_TAG=$(git -C "$REPO_ROOT" tag -l 'nebulaos-canonical-baseline-*' --sort=-creatordate | head -1)
-[ -n "$BASELINE_TAG" ] || {
-	echo "FATAL: no nebulaos-canonical-baseline-* tag found in this checkout - fetch tags with 'git fetch --tags' first." >&2
-	exit 1
-}
+# Derived the reference from the most recently created
+# nebulaos-canonical-baseline-* tag instead of a fixed name.
+#
+# Final Closure mission, Phase B (2026-08-15): "newest tag wins" is still
+# implicit - a new tag silently becomes the reference the moment it's
+# pushed. One explicit value instead: QUALIFIED_BASELINE_TAG in
+# manifests/dependencies.conf - see assert-baseline-config.sh's matching
+# fix and comment for the full reasoning.
+BASELINE_TAG="${QUALIFIED_BASELINE_TAG:?QUALIFIED_BASELINE_TAG not set in $DEPS_MANIFEST}"
 git -C "$REPO_ROOT" rev-parse --verify -q "$BASELINE_TAG" >/dev/null || {
-	echo "FATAL: baseline tag '$BASELINE_TAG' does not exist in this checkout - fetch tags with 'git fetch --tags' first." >&2
+	echo "FATAL: QUALIFIED_BASELINE_TAG='$BASELINE_TAG' (from $DEPS_MANIFEST) does not exist in this checkout - fetch tags with 'git fetch --tags' first, or correct the manifest." >&2
 	exit 1
 }
+echo "== qualified baseline in use: $BASELINE_TAG (from $DEPS_MANIFEST) =="
 OUT="$REPO_ROOT/baseline-difference.txt"
 
 FAILED=0

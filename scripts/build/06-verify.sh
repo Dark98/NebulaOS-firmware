@@ -960,7 +960,7 @@ case "$stat_out" in
 		;;
 esac
 
-echo "=== architecture spot-checks (host objdump has no MIPS backend - using the k1-bash-build toolchain) ==="
+echo "=== architecture spot-checks (host objdump has no MIPS backend - a future check here would use the Buildroot-generated mipsel-buildroot-linux-gnu-objdump, per Phase 11's unified-container migration; pellcorp/k1-bash-build is retired) ==="
 # Production optimization mission, Phase 9 (2026-07-30): this used to spot-
 # check hci_uart.ko's architecture - the only loadable kernel module this
 # image ever shipped. Bluetooth is now removed entirely (CONFIG_BT is not

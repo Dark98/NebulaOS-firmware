@@ -61,13 +61,36 @@ done
 echo "== build.sh: pulling pinned build environment $IMAGE_REF (engine: $ENGINE) =="
 "$ENGINE" pull "$IMAGE_REF"
 
-# -v mounts this checkout at the same absolute path inside the container as
-# outside it, and runs as the invoking host UID (not root) - see
-# build-env/Dockerfile's own header for why: several Buildroot host tools
-# bake the absolute build path into their own RUNPATH, and the whole point
-# of removing the old nested-container design was to stop crossing a path
-# boundary that made two different builds of the identical source disagree
-# on that path for no product-relevant reason.
+# NEBULAOS_REPO_ROOT: fixed container-internal mount point, deliberately
+# NOT the host's own checkout path.
+#
+# Final Closure mission, Phase C (2026-08-15): this used to mount the
+# checkout at the SAME absolute path inside the container as outside it
+# (-v "$SCRIPT_DIR:$SCRIPT_DIR"), reasoned at the time as avoiding a path
+# boundary crossing. That reasoning missed a real consequence, found by
+# the Phase 9 vs Phase 11 artifact comparison: the host's own checkout
+# path (which varies - different developers, different clone locations,
+# even the same developer's own repeated test directories in this
+# session) leaks straight into the build. CONFIG_EXTRA_FIRMWARE_DIR
+# embedded it directly; GuppyScreen's binary carried ~770KB of diff
+# traced to embedded absolute build-path strings, purely because the
+# container saw a different host path on every separate clone. Two
+# builds of byte-identical source, in the byte-identical image, produced
+# different output for a reason that has nothing to do with the product.
+#
+# Mounting at one fixed internal path instead - regardless of where the
+# user actually cloned this repo on the host - means every build sees the
+# identical internal path, so anything that embeds it (Kconfig strings,
+# __FILE__/assert() macros, debug info) embeds the same bytes every time.
+# Every script under scripts/build/ already derives its own location via
+# `SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)` rather than a hardcoded
+# path, so this needs no changes anywhere else - they'll all resolve to
+# NEBULAOS_REPO_ROOT automatically once the working directory is set here.
+# Output files stay on the host exactly as before: a bind mount is a
+# transparent, two-way passthrough regardless of which internal path it's
+# mounted at, so anything the container writes under NEBULAOS_REPO_ROOT
+# still lands at $SCRIPT_DIR on the host.
+NEBULAOS_REPO_ROOT=/workspace/NebulaOS-firmware
 # -e HOME=/tmp: an arbitrary host UID has no /etc/passwd entry inside the
 # container, so HOME defaults to "/" (not writable by this UID) - confirmed
 # live this would break any tool that wants to write a cache/config file
@@ -83,7 +106,8 @@ echo "== build.sh: pulling pinned build environment $IMAGE_REF (engine: $ENGINE)
 exec "$ENGINE" run --rm \
 	--user "$(id -u):$(id -g)" \
 	-e HOME=/tmp \
-	-v "$SCRIPT_DIR:$SCRIPT_DIR" \
-	-w "$SCRIPT_DIR" \
+	-e NEBULAOS_REPO_ROOT="$NEBULAOS_REPO_ROOT" \
+	-v "$SCRIPT_DIR:$NEBULAOS_REPO_ROOT" \
+	-w "$NEBULAOS_REPO_ROOT" \
 	"$IMAGE_REF" \
 	"sh scripts/build/build-qualified-baseline.sh"

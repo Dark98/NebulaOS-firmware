@@ -74,10 +74,25 @@ PIDFILE=/var/run/wpa_supplicant-wlan0.pid
 seed_default_conf() {
 	[ -e "$CONF" ] && return 0
 	mkdir -p "$(dirname "$CONF")"
+	# 0600, not the init-inherited 0644 default: this file starts out
+	# credential-free, but GuppyScreen's WiFi panel writes a plaintext PSK
+	# into it via ADD_NETWORK/SET_NETWORK psk/SAVE_CONFIG (wifi_panel.cpp),
+	# and wpa_supplicant's own config writer preserves the existing file's
+	# mode/owner when it rewrites it - so whatever mode is chosen HERE is
+	# the mode a real WiFi password is stored under for the life of the
+	# device. /usr/data (mmcblk0p10) is a real, shared, non-tmpfs ext4
+	# partition, so this is a persisted plaintext secret, not a
+	# reboot-scoped one. Same umask 077 pattern S03nebulaos-diskswap
+	# already uses for its swapfile. Only ever applied at creation - an
+	# existing config (real user credentials) is never touched, per the
+	# seed-once contract above.
+	oldmask=$(umask)
+	umask 077
 	cat > "$CONF" <<-EOF
 	ctrl_interface=/var/run/wpa_supplicant
 	update_config=1
 	EOF
+	umask "$oldmask"
 }
 
 start() {

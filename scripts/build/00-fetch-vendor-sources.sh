@@ -30,6 +30,7 @@ require_pin() {
 
 for required in KERNEL_REPO KERNEL_BRANCH KERNEL_PIN BUILDROOT_REPO BUILDROOT_PIN \
 	PELLCORP_CREALITY_REPO PELLCORP_CREALITY_PIN KLIPPER_REPO KLIPPER_BRANCH KLIPPER_PIN \
+	KLIPPER_EXTENSIONS_REPO KLIPPER_EXTENSIONS_BRANCH KLIPPER_EXTENSIONS_PIN \
 	MOONRAKER_REPO MOONRAKER_PIN K1_USTREAMER_REPO K1_USTREAMER_PIN \
 	V4L_UTILS_REPO V4L_UTILS_PIN V4L_UTILS_ARCHIVE_URL V4L_UTILS_ARCHIVE_SHA256 \
 	MAINSAIL_TAG MAINSAIL_SHA256 \
@@ -226,15 +227,26 @@ clone_pinned buildroot-x2000 "$BUILDROOT_REPO" "$BUILDROOT_PIN"
 # or a different camera architecture than NebulaOS's own database-seeded one.
 clone_pinned pellcorp-creality "$PELLCORP_CREALITY_REPO" "$PELLCORP_CREALITY_PIN"
 
-# NebulaOS's own fork of SimpleAF's Klipper (coreflake1/NebulaOS-klipper,
-# `nebulaos` branch) - Track 1's "SimpleAF + the probe" decision applies here
-# too: pellcorp/klipper @ 386fde4 is still the base this whole app stack
-# targets, but every klippy_extras/ file this project needs (tmcstatus,
-# guppy_config_helper, guppy_module_loader, calibrate_shaper_config,
-# prtouch_v2 + companions, z_compensate) is committed into this fork's own
-# tracked history on top of that commit, instead of being copied in as
-# untracked files by 04-cross-compile-app-stack.sh after every fetch.
+# OFFICIAL Klipper (Klipper3d/klipper), unmodified. Until the Phase 1
+# no-fork migration this was coreflake1/NebulaOS-klipper, a fork whose only
+# real content was klippy/extras/ files this project wrote - everything
+# else different from upstream was inherited base-fork lineage nobody here
+# had ever needed. Those files now live in vendor/nebulaos-klipper-
+# extensions below and are composed into this checkout at boot by symlink
+# activation, so this tree is genuinely upstream's, byte for byte, and
+# stays that way at runtime (git status --porcelain empty, on the device,
+# always). Zero core Klipper patches are applied here or anywhere else.
 clone_pinned klipper "$KLIPPER_REPO" "$KLIPPER_PIN"
+
+# The NebulaOS Klipper extension set - the third image-owned source
+# component. Everything this project actually owns for the Klipper host:
+# PRTouch and its companions, z_compensate, tmcstatus, nebulaos_version,
+# the compatibility preflight, the GD32 die-temperature module, and five
+# vendored community modules carrying their original authors' GPLv3
+# headers (see that repo's VENDORED.md). Small - it ships about thirty
+# files and none of Klipper's history, which matters on a device that has
+# to extract its seed archive from tar on a 208MB-RAM board.
+clone_pinned nebulaos-klipper-extensions "$KLIPPER_EXTENSIONS_REPO" "$KLIPPER_EXTENSIONS_PIN"
 
 # Official Moonraker - not a fork, no reason to deviate.
 clone_pinned moonraker "$MOONRAKER_REPO" "$MOONRAKER_PIN"

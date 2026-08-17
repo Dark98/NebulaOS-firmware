@@ -20,9 +20,38 @@
 #
 # File-classification model this script relies on (see
 # docs/NEBULAOS_PERSISTENT_LIFECYCLE.md for the full writeup):
-#   IMAGE OWNED  - $APPS/klipper, $APPS/moonraker (git checkouts; entirely
-#                  replaced by this script when the image expects a newer
-#                  version - there is nothing user-authored inside them)
+#   IMAGE OWNED  - $APPS/klipper, $APPS/nebulaos-klipper-extensions,
+#                  $APPS/moonraker (git checkouts; entirely replaced by this
+#                  script when the image expects a newer version - there is
+#                  nothing user-authored inside them)
+#
+# Phase 1 no-fork migration (2026-08-17): apps/nebulaos-klipper-extensions
+# joins that class as an ordinary third component. Two consequences worth
+# stating explicitly rather than leaving to be rediscovered:
+#
+#   1. Klipper and its extensions migrate as ONE PAIR. If either fails, the
+#      generation is not recorded, so the whole migration retries next boot
+#      - the existing per-component-success rule, extended rather than
+#      replaced. A device must never run new Klipper against old extensions
+#      (that is where the c_helper.so staleness and the
+#      register_response -> register_serial_response API rename both land)
+#      or the reverse.
+#
+#   2. Replacing $APPS/klipper wholesale DESTROYS the composed symlinks that
+#      activate the extension modules - they live inside the tree this
+#      script renames away. That is fine and by design, but it makes the
+#      S04 -> S05 ordering load-bearing in a new way: S05nebulaos-activate
+#      rebuilds the composition in the same boot, before Klipper starts.
+#      Covered explicitly by tests/app-migration-tests.sh.
+#
+# A firmware update therefore DOES override a user's separately-updated
+# Klipper or extensions - deliberately, with a full backup under
+# $SYSTEM/migration-backups/, and only when the image's migration_version
+# differs. That is the correct behaviour for an appliance and matches how
+# Klipper and Moonraker have always been treated here. It is documented in
+# docs/NEBULAOS_UPDATE_OWNERSHIP.md rather than hidden, because "I updated
+# Klipper in Mainsail and the firmware update reverted it" reads as a bug
+# to anyone who has not been told.
 #   USER OWNED   - $NEBULAOS_ROOT/printer_data/config (printer.cfg,
 #                  macros, moonraker.conf) - a SEPARATE directory tree
 #                  from $APPS, never touched by this script at all. Safety
@@ -143,6 +172,59 @@ reseed_git_app() {
 	return 0
 }
 
+# First-time provisioning of a component this device has never had, used
+# only for the pre-Phase-1 -> Phase-1 upgrade path. Deliberately NOT
+# reseed_git_app: that function's cutover does `mv "$dest" "$BACKUP_DIR/..."`
+# and there is no existing tree to move aside here, so it would fail on a
+# device that is in a perfectly legitimate state. Same verification rules
+# either way - branch, origin, clean tree, no synthetic wrapper commit - so
+# this path is no more trusting than the normal one.
+seed_missing_extensions() {
+	name="nebulaos-klipper-extensions"
+	archive="$SEEDS/$name.tar.gz"
+	dest="$APPS/$name"
+	branch="main"
+	origin="https://github.com/coreflake1/NebulaOS-klipper-extensions.git"
+
+	if [ ! -f "$archive" ]; then
+		log "ERROR: seed archive missing ($archive) - cannot provision $name"
+		return 1
+	fi
+	rm -rf "$dest.migrate-partial"
+	mkdir -p "$dest.migrate-partial"
+	if ! sh -c "gzip -dc '$archive' | tar -xo -C '$dest.migrate-partial'"; then
+		log "ERROR: tar extraction failed for $name"
+		rm -rf "$dest.migrate-partial"
+		return 1
+	fi
+	sync
+	actual_branch=$(git -C "$dest.migrate-partial" symbolic-ref --short HEAD 2>/dev/null)
+	if [ "$actual_branch" != "$branch" ]; then
+		log "ERROR: $name checkout is on branch '$actual_branch', expected '$branch' - rejecting"
+		rm -rf "$dest.migrate-partial"
+		return 1
+	fi
+	actual_origin=$(git -C "$dest.migrate-partial" remote get-url origin 2>/dev/null)
+	if [ "$actual_origin" != "$origin" ]; then
+		log "ERROR: $name checkout has origin '$actual_origin', expected '$origin' - rejecting"
+		rm -rf "$dest.migrate-partial"
+		return 1
+	fi
+	if [ -n "$(git -C "$dest.migrate-partial" status --porcelain 2>/dev/null)" ]; then
+		log "ERROR: $name checkout has an unexpectedly dirty working tree - rejecting"
+		rm -rf "$dest.migrate-partial"
+		return 1
+	fi
+	# $dest may exist as the empty directory S02nebulaos-namespace creates;
+	# `mv src dst` would then nest rather than replace (a real bug this
+	# project has already been bitten by - see S04nebulaos-factory-seed's
+	# own note on it).
+	rm -rf "$dest"
+	mv "$dest.migrate-partial" "$dest"
+	log "$name provisioned successfully (branch $branch, $(git -C "$dest" rev-parse HEAD))"
+	return 0
+}
+
 start() {
 	[ -f "$SEEDS/seed-manifest.json" ] || { log "no seed manifest ($SEEDS/seed-manifest.json missing) - nothing to compare against, skipping"; return 0; }
 
@@ -176,16 +258,41 @@ start() {
 	log "backing up current application tree to $BACKUP_DIR before touching anything"
 
 	klipper_ok=1
+	extensions_ok=1
 	moonraker_ok=1
+	# Phase 1 no-fork migration: official Klipper, and the
+	# klippy/chelper/c_helper.so dirty-tree exception is gone - upstream's
+	# own .gitignore contains "*.so", so the prebuilt artifact never made
+	# the tree dirty in the first place. See S04nebulaos-factory-seed's
+	# matching note.
 	if [ -e "$APPS/klipper/.git" ]; then
-		reseed_git_app klipper master "https://github.com/coreflake1/NebulaOS-klipper.git" \
-			klippy/chelper/c_helper.so || klipper_ok=0
+		reseed_git_app klipper master "https://github.com/Klipper3d/klipper.git" || klipper_ok=0
+	fi
+	# A device seeded by a pre-Phase-1 image has no extensions checkout at
+	# all, so there is nothing to reseed and nothing to back up - but the
+	# component still has to arrive, or the pair is incomplete. Seed it
+	# directly from the archive in that case rather than skipping it and
+	# recording a generation that claims a component this device does not
+	# have.
+	if [ -e "$APPS/nebulaos-klipper-extensions/.git" ]; then
+		reseed_git_app nebulaos-klipper-extensions main \
+			"https://github.com/coreflake1/NebulaOS-klipper-extensions.git" || extensions_ok=0
+	else
+		log "no existing extensions checkout (device predates the no-fork architecture) - provisioning it from this image's archive as part of this migration"
+		seed_missing_extensions || extensions_ok=0
 	fi
 	if [ -e "$APPS/moonraker/.git" ]; then
 		reseed_git_app moonraker master "https://github.com/Arksine/moonraker.git" || moonraker_ok=0
 	fi
 
-	if [ "$klipper_ok" = "1" ] && [ "$moonraker_ok" = "1" ]; then
+	# The Klipper stack is validated as a pair. Report it as one, so a
+	# reader of the boot log sees "the pair failed", not two independent
+	# component lines they have to correlate themselves.
+	if [ "$klipper_ok" != "1" ] || [ "$extensions_ok" != "1" ]; then
+		log "ERROR: the Klipper stack did not migrate as a complete pair (klipper ok=$klipper_ok, extensions ok=$extensions_ok). Running new Klipper against old extensions, or the reverse, is exactly the mismatch this pairing exists to prevent - so NEITHER half is promoted and the generation is not advanced."
+	fi
+
+	if [ "$klipper_ok" = "1" ] && [ "$extensions_ok" = "1" ] && [ "$moonraker_ok" = "1" ]; then
 		record_generation "$expected_version"
 		log "migration complete - generation now $expected_version. Previous application tree preserved at $BACKUP_DIR (not deleted automatically - safe to remove by hand once the new generation is confirmed working)."
 	else
@@ -197,6 +304,7 @@ record_generation() {
 	version="$1"
 	mkdir -p "$SYSTEM"
 	klipper_commit=$( [ -d "$APPS/klipper/.git" ] && git -C "$APPS/klipper" rev-parse HEAD 2>/dev/null || echo "unseeded")
+	extensions_commit=$( [ -d "$APPS/nebulaos-klipper-extensions/.git" ] && git -C "$APPS/nebulaos-klipper-extensions" rev-parse HEAD 2>/dev/null || echo "unseeded")
 	moonraker_commit=$( [ -d "$APPS/moonraker/.git" ] && git -C "$APPS/moonraker" rev-parse HEAD 2>/dev/null || echo "unseeded")
 	now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 	cat > "$GENERATION_FILE" <<EOF
@@ -204,6 +312,7 @@ record_generation() {
   "migration_version": "$version",
   "recorded_at": "$now",
   "klipper_commit": "$klipper_commit",
+  "extensions_commit": "$extensions_commit",
   "moonraker_commit": "$moonraker_commit"
 }
 EOF

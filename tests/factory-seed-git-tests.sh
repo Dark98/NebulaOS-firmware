@@ -231,16 +231,93 @@ mkdir -p "$M/wrongarch-src/klippy/chelper"
 echo "pretend host-arch binary, not real MIPS ELF" > "$M/wrongarch-src/klippy/chelper/c_helper.so"
 git -C "$M/wrongarch-src" add -A
 git -C "$M/wrongarch-src" -c user.email=t@l -c user.name=t commit -q -m "add wrong-arch chelper"
+#
+# Phase 1 no-fork migration (2026-08-17) - this expectation is deliberately
+# STRICTER than it used to be, and the change is worth reading rather than
+# skimming. Discarding the wrong-architecture binary was always correct; what
+# used to happen next was not. The archive was still packaged, now with NO
+# c_helper.so at all, and the old comment here reasoned that this "fails
+# loudly downstream" because Klippy's get_ffi() has no on-device build
+# fallback.
+#
+# That reasoning does not survive the move to official Klipper. Mainline's
+# chelper/__init__.py has no such patch: with the prebuilt library absent it
+# does not fail, it invokes gcc - which on this device either is not present
+# at all, or in the worst case succeeds slowly and masks the packaging bug
+# entirely. "Fails loudly downstream" was describing behaviour of the
+# retired fork, not of the Klipper this project now ships.
+#
+# So a Klipper tree that reaches packaging with no usable c_helper.so is now
+# rejected at BUILD time, where a human is present and the fix is cheap,
+# rather than at boot time on a printer. Nothing is weakened here; the case
+# that used to produce a bootable-looking archive now produces none.
 if out=$(make_seed_archive "$M/wrongarch-src" master "https://example.invalid/wrongarch.git" "$M/wrongarch.tar.gz" 2>&1) && [ -f "$M/wrongarch.tar.gz" ]; then
 	mkdir -p "$M/wrongarch-check"
 	tar -xzf "$M/wrongarch.tar.gz" -C "$M/wrongarch-check"
-	if [ ! -e "$M/wrongarch-check/klippy/chelper/c_helper.so" ]; then
-		pass "wrong-architecture c_helper.so is discarded, not packaged into the archive"
-	else
+	if [ -e "$M/wrongarch-check/klippy/chelper/c_helper.so" ]; then
 		fail "wrong-architecture c_helper.so was packaged into the archive - should have been discarded"
+	else
+		fail "archive was packaged with no c_helper.so at all - Klipper would attempt an on-device gcc build; this must be rejected at build time"
 	fi
 else
-	fail "wrong-architecture c_helper.so caused the whole archive to be unexpectedly rejected: $out"
+	case "$out" in
+		*"mtime invariant"*)
+			pass "wrong-architecture c_helper.so is discarded AND the resulting archive is rejected at build time, because a Klipper tree with no prebuilt library would make Klippy invoke gcc on a device with no toolchain"
+			;;
+		*)
+			fail "archive was rejected, but not for the expected reason: $out"
+			;;
+	esac
+fi
+
+# The same guard must not fire for a tree that has no chelper at all -
+# Moonraker, and every offline fixture repo in this file, are packaged by
+# this same shared function and must pass straight through.
+rm -rf "$M/nochelper-src"
+build_real_repo "$M/nochelper-src" master ""
+if out=$(make_seed_archive "$M/nochelper-src" master "https://example.invalid/nochelper.git" "$M/nochelper.tar.gz" 2>&1) && [ -f "$M/nochelper.tar.gz" ]; then
+	pass "a tree with no klippy/chelper at all (Moonraker, fixtures) is unaffected by the chelper guard"
+else
+	fail "the chelper guard wrongly rejected a tree that has no chelper: $out"
+fi
+
+# A tree WITH a real prebuilt library packages successfully, and the
+# invariant genuinely holds inside the packaged archive - not just in the
+# staging directory. This is the property that matters: `cp -r` does not
+# preserve mtimes, so without the enforcement step the ordering inside the
+# tar would be decided by directory-walk order.
+rm -rf "$M/goodchelper-src" "$M/goodchelper-check"
+build_real_repo "$M/goodchelper-src" master ""
+mkdir -p "$M/goodchelper-src/klippy/chelper"
+printf 'int main(void){return 0;}\n' > "$M/goodchelper-src/klippy/chelper/pyhelper.c"
+printf '#pragma once\n' > "$M/goodchelper-src/klippy/chelper/pyhelper.h"
+printf '# chelper\n' > "$M/goodchelper-src/klippy/chelper/__init__.py"
+printf 'out\n*.so\n' > "$M/goodchelper-src/.gitignore"
+git -C "$M/goodchelper-src" add -A
+git -C "$M/goodchelper-src" -c user.email=t@l -c user.name=t commit -q -m "add chelper sources"
+# A minimal but genuine MIPS ELF header, so make_seed_archive's own
+# `file`-based wrong-architecture check reads it as a real target binary and
+# does not discard it (e_ident + e_type=DYN + e_machine=EM_MIPS is all `file`
+# needs). Written AFTER the sources and then deliberately dated into the
+# past, so the invariant is genuinely violated going in - this test proves
+# the enforcement step fixes the ordering, not that it happened to be right.
+printf '%b' '\0177ELF\001\001\001\0\0\0\0\0\0\0\0\0\003\0\010\0\001\0\0\0' \
+	> "$M/goodchelper-src/klippy/chelper/c_helper.so"
+printf 'nebulaos test padding' >> "$M/goodchelper-src/klippy/chelper/c_helper.so"
+touch -d "2020-01-01" "$M/goodchelper-src/klippy/chelper/c_helper.so" 2>/dev/null || 	touch -t 202001010000 "$M/goodchelper-src/klippy/chelper/c_helper.so"
+if out=$(make_seed_archive "$M/goodchelper-src" master "https://example.invalid/goodchelper.git" "$M/goodchelper.tar.gz" 2>&1) && [ -f "$M/goodchelper.tar.gz" ]; then
+	mkdir -p "$M/goodchelper-check"
+	tar -xzf "$M/goodchelper.tar.gz" -C "$M/goodchelper-check"
+	newer=$(find "$M/goodchelper-check/klippy/chelper" -maxdepth 1 -type f \
+		\( -name '*.c' -o -name '*.h' -o -name '__init__.py' \) \
+		-newer "$M/goodchelper-check/klippy/chelper/c_helper.so" 2>/dev/null)
+	if [ -z "$newer" ]; then
+		pass "the c_helper.so mtime invariant holds INSIDE the packaged archive, even though the source .so was deliberately older than its sources"
+	else
+		fail "the packaged archive violates the mtime invariant: $newer"
+	fi
+else
+	fail "a tree with a real prebuilt c_helper.so was unexpectedly rejected: $out"
 fi
 
 # --- Part 2: seed_git_app() (on-device first-boot consumption) --------

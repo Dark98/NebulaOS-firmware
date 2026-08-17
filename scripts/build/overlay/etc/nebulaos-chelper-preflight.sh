@@ -75,8 +75,16 @@ NEBULAOS_CHELPER_VERDICT_NAME=".nebulaos-chelper-verdict.json"
 NEBULAOS_CHELPER_SUBDIR="klippy/chelper"
 NEBULAOS_CHELPER_TARGET="klippy/chelper/c_helper.so"
 
+# Progress goes to stderr, deliberately, and this is not a style choice.
+# chelper_enforce_mtime() is called from inside make_seed_archive(), whose
+# stdout IS its return value - the packaged commit SHA, captured by the build
+# as `klipper_seed_commit=$(make_seed_archive ...)`. A log line on stdout
+# there does not look like a logging mistake, it silently corrupts the seed
+# manifest and the migration_version hash derived from it. Found by
+# tests/klipper-stack-lifecycle-tests.sh, which compares migrated commits
+# against the values make_seed_archive reported.
 chelper_log() {
-	echo "nebulaos-chelper-preflight: $1"
+	echo "nebulaos-chelper-preflight: $1" >&2
 }
 
 chelper_err() {

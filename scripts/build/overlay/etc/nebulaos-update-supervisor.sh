@@ -45,16 +45,83 @@
 # backup ever exists at a time and both halves are always reset in the same
 # step, there is no code path that can produce a mismatched pair.
 
-NEBULAOS_ROOT=/usr/data/nebulaos
-HEALTHCHECK=/etc/nebulaos-healthcheck.sh
-LOCKDIR="$NEBULAOS_ROOT/updates/locks"
-MOONRAKER_URL="http://127.0.0.1:7125"
+# NebulaOS Phase 1 no-fork migration (2026-08-17), Phase I: the validated,
+# rollback-able unit for the Klipper side is now the PAIR
+# (klipper_sha, extensions_sha), not Klipper alone.
+#
+# Why the pair has to be the unit, concretely. NebulaOS runs official,
+# unmodified Klipper with its own modules composed in from a separately
+# updatable repository, and Moonraker can update either half independently -
+# it has no cross-component ordering, no dependency gate, and no post-update
+# hook. Two failure modes follow directly:
+#
+#   * new Klipper + old extensions: a Klipper update that touches any file
+#     in klippy/chelper/ makes the shipped cross-compiled c_helper.so older
+#     than a source, so Klipper's own mtime check decides to rebuild it with
+#     gcc - which this device does not have. Klippy does not start. An API
+#     rename lands here too: mainline already renamed
+#     MCU.register_response() to register_serial_response() once.
+#   * new extensions + old Klipper: the extension set's own preflight
+#     refuses to load against a Klipper it was not qualified against, which
+#     is the designed behaviour, but leaves the printer down until something
+#     puts the pair back together.
+#
+# So this file keeps ONE shared lock, ONE known-good record naming both
+# commits, and ONE validation that either promotes both halves or rolls back
+# both. A known-good pair is never recorded until both halves have actually
+# passed - there is no code path that can record commit A paired with a
+# snapshot belonging to a different commit, the same property
+# moonraker_snapshot_env/moonraker_restore_env already give the Moonraker
+# source+venv pairing below, and this is deliberately modelled on it rather
+# than being a second, parallel transaction framework.
+#
+# Recomposition is part of the transaction, not a side effect: after any
+# change to either half, the symlink set is rebuilt and re-verified BEFORE
+# Klippy is restarted, which is also when the collision guard and the
+# c_helper.so mtime invariant get re-run. A stale library is caught here and
+# refused, instead of surfacing as a gcc crash part-way through boot.
+
+# Paths and timings are overridable purely so the offline scenario tests in
+# tests/klipper-stack-update-tests.sh can drive this file against fixture
+# directories and stubbed services instead of a printer - the same seam
+# convention S02/S04/S05 already use for SEEDS/APPS/SYSTEM/LOCKDIR/GATE_LIB.
+# Real boot sets none of them, so every ":-" below resolves to the production
+# value. The timings in particular exist because the real ones are measured
+# against a printer that genuinely takes 15-25s to reconnect to its MCU, and
+# a test suite cannot wait several minutes per scenario to learn that.
+NEBULAOS_ROOT="${NEBULAOS_ROOT:-/usr/data/nebulaos}"
+HEALTHCHECK="${HEALTHCHECK:-/etc/nebulaos-healthcheck.sh}"
+COMPOSE_LIB="${COMPOSE_LIB:-/etc/nebulaos-klipper-compose.sh}"
+CHELPER_LIB="${CHELPER_LIB:-/etc/nebulaos-chelper-preflight.sh}"
+LOCKDIR="${LOCKDIR:-$NEBULAOS_ROOT/updates/locks}"
+MOONRAKER_URL="${MOONRAKER_URL:-http://127.0.0.1:7125}"
 MOONRAKER_ENV="$NEBULAOS_ROOT/envs/moonraker"
 MOONRAKER_ENV_BACKUP="$NEBULAOS_ROOT/backups/moonraker/last-known-good-env"
-POLL_INTERVAL=20
-STABILIZE_SAMPLES=6
-STABILIZE_INTERVAL=10
-RESTART_GRACE_PERIOD=25
+POLL_INTERVAL="${POLL_INTERVAL:-20}"
+STABILIZE_SAMPLES="${STABILIZE_SAMPLES:-6}"
+STABILIZE_INTERVAL="${STABILIZE_INTERVAL:-10}"
+RESTART_GRACE_PERIOD="${RESTART_GRACE_PERIOD:-25}"
+READY_POLL_TRIES="${READY_POLL_TRIES:-18}"
+READY_POLL_INTERVAL="${READY_POLL_INTERVAL:-10}"
+
+# The two halves of the Klipper stack, and the one lock and one state record
+# that cover both. The lock name is shared with S05nebulaos-activate, which
+# refuses to activate either half while it is held.
+KLIPPER_APP="klipper"
+EXTENSIONS_APP="nebulaos-klipper-extensions"
+STACK_NAME="klipper-stack"
+
+# Scenario 3 of the update-ordering analysis: both components updated close
+# together. Moonraker serializes the update REQUESTS but nothing more, so two
+# updates can land seconds apart. Validating the moment the first HEAD moves
+# would mean restarting Klippy against a pair whose second half is still
+# being written. Instead, re-read both HEADs after a short settle window and
+# defer to the next poll if either is still moving - a deferral costs one
+# poll interval, a torn pair costs a rollback cycle.
+PAIR_SETTLE_SECONDS="${PAIR_SETTLE_SECONDS:-15}"
+
+[ -f "$COMPOSE_LIB" ] && . "$COMPOSE_LIB"
+[ -f "$CHELPER_LIB" ] && . "$CHELPER_LIB"
 
 log() {
 	echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) nebulaos-update-supervisor: $1"
@@ -65,6 +132,15 @@ component_info() {
 	case "$1" in
 		klipper)
 			echo "$NEBULAOS_ROOT/apps/klipper|/etc/init.d/S55klipper|/opt/klipper|/var/run/klippy.pid"
+			;;
+		nebulaos-klipper-extensions)
+			# Deliberately shares Klipper's init script, /opt path and
+			# pidfile. The extension set has no service of its own - it is
+			# code Klippy loads, so "restart the extensions" means "restart
+			# Klippy", and "fall back to immutable" means unmounting the same
+			# /opt/klipper bind (whose squashfs copy carries these modules as
+			# real files precisely so that fallback is a complete install).
+			echo "$NEBULAOS_ROOT/apps/nebulaos-klipper-extensions|/etc/init.d/S55klipper|/opt/klipper|/var/run/klippy.pid"
 			;;
 		moonraker)
 			echo "$NEBULAOS_ROOT/apps/moonraker|/etc/init.d/S56moonraker|/opt/moonraker|/var/run/moonraker.pid"
@@ -200,11 +276,11 @@ restart_component() {
 # quickly.
 wait_for_initial_ready() {
 	tries=0
-	max_tries=18
+	max_tries="$READY_POLL_TRIES"
 	while [ "$tries" -lt "$max_tries" ]; do
 		"$HEALTHCHECK" stage2 && return 0
 		tries=$((tries + 1))
-		sleep 10
+		sleep "$READY_POLL_INTERVAL"
 	done
 	return 1
 }
@@ -461,7 +537,7 @@ poll_mainsail_once() {
 	last_seen=$(read_state_field "$name" last_seen_commit)
 	if [ -z "$last_seen" ]; then
 		# First observation this boot - bootstrap state and take the first
-		# backup snapshot, matching klipper/moonraker's own bootstrap
+		# backup snapshot, matching the moonraker/Klipper-stack bootstrap
 		# behavior (whatever is running now was already proven at boot).
 		write_state "$name" "$current" "$current" "healthy" ""
 		mainsail_snapshot_to_backup
@@ -495,6 +571,265 @@ moonraker_restore_env() {
 	[ -d "$MOONRAKER_ENV_BACKUP" ] || return 1
 	atomic_directory_replace "$MOONRAKER_ENV_BACKUP" "$MOONRAKER_ENV"
 	return 0
+}
+
+# ==========================================================================
+# Klipper stack: the (klipper, extensions) pair as one transactional unit
+# ==========================================================================
+
+stack_head() {
+	# $1=app name -> current HEAD, or empty if the checkout is unusable
+	git -C "$NEBULAOS_ROOT/apps/$1" rev-parse HEAD 2>/dev/null
+}
+
+stack_state_file() {
+	echo "$NEBULAOS_ROOT/updates/$STACK_NAME/state.json"
+}
+
+read_stack_field() {
+	f=$(stack_state_file)
+	[ -e "$f" ] || return 0
+	sed -n "s/.*\"$1\": *\"\([^\"]*\)\".*/\1/p" "$f" | head -1
+}
+
+# Both commits always travel together, in one file, written atomically. A
+# known-good pair is only ever written by a caller that has just seen BOTH
+# halves pass, which is what makes a mismatched record unrepresentable rather
+# than merely unlikely.
+write_stack_state() {
+	# $1=kg_klipper $2=kg_extensions $3=seen_klipper $4=seen_extensions
+	# $5=state $6=reason
+	f=$(stack_state_file)
+	mkdir -p "$(dirname "$f")"
+	tmp="$f.tmp.$$"
+	now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+	{
+		echo "{"
+		echo "  \"component\": \"$STACK_NAME\","
+		echo "  \"members\": [\"$KLIPPER_APP\", \"$EXTENSIONS_APP\"],"
+		echo "  \"known_good_klipper_commit\": \"$1\","
+		echo "  \"known_good_extensions_commit\": \"$2\","
+		echo "  \"last_seen_klipper_commit\": \"$3\","
+		echo "  \"last_seen_extensions_commit\": \"$4\","
+		echo "  \"state\": \"$5\","
+		echo "  \"last_transition_at\": \"$now\","
+		echo "  \"last_failure_reason\": \"$6\""
+		echo "}"
+	} > "$tmp"
+	mv "$tmp" "$f"
+}
+
+# Rebuild the symlink composition and re-run both pre-restart gates.
+# Called before every Klippy restart this file performs on the stack, because
+# every one of them follows a change to one half or the other.
+recompose_klipper_stack() {
+	kdir="$NEBULAOS_ROOT/apps/$KLIPPER_APP"
+	edir="$NEBULAOS_ROOT/apps/$EXTENSIONS_APP"
+
+	if ! command -v compose_ensure >/dev/null 2>&1; then
+		log "$STACK_NAME: $COMPOSE_LIB is not available - cannot verify the composition, refusing to restart Klipper into an unverified stack"
+		return 1
+	fi
+	if ! compose_ensure "$kdir" "$edir"; then
+		log "$STACK_NAME: recomposition FAILED - either upstream Klipper now ships a file at a path this extension set manages (the collision guard), or a managed link no longer resolves into the extensions tree"
+		return 1
+	fi
+	if ! command -v chelper_write_verdict >/dev/null 2>&1; then
+		log "$STACK_NAME: $CHELPER_LIB is not available - cannot verify the c_helper.so mtime invariant, refusing"
+		return 1
+	fi
+	if ! chelper_write_verdict "$kdir"; then
+		log "$STACK_NAME: the c_helper.so mtime invariant does NOT hold for this pair. This is the classic new-Klipper/old-prebuilt-library failure: Klippy would shell out to gcc, which this device does not have, and would not start. Refusing to restart into it."
+		return 1
+	fi
+	return 0
+}
+
+# Put both halves back on the last validated pair, recompose, and prove it.
+# Never resets one half without the other - that is the whole point.
+restore_known_good_pair() {
+	# $1=kg_klipper $2=kg_extensions
+	kg_k="$1"; kg_e="$2"
+	if [ -z "$kg_k" ] || [ -z "$kg_e" ]; then
+		log "$STACK_NAME: no complete known-good pair on record - cannot restore"
+		return 1
+	fi
+	log "$STACK_NAME: restoring the last validated pair (klipper $kg_k, extensions $kg_e)"
+	git -C "$NEBULAOS_ROOT/apps/$KLIPPER_APP" reset --hard "$kg_k" >/dev/null 2>&1
+	git -C "$NEBULAOS_ROOT/apps/$EXTENSIONS_APP" reset --hard "$kg_e" >/dev/null 2>&1
+	# git reset --hard leaves the composed symlinks intact (they are
+	# excluded, so `clean` ignores them and `reset` has no tracked entry to
+	# overwrite), but the SOURCE they point into has just changed content and
+	# the pair generation has moved - so recompose and re-verify rather than
+	# assuming the old link set still describes reality.
+	recompose_klipper_stack
+}
+
+# The pair validation. Structurally the same shape as validate_component()
+# above - lock, mark validating, stage1, stabilized stage2, promote or roll
+# back, preserve evidence, factory-fallback if the previous pair is also
+# unhealthy - with the single difference that every step operates on two
+# commits instead of one.
+validate_klipper_stack() {
+	new_k=$(stack_head "$KLIPPER_APP")
+	new_e=$(stack_head "$EXTENSIONS_APP")
+	kg_k=$(read_stack_field known_good_klipper_commit)
+	kg_e=$(read_stack_field known_good_extensions_commit)
+
+	mkdir -p "$LOCKDIR"
+	# One lock for the whole stack. S05nebulaos-activate honours this same
+	# name and will not activate either half while it is held, so a reboot
+	# in the middle of this transaction cannot bring the printer up on a
+	# half-validated pair.
+	: > "$LOCKDIR/$STACK_NAME.lock"
+	write_stack_state "$kg_k" "$kg_e" "$new_k" "$new_e" "validating" ""
+
+	log "$STACK_NAME: new pair detected (klipper $new_k, extensions $new_e) - validating as one unit"
+
+	# Pre-restart gates. These run BEFORE Klippy is touched, which is what
+	# turns "Klippy crashed on boot" into "the pair was refused and rolled
+	# back with the printer still running the old one".
+	if ! recompose_klipper_stack; then
+		log "$STACK_NAME: pre-restart validation FAILED on the new pair - rolling back to (klipper $kg_k, extensions $kg_e) without restarting Klipper"
+		preserve_failure_evidence "$KLIPPER_APP" "$new_k" "stack_precheck_failed"
+		preserve_failure_evidence "$EXTENSIONS_APP" "$new_e" "stack_precheck_failed"
+		stack_roll_back "$kg_k" "$kg_e" "precheck_failed:$new_k+$new_e"
+		return
+	fi
+
+	stage1_ok=true
+	"$HEALTHCHECK" stage1 "$KLIPPER_APP" "$NEBULAOS_ROOT/apps/$KLIPPER_APP" || stage1_ok=false
+
+	if [ "$stage1_ok" = "true" ]; then
+		restart_component "$KLIPPER_APP" || {
+			log "$STACK_NAME: restart deferred (print active) - will re-check next poll cycle"
+			write_stack_state "$kg_k" "$kg_e" "$new_k" "$new_e" "validating" "restart_deferred"
+			return
+		}
+		if stabilized_stage2; then
+			# BOTH halves have now passed together. Only here is a pair
+			# recorded as known-good.
+			log "$STACK_NAME: the new pair (klipper $new_k, extensions $new_e) passed full validation - recording as the known-good pair"
+			write_stack_state "$new_k" "$new_e" "$new_k" "$new_e" "healthy" ""
+			rm -f "$LOCKDIR/$STACK_NAME.lock"
+			return
+		fi
+		reason="stage2_failed"
+	else
+		reason="stage1_failed"
+	fi
+
+	log "$STACK_NAME: $reason on the new pair - reverting BOTH halves to the last validated pair"
+	preserve_failure_evidence "$KLIPPER_APP" "$new_k" "$reason"
+	preserve_failure_evidence "$EXTENSIONS_APP" "$new_e" "$reason"
+	stack_roll_back "$kg_k" "$kg_e" "$reason:$new_k+$new_e"
+}
+
+# Shared rollback tail for every failure path above.
+stack_roll_back() {
+	kg_k="$1"; kg_e="$2"; reason="$3"
+
+	if [ -z "$kg_k" ] || [ -z "$kg_e" ]; then
+		log "$STACK_NAME: no complete known-good pair exists yet (first-ever validation failed) - going straight to factory-fallback rather than restore a half-known pair"
+		preserve_failure_evidence "$KLIPPER_APP" "$kg_k" "no_known_good_pair"
+		factory_fallback "$KLIPPER_APP"
+		write_stack_state "$kg_k" "$kg_e" "$kg_k" "$kg_e" "factory-fallback" "$reason;no_known_good_pair"
+		return
+	fi
+
+	if ! restore_known_good_pair "$kg_k" "$kg_e"; then
+		log "$STACK_NAME: the known-good pair could not be restored and recomposed - falling back to the immutable copy"
+		preserve_failure_evidence "$KLIPPER_APP" "$kg_k" "restore_or_recompose_failed"
+		factory_fallback "$KLIPPER_APP"
+		write_stack_state "$kg_k" "$kg_e" "$kg_k" "$kg_e" "factory-fallback" "$reason;restore_failed"
+		return
+	fi
+
+	restart_component "$KLIPPER_APP"
+	if stabilized_stage2; then
+		log "$STACK_NAME: the restored pair re-validated healthy"
+		# last_seen must reflect what is ACTUALLY on disk now (the restored
+		# pair), not the rejected commits - recording the rejected ones here
+		# is the exact bug validate_component() documents: the next poll
+		# would see current != last_seen, mistake an already-failed-over
+		# state for a fresh update, and re-trigger validation.
+		write_stack_state "$kg_k" "$kg_e" "$kg_k" "$kg_e" "rolled-back" "$reason"
+		rm -f "$LOCKDIR/$STACK_NAME.lock"
+	else
+		preserve_failure_evidence "$KLIPPER_APP" "$kg_k" "stage2_failed_after_pair_rollback"
+		factory_fallback "$KLIPPER_APP"
+		write_stack_state "$kg_k" "$kg_e" "$kg_k" "$kg_e" "factory-fallback" "$reason;previous_pair_also_unhealthy"
+	fi
+}
+
+# Scenario 6: power loss part-way through a pair transaction. A state of
+# "validating" that survives into a new supervisor process means this
+# process's predecessor died mid-transaction, so nothing about the pair
+# currently on disk has been proven. Clear the marker and let the normal
+# delta detection below re-validate from scratch; the composition rebuild is
+# idempotent and the exclude writes are grep-before-append, so a torn
+# half-composed tree from the same crash heals on the next compose.
+reconcile_klipper_stack_on_boot() {
+	state=$(read_stack_field state)
+	[ "$state" = "validating" ] || return 0
+	log "$STACK_NAME: found an interrupted pair transaction from a previous supervisor process (state=validating) - nothing on disk has been validated, so it will be re-validated from scratch"
+	kg_k=$(read_stack_field known_good_klipper_commit)
+	kg_e=$(read_stack_field known_good_extensions_commit)
+	# last_seen is deliberately reset to the known-good pair, not to what is
+	# on disk: that is what makes the next poll see a delta and re-validate,
+	# rather than silently accepting an unvalidated pair as current.
+	write_stack_state "$kg_k" "$kg_e" "$kg_k" "$kg_e" "interrupted" "supervisor_restarted_mid_transaction"
+	rm -f "$LOCKDIR/$STACK_NAME.lock"
+}
+
+poll_klipper_stack_once() {
+	kdir="$NEBULAOS_ROOT/apps/$KLIPPER_APP"
+	edir="$NEBULAOS_ROOT/apps/$EXTENSIONS_APP"
+	[ -d "$kdir/.git" ] || return 0
+	[ -d "$edir/.git" ] || return 0
+
+	cur_k=$(stack_head "$KLIPPER_APP")
+	cur_e=$(stack_head "$EXTENSIONS_APP")
+	[ -n "$cur_k" ] && [ -n "$cur_e" ] || return 0
+
+	seen_k=$(read_stack_field last_seen_klipper_commit)
+	seen_e=$(read_stack_field last_seen_extensions_commit)
+	if [ -z "$seen_k" ] || [ -z "$seen_e" ]; then
+		# First observation this boot. Whatever is running now was already
+		# proven at boot - S05nebulaos-activate composed and verified it and
+		# S99confirm-good passed - so it becomes the known-good pair without
+		# a validation cycle, exactly as the per-component bootstrap below
+		# does.
+		write_stack_state "$cur_k" "$cur_e" "$cur_k" "$cur_e" "healthy" ""
+		log "$STACK_NAME: bootstrapped pair state at klipper $cur_k, extensions $cur_e"
+		return 0
+	fi
+
+	state=$(read_stack_field state)
+	# factory-fallback is a deliberate terminal state: a human must clear the
+	# lock and re-run S05nebulaos-activate (or reboot) before the persistent
+	# pair is trusted again. Never silently re-attempt a degraded config.
+	if [ -e "$LOCKDIR/$STACK_NAME.lock" ] && [ "$state" = "factory-fallback" ]; then
+		return 0
+	fi
+	[ "$state" = "validating" ] && return 0
+
+	if [ "$cur_k" = "$seen_k" ] && [ "$cur_e" = "$seen_e" ]; then
+		return 0
+	fi
+
+	# Scenario 3: let a burst of updates settle before validating, so a pair
+	# that is still being written is not restarted into.
+	log "$STACK_NAME: change detected (klipper $seen_k -> $cur_k, extensions $seen_e -> $cur_e) - waiting ${PAIR_SETTLE_SECONDS}s for the pair to settle"
+	sleep "$PAIR_SETTLE_SECONDS"
+	settled_k=$(stack_head "$KLIPPER_APP")
+	settled_e=$(stack_head "$EXTENSIONS_APP")
+	if [ "$settled_k" != "$cur_k" ] || [ "$settled_e" != "$cur_e" ]; then
+		log "$STACK_NAME: the pair is still moving (a second update landed during the settle window) - deferring validation to the next poll cycle"
+		return 0
+	fi
+
+	validate_klipper_stack
 }
 
 validate_component() {
@@ -618,7 +953,13 @@ ensure_moonraker_alive() {
 
 poll_once() {
 	ensure_moonraker_alive
-	for name in klipper moonraker; do
+
+	# Klipper is deliberately NOT in the per-component loop below any more.
+	# It is validated as half of the (klipper, extensions) pair, and running
+	# both paths would mean two transactions racing for the same service.
+	poll_klipper_stack_once
+
+	for name in moonraker; do
 		info=$(component_info "$name")
 		path=$(echo "$info" | cut -d'|' -f1)
 		[ -d "$path/.git" ] || continue
@@ -675,21 +1016,27 @@ poll_once() {
 loop() {
 	log "starting (poll interval ${POLL_INTERVAL}s)"
 	cleanup_stale_staging
+	reconcile_klipper_stack_on_boot
 	while true; do
 		poll_once
 		sleep "$POLL_INTERVAL"
 	done
 }
 
-case "$1" in
-	loop)
-		loop
-		;;
-	poll-once)
-		poll_once
-		;;
-	*)
-		echo "usage: $0 loop|poll-once" >&2
-		exit 2
-		;;
-esac
+# NEBULAOS_UPDATE_SUPERVISOR_NO_AUTORUN=1 lets the offline scenario tests
+# source this file to call validate_klipper_stack()/poll_klipper_stack_once()
+# directly - the same seam convention as S04's own NO_AUTORUN variables.
+if [ -z "${NEBULAOS_UPDATE_SUPERVISOR_NO_AUTORUN:-}" ]; then
+	case "$1" in
+		loop)
+			loop
+			;;
+		poll-once)
+			poll_once
+			;;
+		*)
+			echo "usage: $0 loop|poll-once" >&2
+			exit 2
+			;;
+	esac
+fi

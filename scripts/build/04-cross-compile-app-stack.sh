@@ -681,9 +681,27 @@ mkdir -p "$OVERLAY/opt/nebulaos-seeds"
 # be revisited again if this seed's filenames ever change in the future.
 for stale_dir in "$BUILDROOT_DIR/output/target/opt/nebulaos-seeds" \
                  "$BUILDROOT_DIR/output/build/buildroot-fs/ext2/target/opt/nebulaos-seeds"; do
+	# The .bundle/.tar names are retired formats. The .tar.gz names are the
+	# CURRENT ones, and leaving those out was a real defect, found by this
+	# branch's own build history (Phase 1 no-fork migration, Phase L).
+	#
+	# Buildroot's target trees persist across runs, and stage 03 builds a
+	# rootfs image BEFORE stage 04 regenerates these archives. So a seed left
+	# by a previous run is baked into that intermediate image at its OLD
+	# size. That is not hypothetical: a 256MB klipper.tar.gz from a run made
+	# before Klipper was cloned shallow survived here and overflowed
+	# BR2_TARGET_ROOTFS_EXT2_SIZE on the NEXT build, whose own freshly
+	# generated seed was only 15MB. The failure pointed at the filesystem
+	# size, which was not the problem, and the shrink that should have fixed
+	# it appeared not to work.
+	#
+	# Remove the current names too, so a seed that gets smaller - or is
+	# dropped entirely - cannot leave its previous self behind.
 	rm -f "$stale_dir/klipper.bundle" "$stale_dir/moonraker.bundle" \
 	      "$stale_dir/klipper.tar" "$stale_dir/moonraker.tar" \
-	      "$stale_dir/nebulaos-klipper-extensions.tar" 2>/dev/null || true
+	      "$stale_dir/nebulaos-klipper-extensions.tar" \
+	      "$stale_dir/klipper.tar.gz" "$stale_dir/moonraker.tar.gz" \
+	      "$stale_dir/nebulaos-klipper-extensions.tar.gz" 2>/dev/null || true
 done
 klipper_origin="https://github.com/Klipper3d/klipper.git"
 klipper_seed_commit=$(make_seed_archive "$VENDOR/klipper" master \

@@ -121,23 +121,56 @@ where Moonraker looks and where updates happen, not to the emergency
 fallback, and a fallback missing every module the shipped `printer.cfg`
 references would be no fallback at all.
 
-### Open item for the owner: identity in factory-fallback
+### Identity in factory-fallback — decided: ACCEPTED
 
 `nebulaos_compat.py` identifies the running Klipper with
 `git -C <checkout> rev-parse HEAD`. The immutable copy is not a git checkout
 and never will be — carrying Klipper's history in the squashfs is not worth
-it — so in `factory_fallback()` that check cannot pass, and Klippy will
-refuse to start with that module's own precise message.
+it — so in `factory_fallback()` that check cannot pass, and Klippy refuses to
+start with that module's own precise message.
 
-That is consistent with the stated policy (*"did not start, and said exactly
-why"* over *"started, but the probe is subtly wrong"*), and factory-fallback
-is already a terminal state that holds an update lock until a human clears
-it. But it **is** a change from the pre-Phase-1 fork build, where the
-fallback copy would have started, and it deserves an explicit decision
-rather than being discovered later. The options are: accept it (the fallback
-becomes "boots to a diagnosable stop" rather than "prints"), or extend the
-manifest with a platform-signed identity file the same way
-`chelper.platform_result_file` already works. Not decided here.
+**Decision (2026-08-17, Phase K): accept it as shipped for hardware
+qualification.** The reasoning, from what `factory_fallback()` actually is
+rather than from the policy statement:
+
+- It is not a recovery path the device takes on its own. Every call site
+  (`stack_roll_back()` and the three per-component equivalents) is reached
+  only after an update has *already* failed validation **and** one of: no
+  known-good pair exists yet, the known-good pair could not be restored and
+  recomposed, or the restored known-good pair *also* failed validation. The
+  persistent stack is unusable by the time this runs.
+- It is terminal by construction. It holds `$LOCKDIR/klipper-stack.lock`, and
+  `poll_klipper_stack_once()` returns immediately for as long as that lock
+  and the `factory-fallback` state coexist. A human has to clear it. The
+  printer is not autonomously recovered in either design.
+- So what is actually lost is narrow: the case where both persistent
+  checkouts are unusable but the squashfs copy would have printed — which
+  requires the failure to be localised to `/usr/data` (corruption, a torn
+  extraction, a bad object store) rather than to the config or the hardware.
+- In exchange, the operator gets a named, specific stop instead of a start.
+  The alternative is worse than it sounds: the pre-Phase-1 behaviour was to
+  start an emergency Klipper whose extension pairing nothing had verified,
+  and then drive a load-cell probe into a bed with it. "Stopped, and said
+  exactly which checkout it could not identify" is the safer half of that
+  trade on a machine that can push a nozzle into glass.
+- It cannot cause motion. It prevents motion. It is not a new hardware risk,
+  and it does not gate hardware qualification.
+
+**Follow-up (not a blocker, not done here):** the clean fix is already
+modelled by something that exists. The build bakes
+`.nebulaos-chelper-verdict.json` into `/opt/klipper` precisely because that
+tree is read-only at boot; an identity file baked the same way, named by a
+new manifest key alongside `chelper.platform_result_file`, would let
+`check_klipper_commit()` fall back to a platform-signed answer when the tree
+has no `.git`. That restores the pre-Phase-1 capability without weakening any
+check. It costs one manifest key and a small change in both repositories, and
+it should be done deliberately rather than folded into a qualification night.
+
+**For tomorrow's hardware test:** the deliberate bad-update rollback case is
+expected to end in `rolled-back` with the known-good pair re-validated, not
+in factory-fallback. If it *does* reach factory-fallback, Klippy refusing to
+start is the expected, documented behaviour described here — not a new fault
+to debug at the printer.
 
 ## Recovery and crash safety
 
@@ -160,8 +193,20 @@ grep-before-append, so repeated boots cannot accumulate duplicate lines.
 | `tests/klipper-stack-lifecycle-tests.sh` | seeding with real origins, pair atomicity, migration of both halves, composition auto-rebuild after migration, the shared stack lock |
 | `tests/klipper-stack-update-tests.sh` | the six update-ordering and failure scenarios, driven through the real supervisor |
 | `tests/moonraker-klipper-stack-config-tests.py` | the shipped Moonraker config, checked against Moonraker's real source at the pinned commit |
+| `tests/klipper-config-load-smoke-tests.py` | **real Klipper loading the real shipped `printer.cfg`** on a really-composed pinned pair — every include, every module's `load_config()`, Klipper's own `check_unused_options()`, the GD32 sensor type resolving, and three refusal cases |
+| `tests/klipper-git-survival-tests.sh` | fetch / ff-only pull / `reset --hard` / branch + detached checkout / `clean -d -f` / `gc` / `stash` against a real remote, plus `clean -x` destruction-and-recovery, the silent upstream-collision hazard, and hard-reclone recovery |
+| `tests/recovery-safety-tests.sh` | that Moonraker's Recovery cannot revert an accepted feature under the new two-checkout architecture |
 
-None of them touch a device, a printer, or a network.
+Only `recovery-safety-tests.sh` and the two suites' source lookups touch the
+network, and only to read public/pinned git remotes. None of them touch a
+device or a printer.
+
+`klipper-config-load-smoke-tests.py` stops exactly where Klipper itself stops
+offline. Everything downstream of `klippy:mcu_identify` — MCU pin-name
+validation, command lookup, PRTouch's proprietary message formats — needs the
+mainboard's GD32 data dictionary, which exists only on the printer and only
+arrives over serial. Those are hardware tests, not something a host suite can
+honestly claim.
 
 ## What is still unproven
 

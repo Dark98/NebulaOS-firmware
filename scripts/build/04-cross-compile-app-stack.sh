@@ -73,13 +73,67 @@ mkdir -p "$WORK"
 ###    own .gitignore) - so this is the only place the artifact comes from,
 ###    and the mtime enforcement below is what keeps Klippy from trying to
 ###    rebuild it with a gcc this device does not have.
+# Phase 1 no-fork migration, Phase L (2026-08-17): this used to be
+# `make clean && make CC=...`. Official Klipper ships NO Makefile in
+# klippy/chelper/ - the retired fork had one, inherited from pellcorp/klipper,
+# which the analysis mission classified MOVE_TO_FIRMWARE (section 4.3) and
+# which nothing actually moved. The first real full build against official
+# upstream therefore died here with "make: *** No rule to make target
+# 'clean'", after the entire kernel and rootfs had already been built.
+#
+# Upstream builds this library from klippy/chelper/__init__.py's own
+# check_build_c_library(), with a hardcoded gcc invocation. So do exactly
+# that, with the cross compiler substituted for `gcc` - and read SOURCE_FILES
+# and COMPILE_ARGS OUT OF THAT FILE rather than restating them here. That is
+# the whole point: a hardcoded list in the firmware would silently miss the
+# next file upstream adds, and upstream has already added one (steppersync.c,
+# flagged as unknown 5 in the analysis mission's section 27). If the list ever
+# stops parsing, the build fails loudly instead of linking a library with a
+# missing translation unit.
+#
+# SSE_FLAGS is deliberately not passed: upstream only adds it when
+# check_gcc_option() says the compiler accepts it, and a mipsel cross compiler
+# does not. Everything else - the -flto -fwhole-program link, -fPIC, -O2 - is
+# byte-for-byte upstream's own recipe.
 echo "== cross-compiling Klipper's chelper C extension =="
 (
 	cd "$VENDOR/klipper/klippy/chelper"
 	export PATH="$BUILDROOT_DIR/output/host/bin:$PATH"
-	make clean
-	make CC=mipsel-buildroot-linux-gnu-gcc
-)
+	rm -f c_helper.so _temp_c_helper.so
+
+	gcc_args=$(python3 - <<'PYEOF'
+import ast, sys
+tree = ast.parse(open('__init__.py').read())
+found = {}
+for node in tree.body:
+    if (isinstance(node, ast.Assign) and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id in ('SOURCE_FILES', 'COMPILE_ARGS', 'DEST_LIB')):
+        found[node.targets[0].id] = ast.literal_eval(node.value)
+missing = {'SOURCE_FILES', 'COMPILE_ARGS', 'DEST_LIB'} - set(found)
+if missing:
+    sys.stderr.write("chelper/__init__.py no longer defines: %s\n"
+                     % (', '.join(sorted(missing)),))
+    raise SystemExit(1)
+sys.stderr.write("   recipe from upstream: %s <- %d source files\n"
+                 % (found['DEST_LIB'], len(found['SOURCE_FILES'])))
+print(found['COMPILE_ARGS'] % (found['DEST_LIB'], ' '.join(found['SOURCE_FILES'])))
+PYEOF
+	) || {
+		echo "FATAL: could not read the chelper build recipe out of official Klipper's own klippy/chelper/__init__.py - upstream changed its shape and this step must be re-derived, not guessed" >&2
+		exit 1
+	}
+
+	# shellcheck disable=SC2086  # gcc_args is upstream's own recipe, deliberately word-split
+	mipsel-buildroot-linux-gnu-gcc $gcc_args || {
+		echo "FATAL: cross-compiling c_helper.so failed" >&2
+		exit 1
+	}
+	[ -f c_helper.so ] || {
+		echo "FATAL: c_helper.so was not produced" >&2
+		exit 1
+	}
+) || exit 1
 
 # Production optimization mission, Phase 6 (2026-07-30): c_helper.so shipped
 # with full debug symbols in every rootfs.squashfs built so far - Buildroot's

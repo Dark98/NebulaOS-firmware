@@ -36,7 +36,7 @@ PRINTER_CFG = CONFIG_DIR / "printer.cfg"
 MANAGED_DIR = CONFIG_DIR / "nebulaos"
 
 KLIPPER_PIN = "fe4eb8650bd7de4c2100a14eaf09b0965c430e29"
-EXTENSIONS_PIN = "9fce9b11588e06835144ce1fee0a19b1204bc543"
+EXTENSIONS_PIN = "a3f9cbfb0e63b1e07e92958edaa4e05afff0d305"
 OFFICIAL_KLIPPER = "https://github.com/Klipper3d/klipper.git"
 EXTENSIONS_ORIGIN = "https://github.com/coreflake1/NebulaOS-klipper-extensions.git"
 

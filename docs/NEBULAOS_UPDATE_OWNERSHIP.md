@@ -5,20 +5,83 @@ explicit owner per component - no component may have two independent
 paths that can each change what's actually running, since that's exactly
 the class of bug Phase 1 found and fixed for Klipper.
 
-## Klipper
+## The Klipper stack (Klipper + the NebulaOS extension set)
 
-**Owner: canonical Git repo + Moonraker's reserved updater, unified.**
+**Owner: the qualified PAIR. Neither half has an independent owner.**
 
-- Canonical source: `coreflake1/NebulaOS-klipper`, `master` branch (see
-  `docs/NEBULAOS_UPDATER_AUDIT.md` for the branch-unification fix).
-- Build time: `manifests/dependencies.conf`'s `KLIPPER_PIN` fetches this
-  exact commit into the squashfs's factory-seed archive.
-- Run time: Moonraker's reserved `[update_manager klipper]` slot updates
-  the *persistent* checkout in place, tracking whichever branch it's on -
-  now the same `master` the build pins, so both paths agree.
-- **Persistent checkout must be clean.** Enforced going forward by Phase 3's
-  migration system (this document doesn't implement that machinery itself,
-  it just states the requirement each owner is responsible for).
+Updated 2026-08-17 by the Phase 1 no-fork migration. NebulaOS no longer
+hosts a Klipper fork. Two components now make up what used to be one:
+
+| | Source | Pin |
+|---|---|---|
+| Klipper | `Klipper3d/klipper`, `master` — **official upstream, unmodified, zero core patches** | `KLIPPER_PIN` |
+| Extensions | `coreflake1/NebulaOS-klipper-extensions`, `main` — everything this project actually owns | `KLIPPER_EXTENSIONS_PIN` |
+
+- **Build time:** both pins are fetched into their own factory-seed
+  archives. Neither archive contains anything belonging to the other.
+- **Boot time:** `S05nebulaos-activate` composes them — each managed module
+  is symlinked from the extension checkout into
+  `apps/klipper/klippy/extras/` and listed in that clone's own
+  `.git/info/exclude`. Both checkouts stay content-pristine;
+  `git status --porcelain` is empty in both, always, on a running device.
+- **Run time:** Moonraker's reserved `[update_manager klipper]` slot and a
+  separate `[update_manager nebulaos_klipper_extensions]` section can each
+  update their own checkout. Both are pinned to the qualified pair, in a
+  firmware-managed include (see below).
+- **Validation:** `/etc/nebulaos-update-supervisor.sh` treats
+  `(klipper_sha, extensions_sha)` as one transactional unit. It never
+  records a known-good pair until *both* halves have passed, and any
+  failure restores *both*.
+
+### Why the pair, and not two components
+
+Because the two ways they can drift apart are both total outages, not
+degradations:
+
+- **New Klipper, old extensions.** A Klipper update touching anything in
+  `klippy/chelper/` makes the shipped cross-compiled `c_helper.so` older
+  than a source. Klipper decides whether to rebuild by comparing *mtimes*,
+  so it shells out to `gcc` — which this device does not have. Klippy does
+  not start. API drift lands here too; mainline has already renamed
+  `MCU.register_response()` once.
+- **New extensions, old Klipper.** The extension set's own preflight
+  correctly refuses to load against a Klipper it was not qualified
+  against.
+
+Both are caught *before* Klippy is restarted, not after: the supervisor
+recomposes, re-runs the collision guard, and re-checks the `c_helper.so`
+mtime invariant as part of the transaction, while the printer is still
+running the old pair.
+
+### Moving the qualified pin
+
+The pins live in `printer_data/config/nebulaos/klipper-pin.conf`, which is
+**IMAGE OWNED** and kept in sync by `S04nebulaos-migrate`.
+`moonraker.conf` is USER OWNED and carries only a stable
+`[include nebulaos/*.conf]` line, so advancing a pin is an ordinary
+firmware update rather than a request that every user hand-edit a config
+file. The full procedure for moving a pin — compose, run the extension
+suite, re-verify `required_klipper_symbols`, rebuild `c_helper.so`,
+**re-qualify on real hardware**, then move both pins and the manifest
+together — is in
+`NebulaOS-klipper-extensions/docs/COMPATIBILITY.md`.
+
+**Known limitation:** a device provisioned before that include line existed
+will not have it, because nothing may rewrite a user-owned file. Such a
+device keeps working but ignores the managed pins until the line is added
+by hand.
+
+### A firmware update overrides a separately-updated Klipper
+
+Stated plainly because it will otherwise read as a bug. If you update
+Klipper or the extensions yourself through Mainsail, and later flash a
+firmware image whose `migration_version` differs, `S04nebulaos-migrate`
+replaces both checkouts with the image's versions. This is the appliance
+model and it is deliberate — it is how Klipper and Moonraker have always
+been treated here. Your previous tree is **not** destroyed: it is moved
+intact to `$SYSTEM/migration-backups/<timestamp>/`, and the migration is
+all-or-nothing, so a partial failure advances no generation and retries on
+the next boot.
 
 ## GuppyScreen
 

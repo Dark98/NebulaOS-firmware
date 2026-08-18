@@ -40,15 +40,35 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # Keep the pinned source checkouts, Buildroot download cache, and
-      # application-stage downloads. The generated Buildroot output tree is
-      # deliberately excluded: it is large, contains absolute build paths,
-      # and the build scripts intentionally clean correctness-sensitive parts
-      # of it on every run.
+      # application-stage downloads. This cache uses a run-specific key so a
+      # failed fetch/build can publish a more complete state for the next run.
       - name: Restore dependency cache
-        uses: actions/cache@v4
+        id: dependency-cache
+        uses: actions/cache/restore@v4
         with:
           path: .cache/nebulaos
-          key: nebulaos-dependencies-v1-${{ runner.os }}-${{ hashFiles('manifests/dependencies.conf') }}
+          key: nebulaos-dependencies-v2-${{ runner.os }}-${{ hashFiles('manifests/dependencies.conf') }}-${{ github.run_id }}
+          restore-keys: |
+            nebulaos-dependencies-v2-${{ runner.os }}-${{ hashFiles('manifests/dependencies.conf') }}-
+
+      # Preserve the generated Buildroot state separately so a later run of
+      # the same build inputs can resume after an incomplete toolchain or
+      # package build. The internal build path is fixed by build.sh, and the
+      # key changes whenever build-affecting inputs change.
+      - name: Prepare Buildroot output cache directory
+        shell: bash
+        run: mkdir -p vendor/buildroot-x2000/output
+
+      - name: Restore Buildroot output cache
+        id: build-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: vendor/buildroot-x2000/output
+          # Assertion-only changes do not invalidate the compiled Buildroot
+          # state, so a comparator fix can reuse the failed run's output.
+          key: nebulaos-build-v2-${{ runner.os }}-${{ hashFiles('build.sh', 'scripts/build/00-*.sh', 'scripts/build/01-*.sh', 'scripts/build/02-*.sh', 'scripts/build/03-*.sh', 'scripts/build/04-*.sh', 'scripts/build/05-*.sh', 'scripts/build/apply-qualified-baseline.sh', 'scripts/build/*-variant.sh', 'scripts/build/overlay/etc/**', 'scripts/build/overlay/opt/printer_data/**', 'scripts/build/overlay/opt/nebulaos/**', 'scripts/build/overlay/opt/guppyscreen/guppyconfig.json', 'scripts/build/overlay/opt/guppyscreen/themes/**', 'scripts/build/overlay/usr/**', 'scripts/build/vendor-wheels/**', 'scripts/build/vendor-patches/**', 'artifacts/buildroot-halley5-v30-image/*.config', 'artifacts/buildroot-halley5-v30-image/*.dts', 'manifests/dependencies.conf') }}-${{ github.run_id }}
+          restore-keys: |
+            nebulaos-build-v2-${{ runner.os }}-${{ hashFiles('build.sh', 'scripts/build/00-*.sh', 'scripts/build/01-*.sh', 'scripts/build/02-*.sh', 'scripts/build/03-*.sh', 'scripts/build/04-*.sh', 'scripts/build/05-*.sh', 'scripts/build/apply-qualified-baseline.sh', 'scripts/build/*-variant.sh', 'scripts/build/overlay/etc/**', 'scripts/build/overlay/opt/printer_data/**', 'scripts/build/overlay/opt/nebulaos/**', 'scripts/build/overlay/opt/guppyscreen/guppyconfig.json', 'scripts/build/overlay/opt/guppyscreen/themes/**', 'scripts/build/overlay/usr/**', 'scripts/build/vendor-wheels/**', 'scripts/build/vendor-patches/**', 'artifacts/buildroot-halley5-v30-image/*.config', 'artifacts/buildroot-halley5-v30-image/*.dts', 'manifests/dependencies.conf') }}-
 
       - name: Materialize dependency cache
         shell: bash
@@ -81,15 +101,15 @@ jobs:
           fi
 
       - name: Build and verify firmware
-        env:
-          # The build image is digest-pinned by manifests/dependencies.conf.
-          # This variable is available to future authenticated fetch steps
-          # without changing the reproducible build command itself.
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        id: build
         run: ./build.sh
 
-      - name: Refresh dependency cache
-        if: success()
+      # Run even when ./build.sh fails. This stages the source/download state
+      # for the dependency cache; the separate Buildroot output cache is saved
+      # directly below. Both save steps are best-effort so a cache-size or
+      # cache-service problem never hides the real build failure.
+      - name: Prepare dependency cache for next run
+        if: always()
         shell: bash
         run: |
           set -euo pipefail
@@ -99,7 +119,9 @@ jobs:
 
           # Preserve source checkouts and git metadata, but omit the generated
           # Buildroot output tree. It is rebuilt by the canonical pipeline.
-          rsync -a --exclude='buildroot-x2000/output/' vendor/ .cache/nebulaos/vendor/
+          if [[ -d vendor ]]; then
+            rsync -a --exclude='buildroot-x2000/output/' vendor/ .cache/nebulaos/vendor/
+          fi
 
           if [[ -d vendor/buildroot-x2000/output/dl ]]; then
             mkdir -p .cache/nebulaos/buildroot-dl
@@ -120,6 +142,49 @@ jobs:
             mkdir -p .cache/nebulaos/firmware
             rsync -a scripts/build/overlay/lib/firmware/ .cache/nebulaos/firmware/
           fi
+
+      - name: Save dependency cache
+        if: always()
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: .cache/nebulaos
+          key: nebulaos-dependencies-v2-${{ runner.os }}-${{ hashFiles('manifests/dependencies.conf') }}-${{ github.run_id }}
+
+      - name: Save Buildroot output cache
+        if: always()
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: vendor/buildroot-x2000/output
+          key: nebulaos-build-v2-${{ runner.os }}-${{ hashFiles('build.sh', 'scripts/build/00-*.sh', 'scripts/build/01-*.sh', 'scripts/build/02-*.sh', 'scripts/build/03-*.sh', 'scripts/build/04-*.sh', 'scripts/build/05-*.sh', 'scripts/build/apply-qualified-baseline.sh', 'scripts/build/*-variant.sh', 'scripts/build/overlay/etc/**', 'scripts/build/overlay/opt/printer_data/**', 'scripts/build/overlay/opt/nebulaos/**', 'scripts/build/overlay/opt/guppyscreen/guppyconfig.json', 'scripts/build/overlay/opt/guppyscreen/themes/**', 'scripts/build/overlay/usr/**', 'scripts/build/vendor-wheels/**', 'scripts/build/vendor-patches/**', 'artifacts/buildroot-halley5-v30-image/*.config', 'artifacts/buildroot-halley5-v30-image/*.dts', 'manifests/dependencies.conf') }}-${{ github.run_id }}
+
+      - name: Collect failure diagnostics
+        if: steps.build.outcome == 'failure'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ci-diagnostics
+          for file in \
+            artifacts/buildroot-halley5-v30-image/kernel.config \
+            artifacts/buildroot-halley5-v30-image/buildroot.config \
+            artifacts/buildroot-halley5-v30-image/halley5_v30.dts \
+            artifacts/buildroot-halley5-v30-image/build-manifest.txt; do
+            if [[ -f "$file" ]]; then
+              cp "$file" ci-diagnostics/
+            fi
+          done
+          git status --short > ci-diagnostics/git-status.txt
+          du -sh vendor/buildroot-x2000/output 2>/dev/null > ci-diagnostics/buildroot-output-size.txt || true
+
+      - name: Upload failure diagnostics
+        if: steps.build.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: nebulaos-build-diagnostics-${{ github.sha }}
+          path: ci-diagnostics/
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Assemble artifact bundle
         shell: bash

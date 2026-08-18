@@ -160,7 +160,7 @@ jobs:
           key: nebulaos-build-v2-${{ runner.os }}-${{ hashFiles('build.sh', 'scripts/build/00-*.sh', 'scripts/build/01-*.sh', 'scripts/build/02-*.sh', 'scripts/build/03-*.sh', 'scripts/build/04-*.sh', 'scripts/build/05-*.sh', 'scripts/build/apply-qualified-baseline.sh', 'scripts/build/*-variant.sh', 'scripts/build/overlay/etc/**', '!scripts/build/overlay/etc/default/dropbear', 'scripts/build/overlay/opt/printer_data/**', 'scripts/build/overlay/opt/nebulaos/**', 'scripts/build/overlay/opt/guppyscreen/guppyconfig.json', 'scripts/build/overlay/opt/guppyscreen/themes/**', 'scripts/build/overlay/usr/**', 'scripts/build/vendor-wheels/**', 'scripts/build/vendor-patches/**', 'artifacts/buildroot-halley5-v30-image/*.config', 'artifacts/buildroot-halley5-v30-image/*.dts', 'manifests/dependencies.conf') }}-${{ github.run_id }}
 
       - name: Collect failure diagnostics
-        if: steps.build.outcome == 'failure'
+        if: ${{ always() && steps.build.outcome == 'failure' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -178,7 +178,7 @@ jobs:
           du -sh vendor/buildroot-x2000/output 2>/dev/null > ci-diagnostics/buildroot-output-size.txt || true
 
       - name: Upload failure diagnostics
-        if: steps.build.outcome == 'failure'
+        if: ${{ always() && steps.build.outcome == 'failure' }}
         uses: actions/upload-artifact@v4
         with:
           name: nebulaos-build-diagnostics-${{ github.sha }}

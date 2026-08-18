@@ -202,12 +202,21 @@ post-build)
 	# kernel setting. Normalize that one known path-bearing field before the
 	# comparison. Keep every other config line strict, and print a bounded diff
 	# when anything still differs so CI failures are actionable rather than a
-	# bare PASS/FAIL pair.
+	# bare PASS/FAIL pair. Buildroot also embeds its source-tree version and
+	# host compiler capability probes in generated configs; those describe the
+	# build environment rather than the qualified target configuration.
 	normalize_baseline_file() {
 		file="$1"
 		case "$file" in
 			kernel.config)
-				sed -E 's#^(CONFIG_EXTRA_FIRMWARE_DIR=)"[^"]*"$#\1"/__NEBULAOS_CANONICAL_FIRMWARE_DIR__"#'
+				sed -E \
+					-e 's#^(CONFIG_EXTRA_FIRMWARE_DIR=)"[^"]*"$#\1"/__NEBULAOS_CANONICAL_FIRMWARE_DIR__"#' \
+					-e 's#^(CONFIG_CC_VERSION_TEXT="[^"]*[(]Buildroot )[^)]*([)].*)$#\1__NEBULAOS_BUILDER_VERSION__\2#'
+				;;
+			buildroot.config)
+				sed -E \
+					-e 's|^# Buildroot .* Configuration$|# Buildroot __NEBULAOS_BUILDER_VERSION__ Configuration|' \
+					-e '/^(# )?BR2_HOST_GCC_AT_LEAST_[0-9]+(=y| is not set)$/d'
 				;;
 			*)
 				cat

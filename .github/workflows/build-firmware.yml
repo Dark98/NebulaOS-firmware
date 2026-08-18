@@ -25,6 +25,12 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v6
+        with:
+          # The build compares the generated configuration against the
+          # explicitly promoted QUALIFIED_BASELINE_TAG in dependencies.conf.
+          # A shallow checkout omits that tag and makes the otherwise-valid
+          # baseline fail before the build starts.
+          fetch-depth: 0
 
       - name: Log in to GHCR
         uses: docker/login-action@v3

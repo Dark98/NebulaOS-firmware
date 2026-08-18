@@ -51,25 +51,6 @@ jobs:
           restore-keys: |
             nebulaos-dependencies-v2-${{ runner.os }}-${{ hashFiles('manifests/dependencies.conf') }}-
 
-      # Preserve the generated Buildroot state separately so a later run of
-      # the same build inputs can resume after an incomplete toolchain or
-      # package build. The internal build path is fixed by build.sh, and the
-      # key changes whenever build-affecting inputs change.
-      - name: Prepare Buildroot output cache directory
-        shell: bash
-        run: mkdir -p vendor/buildroot-x2000/output
-
-      - name: Restore Buildroot output cache
-        id: build-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: vendor/buildroot-x2000/output
-          # Assertion-only changes do not invalidate the compiled Buildroot
-          # state, so a comparator fix can reuse the failed run's output.
-          key: nebulaos-build-v2-${{ runner.os }}-${{ hashFiles('build.sh', 'scripts/build/00-*.sh', 'scripts/build/01-*.sh', 'scripts/build/02-*.sh', 'scripts/build/03-*.sh', 'scripts/build/04-*.sh', 'scripts/build/05-*.sh', 'scripts/build/apply-qualified-baseline.sh', 'scripts/build/*-variant.sh', 'scripts/build/overlay/etc/**', '!scripts/build/overlay/etc/default/dropbear', 'scripts/build/overlay/opt/printer_data/**', 'scripts/build/overlay/opt/nebulaos/**', 'scripts/build/overlay/opt/guppyscreen/guppyconfig.json', 'scripts/build/overlay/opt/guppyscreen/themes/**', 'scripts/build/overlay/usr/**', 'scripts/build/vendor-wheels/**', 'scripts/build/vendor-patches/**', 'artifacts/buildroot-halley5-v30-image/*.config', 'artifacts/buildroot-halley5-v30-image/*.dts', 'manifests/dependencies.conf') }}-${{ github.run_id }}
-          restore-keys: |
-            nebulaos-build-v2-${{ runner.os }}-${{ hashFiles('build.sh', 'scripts/build/00-*.sh', 'scripts/build/01-*.sh', 'scripts/build/02-*.sh', 'scripts/build/03-*.sh', 'scripts/build/04-*.sh', 'scripts/build/05-*.sh', 'scripts/build/apply-qualified-baseline.sh', 'scripts/build/*-variant.sh', 'scripts/build/overlay/etc/**', '!scripts/build/overlay/etc/default/dropbear', 'scripts/build/overlay/opt/printer_data/**', 'scripts/build/overlay/opt/nebulaos/**', 'scripts/build/overlay/opt/guppyscreen/guppyconfig.json', 'scripts/build/overlay/opt/guppyscreen/themes/**', 'scripts/build/overlay/usr/**', 'scripts/build/vendor-wheels/**', 'scripts/build/vendor-patches/**', 'artifacts/buildroot-halley5-v30-image/*.config', 'artifacts/buildroot-halley5-v30-image/*.dts', 'manifests/dependencies.conf') }}-
-
       - name: Materialize dependency cache
         shell: bash
         run: |
@@ -99,6 +80,25 @@ jobs:
             mkdir -p scripts/build/overlay/lib/firmware
             rsync -a .cache/nebulaos/firmware/ scripts/build/overlay/lib/firmware/
           fi
+
+      # Preserve the generated Buildroot state separately so a later run of
+      # the same build inputs can resume after an incomplete toolchain or
+      # package build. Run this after dependency materialization so a cache
+      # miss cannot pre-create vendor/buildroot-x2000 before the pinned clone.
+      - name: Prepare Buildroot output cache directory
+        shell: bash
+        run: mkdir -p vendor/buildroot-x2000/output
+
+      - name: Restore Buildroot output cache
+        id: build-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: vendor/buildroot-x2000/output
+          # Assertion-only changes do not invalidate the compiled Buildroot
+          # state, so a comparator fix can reuse the failed run's output.
+          key: nebulaos-build-v2-${{ runner.os }}-${{ hashFiles('build.sh', 'scripts/build/00-*.sh', 'scripts/build/01-*.sh', 'scripts/build/02-*.sh', 'scripts/build/03-*.sh', 'scripts/build/04-*.sh', 'scripts/build/05-*.sh', 'scripts/build/apply-qualified-baseline.sh', 'scripts/build/*-variant.sh', 'scripts/build/overlay/etc/**', '!scripts/build/overlay/etc/default/dropbear', 'scripts/build/overlay/opt/printer_data/**', 'scripts/build/overlay/opt/nebulaos/**', 'scripts/build/overlay/opt/guppyscreen/guppyconfig.json', 'scripts/build/overlay/opt/guppyscreen/themes/**', 'scripts/build/overlay/usr/**', 'scripts/build/vendor-wheels/**', 'scripts/build/vendor-patches/**', 'artifacts/buildroot-halley5-v30-image/*.config', 'artifacts/buildroot-halley5-v30-image/*.dts', 'manifests/dependencies.conf') }}-${{ github.run_id }}
+          restore-keys: |
+            nebulaos-build-v2-${{ runner.os }}-${{ hashFiles('build.sh', 'scripts/build/00-*.sh', 'scripts/build/01-*.sh', 'scripts/build/02-*.sh', 'scripts/build/03-*.sh', 'scripts/build/04-*.sh', 'scripts/build/05-*.sh', 'scripts/build/apply-qualified-baseline.sh', 'scripts/build/*-variant.sh', 'scripts/build/overlay/etc/**', '!scripts/build/overlay/etc/default/dropbear', 'scripts/build/overlay/opt/printer_data/**', 'scripts/build/overlay/opt/nebulaos/**', 'scripts/build/overlay/opt/guppyscreen/guppyconfig.json', 'scripts/build/overlay/opt/guppyscreen/themes/**', 'scripts/build/overlay/usr/**', 'scripts/build/vendor-wheels/**', 'scripts/build/vendor-patches/**', 'artifacts/buildroot-halley5-v30-image/*.config', 'artifacts/buildroot-halley5-v30-image/*.dts', 'manifests/dependencies.conf') }}-
 
       - name: Build and verify firmware
         id: build

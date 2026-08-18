@@ -122,13 +122,41 @@ cd "$VENDOR"
 
 clone_pinned() {
 	name="$1"; url="$2"; ref="$3"; extra="$4"
+	staged_output=
 	if [ -d "$name/.git" ]; then
 		echo "== $name already present, verifying pin (not re-cloning) =="
 	else
+		# The CI cache can restore vendor/buildroot-x2000/output before the
+		# pinned source checkout exists. It can also restore an empty
+		# vendor/buildroot-x2000 parent left by a failed first clone. Do not
+		# let either cache-only shape make the real clone fail with Git's
+		# "destination path already exists and is not an empty directory"
+		# error. Preserve a real output tree while cloning, but reject any
+		# other unexpected contents instead of deleting them.
+		if [ -e "$name" ]; then
+			unexpected=$(find "$name" -mindepth 1 -maxdepth 1 ! -name output -print -quit)
+			if [ -n "$unexpected" ]; then
+				echo "FATAL: vendor/$name exists but is not a pinned git checkout and contains unexpected content: $unexpected" >&2
+				exit 1
+			fi
+			if [ "$name" = "buildroot-x2000" ] && [ -d "$name/output" ]; then
+				staged_output=$(mktemp -d "$VENDOR/.buildroot-output.XXXXXX")
+				mv "$name/output" "$staged_output/output"
+			fi
+			rmdir "$name" || {
+				echo "FATAL: vendor/$name could not be cleared safely before cloning" >&2
+				exit 1
+			}
+		fi
 		echo "== cloning $name @ $ref =="
 		git clone $extra "$url" "$name"
 		git -C "$name" fetch origin "$ref" 2>/dev/null || true
 		git -C "$name" checkout "$ref"
+		if [ -n "$staged_output" ]; then
+			mv "$staged_output/output" "$name/output"
+			rmdir "$staged_output"
+			echo "== restored cached $name/output after cloning =="
+		fi
 	fi
 	# Pin enforcement (2026-07-31, NEBULAOS_CAMERA_USB_RT_SOURCE_ANALYSIS.md's
 	# vendor-pin audit): previously this function only checked out the pinned

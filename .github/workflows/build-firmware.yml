@@ -1,0 +1,154 @@
+name: Build firmware
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: nebulaos-firmware-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Keep the pinned source checkouts, Buildroot download cache, and
+      # application-stage downloads. The generated Buildroot output tree is
+      # deliberately excluded: it is large, contains absolute build paths,
+      # and the build scripts intentionally clean correctness-sensitive parts
+      # of it on every run.
+      - name: Restore dependency cache
+        uses: actions/cache@v4
+        with:
+          path: .cache/nebulaos
+          key: nebulaos-dependencies-v1-${{ runner.os }}-${{ hashFiles('manifests/dependencies.conf') }}
+
+      - name: Materialize dependency cache
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -d .cache/nebulaos/vendor ]]; then
+            mkdir -p vendor
+            rsync -a .cache/nebulaos/vendor/ vendor/
+          fi
+
+          if [[ -d .cache/nebulaos/buildroot-dl ]]; then
+            mkdir -p vendor/buildroot-x2000/output/dl
+            rsync -a .cache/nebulaos/buildroot-dl/ vendor/buildroot-x2000/output/dl/
+          fi
+
+          if [[ -d .cache/nebulaos/vendor-downloads ]]; then
+            mkdir -p vendor-downloads
+            rsync -a .cache/nebulaos/vendor-downloads/ vendor-downloads/
+          fi
+
+          if [[ -d .cache/nebulaos/build-work ]]; then
+            mkdir -p build-work
+            rsync -a .cache/nebulaos/build-work/ build-work/
+          fi
+
+          if [[ -d .cache/nebulaos/firmware ]]; then
+            mkdir -p scripts/build/overlay/lib/firmware
+            rsync -a .cache/nebulaos/firmware/ scripts/build/overlay/lib/firmware/
+          fi
+
+      - name: Build and verify firmware
+        env:
+          # The build image is digest-pinned by manifests/dependencies.conf.
+          # This variable is available to future authenticated fetch steps
+          # without changing the reproducible build command itself.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./build.sh
+
+      - name: Refresh dependency cache
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rm -rf .cache/nebulaos
+          mkdir -p .cache/nebulaos/vendor
+
+          # Preserve source checkouts and git metadata, but omit the generated
+          # Buildroot output tree. It is rebuilt by the canonical pipeline.
+          rsync -a --exclude='buildroot-x2000/output/' vendor/ .cache/nebulaos/vendor/
+
+          if [[ -d vendor/buildroot-x2000/output/dl ]]; then
+            mkdir -p .cache/nebulaos/buildroot-dl
+            rsync -a vendor/buildroot-x2000/output/dl/ .cache/nebulaos/buildroot-dl/
+          fi
+
+          if [[ -d vendor-downloads ]]; then
+            mkdir -p .cache/nebulaos/vendor-downloads
+            rsync -a vendor-downloads/ .cache/nebulaos/vendor-downloads/
+          fi
+
+          if [[ -d build-work ]]; then
+            mkdir -p .cache/nebulaos/build-work
+            rsync -a build-work/ .cache/nebulaos/build-work/
+          fi
+
+          if [[ -d scripts/build/overlay/lib/firmware ]]; then
+            mkdir -p .cache/nebulaos/firmware
+            rsync -a scripts/build/overlay/lib/firmware/ .cache/nebulaos/firmware/
+          fi
+
+      - name: Assemble artifact bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          image_dir=artifacts/buildroot-halley5-v30-image
+          bundle=ci-artifacts
+          mkdir -p "$bundle/images" "$bundle/guppyscreen"
+
+          cp "$image_dir/xImage" \
+             "$image_dir/rootfs.ext2" \
+             "$image_dir/rootfs.squashfs" \
+             "$image_dir/build-manifest.txt" \
+             "$image_dir/kernel.config" \
+             "$image_dir/buildroot.config" \
+             "$image_dir/halley5_v30.dts" \
+             "$bundle/images/"
+          cp artifacts/guppyscreen-mips/guppyscreen \
+             artifacts/guppyscreen-mips/guppybeep \
+             "$bundle/guppyscreen/"
+          cp manifests/dependencies.conf "$bundle/"
+
+          (
+            cd "$bundle"
+            find . -type f ! -name SHA256SUMS -print0 \
+              | sort -z \
+              | xargs -0 sha256sum
+          ) > "$bundle/SHA256SUMS"
+
+      - name: Upload firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nebulaos-firmware-${{ github.sha }}
+          path: ci-artifacts/
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0

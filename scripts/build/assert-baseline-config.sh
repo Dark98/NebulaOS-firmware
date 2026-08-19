@@ -194,13 +194,66 @@ post-build)
 		exit 1
 	}
 	echo "  == qualified baseline in use: $BASELINE_REF (from $DEPS_MANIFEST) =="
-	for f in kernel.config halley5_v30.dts buildroot.config; do
-		if git -C "$REPO_ROOT" diff --quiet "$BASELINE_REF" -- "artifacts/buildroot-halley5-v30-image/$f" 2>/dev/null; then
-			echo "  PASS: $f byte-identical to pinned baseline tag $BASELINE_REF"
+
+	# The Phase 11 unified build environment deliberately uses one stable
+	# internal checkout path (/workspace/NebulaOS-firmware). Older qualified
+	# baseline artifacts were produced by the former nested container at /src,
+	# so CONFIG_EXTRA_FIRMWARE_DIR is an environment path, not a functional
+	# kernel setting. Normalize that one known path-bearing field before the
+	# comparison. Keep every other config line strict, and print a bounded diff
+	# when anything still differs so CI failures are actionable rather than a
+	# bare PASS/FAIL pair. Buildroot also embeds its source-tree version and
+	# host compiler capability probes in generated configs; those describe the
+	# build environment rather than the qualified target configuration.
+	normalize_baseline_file() {
+		file="$1"
+		case "$file" in
+			kernel.config)
+				sed -E \
+					-e 's#^(CONFIG_EXTRA_FIRMWARE_DIR=)"[^"]*"$#\1"/__NEBULAOS_CANONICAL_FIRMWARE_DIR__"#' \
+					-e 's#^(CONFIG_CC_VERSION_TEXT="[^"]*[(]Buildroot )[^)]*([)].*)$#\1__NEBULAOS_BUILDER_VERSION__\2#'
+				;;
+			buildroot.config)
+				sed -E \
+					-e 's|^# Buildroot .* Configuration$|# Buildroot __NEBULAOS_BUILDER_VERSION__ Configuration|' \
+					-e '/^(# )?BR2_HOST_GCC_AT_LEAST_[0-9]+(=y| is not set)$/d'
+				;;
+			*)
+				cat
+				;;
+		esac
+	}
+
+	compare_baseline_file() {
+		file="$1"
+		relative="artifacts/buildroot-halley5-v30-image/$file"
+		actual_tmp=$(mktemp)
+		raw_expected_tmp=$(mktemp)
+		expected_tmp=$(mktemp)
+		diff_tmp=$(mktemp)
+
+		if ! normalize_baseline_file "$file" < "$REPO_ROOT/$relative" > "$actual_tmp"; then
+			echo "  FAIL: could not normalize generated $file"
+			FAILED=1
+		elif ! git -C "$REPO_ROOT" show "$BASELINE_REF:$relative" > "$raw_expected_tmp"; then
+			echo "  FAIL: could not read $file from pinned baseline tag $BASELINE_REF"
+			FAILED=1
+		elif ! normalize_baseline_file "$file" < "$raw_expected_tmp" > "$expected_tmp"; then
+			echo "  FAIL: could not normalize $file from pinned baseline tag $BASELINE_REF"
+			FAILED=1
+		elif diff -u "$expected_tmp" "$actual_tmp" > "$diff_tmp"; then
+			echo "  PASS: $file matches pinned baseline tag $BASELINE_REF after environment-path normalization"
 		else
-			echo "  FAIL: $f differs from pinned baseline tag $BASELINE_REF"
+			echo "  FAIL: $file differs from pinned baseline tag $BASELINE_REF"
+			sed -n '1,160p' "$diff_tmp"
 			FAILED=1
 		fi
+
+		rm -f "$actual_tmp" "$raw_expected_tmp" "$expected_tmp" "$diff_tmp"
+	}
+
+	for f in kernel.config halley5_v30.dts buildroot.config; do
+		compare_baseline_file "$f"
 	done
 	;;
 *)
